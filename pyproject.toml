@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-tax-check"
+version = "0.1.0"
+description = "Open-source AI-assisted tax health check for Chinese enterprises"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = {text = "Apache-2.0"}
+authors = [{name = "MasterBenC"}]
+keywords = ["tax", "china", "audit", "risk", "agent-skill"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = []
+
+[project.scripts]
+opentaxcheck = "open_tax_check.cli:main"
+
+[project.urls]
+Repository = "https://github.com/MasterBenC/open-tax-check"
+Issues = "https://github.com/MasterBenC/open-tax-check/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
