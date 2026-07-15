@@ -33,6 +33,15 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_uses_only_portable_commands_and_ai_modes(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        expected_mode_declaration = (
+            "- Supported AI modes are exactly `off`, `assist`, and `deep`; use "
+            "`off` when AI is unavailable."
+        )
+        mode_declarations = [
+            line for line in text.splitlines() if "ai mode" in line.casefold()
+        ]
+        self.assertEqual(mode_declarations, [expected_mode_declaration])
+
         command_targets = re.findall(
             r"python <skill-dir>/scripts/([^\s]+)", text
         )

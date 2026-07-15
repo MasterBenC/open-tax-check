@@ -22,7 +22,7 @@ Use this skill as a thin workflow controller around the bundled Python engine. L
 - One legal entity per case.
 - UTF-8/UTF-8-BOM CSV journal input.
 - Deterministic field mapping, voucher-balance validation, initial hard rules, deterministic semantic candidate rules, JSON findings, and Markdown internal draft.
-- AI may be unavailable: use `--ai-mode off` and complete the same deterministic workflow.
+- Supported AI modes are exactly `off`, `assist`, and `deep`; use `off` when AI is unavailable.
 - Excel, OCR, tax returns, external company data, polished workbooks, and PDF rendering are later adapters. Do not claim they are supported by v0.1.
 
 ## Workflow
