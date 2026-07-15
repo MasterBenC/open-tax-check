@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenTaxCheck｜开源税务健康检查"
+  short_description: "用确定性规则、AI税务助理和专业复核执行企业税务健康检查"
+  default_prompt: "Use $open-tax-check to run a resumable Chinese enterprise tax health check and stop at every mapping, data-quality, cloud-authorization, and professional-review gate."
