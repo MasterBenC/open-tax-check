@@ -18,12 +18,11 @@ def run_cli(*args):
     )
 
 
-def test_deep_ai_mode_is_accepted_by_cli_parser():
-    args = build_parser().parse_args(["run", "--case", "case-a", "--ai-mode", "deep"])
-    assert args.ai_mode == "deep"
-
-
 class PipelineTests(unittest.TestCase):
+    def test_deep_ai_mode_is_accepted_by_cli_parser(self):
+        args = build_parser().parse_args(["run", "--case", "case-a", "--ai-mode", "deep"])
+        self.assertEqual(args.ai_mode, "deep")
+
     def test_run_creates_deterministic_findings_and_resumable_state(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = Path(temp_dir) / "case-a"
