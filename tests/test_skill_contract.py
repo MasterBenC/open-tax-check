@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -18,11 +19,34 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("Preserve source lineage", text)
         self.assertIn("Never call code output “100% accurate.”", text)
 
+    def test_skill_declares_complete_professional_review_gate(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("needs_professional_review", text)
+        self.assertIn(
+            "Never put an unreviewed finding into a client-facing conclusion.", text
+        )
+        self.assertIn(
+            "Only reviewed findings with an approved report status may enter a "
+            "client-facing report.",
+            text,
+        )
+
     def test_skill_uses_only_portable_commands_and_ai_modes(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("--ai-mode off", text)
-        self.assertIn("`assist`", text)
-        self.assertIn("`deep`", text)
+        command_targets = re.findall(
+            r"python <skill-dir>/scripts/([^\s]+)", text
+        )
+        self.assertEqual(set(command_targets), {"opentaxcheck.py"})
+        self.assertEqual(len(command_targets), 2)
+
+        cli_modes = set(re.findall(r"--ai-mode ([a-z][a-z0-9-]*)", text))
+        prose_modes = re.search(
+            r"Use `([a-z][a-z0-9-]*)` or `([a-z][a-z0-9-]*)` only if", text
+        )
+        self.assertIsNotNone(prose_modes)
+        documented_modes = cli_modes | set(prose_modes.groups())
+        self.assertEqual(documented_modes, {"off", "assist", "deep"})
+
         self.assertNotIn("enhanced", text)
         self.assertNotIn("<skill-dir>/scripts/taxcheck.py", text)
         self.assertNotIn("$tax-health-check", text)
