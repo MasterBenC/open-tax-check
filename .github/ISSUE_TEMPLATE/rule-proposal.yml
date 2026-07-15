@@ -1,0 +1,56 @@
+name: 税务规则提案
+description: 提议新增或修改一条有官方依据和虚构测试案例的税务规则
+title: "[Rule] "
+labels:
+  - tax-rule
+body:
+  - type: markdown
+    attributes:
+      value: |
+        规则提案必须可核验、可测试、可追溯。请勿提交真实客户资料或未公开争议事实。
+  - type: textarea
+    id: scope
+    attributes:
+      label: 税种、适用期间与纳税人类型
+      description: 说明税种、生效/失效期间、地区以及适用纳税人。
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: 触发条件、排除条件与公式
+      description: 说明所需数据、前置质量条件、触发逻辑、例外、反向证据、单位、阈值和舍入。
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: 官方法规依据
+      description: 提供官方发布机关、文号、具体条款、生效期间及官方链接。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据与误报分析
+      description: 说明支持证据、反向证据、缺失资料、常见误报和专业复核问题。
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: 测试案例与预期输出
+      description: 提供完全虚构的最小触发、不触发和边界测试案例，以及每个案例的预期输出。
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我确认提案、附件、链接说明和测试案例不含真实客户数据、个人敏感信息或凭证。
+          required: true
+        - label: 我已提供可公开核验的官方法规依据和虚构测试案例。
+          required: true
+        - label: 我理解规则输出仍需税务专业人员复核，不能直接作为正式结论。
+          required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞私下报告
+    url: https://github.com/MasterBenC/open-tax-check/security/advisories/new
+    about: 不要公开提交漏洞、泄露凭证或客户数据。
+  - name: 公开讨论
+    url: https://github.com/MasterBenC/open-tax-check/discussions
+    about: 用于不含客户事实的公开问答、方法和路线讨论。
