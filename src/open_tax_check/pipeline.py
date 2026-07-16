@@ -21,6 +21,7 @@ from .semantic import detect_semantic_candidates
 _CURRENT_VIEW_DIRS = ("work", "output")
 _STAGING_PREFIX = ".opentaxcheck-current-stage-"
 _BACKUP_PREFIX = ".opentaxcheck-current-backup-"
+_STATE_BACKUP_PREFIX = ".opentaxcheck-state-backup-"
 
 
 def _utc_now() -> str:
@@ -104,6 +105,14 @@ def _transaction_dir(case_dir: Path, prefix: str, run_id: str) -> Path:
     return path
 
 
+def _transaction_file(case_dir: Path, prefix: str, run_id: str) -> Path:
+    case_root = case_dir.resolve()
+    path = case_dir / f"{prefix}{run_id}-{uuid.uuid4().hex}.json"
+    if path.resolve(strict=False).parent != case_root or not path.name.startswith(prefix):
+        raise RuntimeError("invalid state transaction path")
+    return path
+
+
 def _remove_transaction_dir(case_dir: Path, path: Path, prefix: str) -> None:
     try:
         if path.resolve(strict=False).parent != case_dir.resolve():
@@ -112,6 +121,17 @@ def _remove_transaction_dir(case_dir: Path, path: Path, prefix: str) -> None:
             return
         if path.exists():
             shutil.rmtree(path)
+    except OSError:
+        pass
+
+
+def _remove_transaction_file(case_dir: Path, path: Path, prefix: str) -> None:
+    try:
+        if path.resolve(strict=False).parent != case_dir.resolve():
+            return
+        if not path.name.startswith(prefix):
+            return
+        path.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -166,6 +186,7 @@ def _commit_current_view_and_state(
 ) -> None:
     staging_dir = _transaction_dir(case_dir, _STAGING_PREFIX, run_id)
     backup_dir = _transaction_dir(case_dir, _BACKUP_PREFIX, run_id)
+    state_backup = _transaction_file(case_dir, _STATE_BACKUP_PREFIX, run_id)
     activated: list[str] = []
     backed_up: list[str] = []
 
@@ -177,7 +198,15 @@ def _commit_current_view_and_state(
         _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
         raise
 
-    backup_dir.mkdir()
+    try:
+        _atomic_write_bytes(state_backup, original_state)
+        backup_dir.mkdir()
+    except Exception:
+        _remove_transaction_file(case_dir, state_backup, _STATE_BACKUP_PREFIX)
+        _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
+        _remove_transaction_dir(case_dir, backup_dir, _BACKUP_PREFIX)
+        raise
+
     try:
         for name in _CURRENT_VIEW_DIRS:
             current = case_dir / name
@@ -195,6 +224,7 @@ def _commit_current_view_and_state(
         if restored:
             _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
             _remove_transaction_dir(case_dir, backup_dir, _BACKUP_PREFIX)
+            _remove_transaction_file(case_dir, state_backup, _STATE_BACKUP_PREFIX)
         raise
 
     try:
@@ -203,21 +233,25 @@ def _commit_current_view_and_state(
         restored = _rollback_current_view(
             case_dir, staging_dir, backup_dir, activated, backed_up
         )
+        state_restored = False
         try:
-            _atomic_write_bytes(state_path, original_state)
+            os.replace(state_backup, state_path)
+            state_restored = True
         except OSError:
-            temporary = state_path.with_name(f".{state_path.name}.tmp")
             try:
-                temporary.unlink(missing_ok=True)
+                state_restored = state_path.read_bytes() == original_state
             except OSError:
-                pass
+                state_restored = False
         if restored:
             _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
             _remove_transaction_dir(case_dir, backup_dir, _BACKUP_PREFIX)
+        if state_restored:
+            _remove_transaction_file(case_dir, state_backup, _STATE_BACKUP_PREFIX)
         raise
 
     _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
     _remove_transaction_dir(case_dir, backup_dir, _BACKUP_PREFIX)
+    _remove_transaction_file(case_dir, state_backup, _STATE_BACKUP_PREFIX)
 
 
 def _finalize_run(

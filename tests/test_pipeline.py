@@ -294,6 +294,54 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(state["current_run"], "run-0001")
             self.assertEqual([run["run_id"] for run in state["run_history"]], ["run-0001"])
 
+    def test_failed_state_restore_preserves_exact_persistent_state_backup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "case-a"
+            init_case(case_dir, "示例企业")
+            input_file = case_dir / "input" / "journal.csv"
+            self._write_balanced_journal(input_file)
+            code, _ = pipeline.run_case(case_dir, "off")
+            self.assertEqual(code, 0)
+            state_path = case_dir / "state.json"
+            current_findings = case_dir / "output" / "findings.json"
+            current_normalized = case_dir / "work" / "normalized_journal.jsonl"
+            first_manifest = case_dir / "runs" / "run-0001" / "manifest.json"
+            state_before = state_path.read_bytes()
+            current_findings_before = current_findings.read_bytes()
+            current_normalized_before = current_normalized.read_bytes()
+            first_manifest_before = first_manifest.read_bytes()
+            self._change_entertainment_amount(input_file, "30000")
+            input_before_second_run = input_file.read_bytes()
+            original_replace = pipeline.os.replace
+            state_replace_calls = 0
+
+            def fail_new_state_then_restore(source, destination):
+                nonlocal state_replace_calls
+                if Path(destination) == state_path:
+                    state_replace_calls += 1
+                    if state_replace_calls == 1:
+                        original_replace(source, destination)
+                        raise OSError("injected post-replace state failure")
+                    raise OSError("injected state restore failure")
+                return original_replace(source, destination)
+
+            with patch.object(
+                pipeline.os,
+                "replace",
+                side_effect=fail_new_state_then_restore,
+            ):
+                with self.assertRaisesRegex(OSError, "injected post-replace state failure"):
+                    pipeline.run_case(case_dir, "off")
+
+            self.assertEqual(current_findings.read_bytes(), current_findings_before)
+            self.assertEqual(current_normalized.read_bytes(), current_normalized_before)
+            self.assertEqual(first_manifest.read_bytes(), first_manifest_before)
+            self.assertEqual(input_file.read_bytes(), input_before_second_run)
+            self.assertTrue((case_dir / "runs" / "run-0002" / "manifest.json").is_file())
+            backups = list(case_dir.glob(".opentaxcheck-state-backup-*.json"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), state_before)
+
     def test_run_with_multiple_csv_files_blocks_with_explicit_input_selection(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = self._init_case(temp_dir)
