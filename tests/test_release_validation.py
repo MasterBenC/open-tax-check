@@ -133,23 +133,42 @@ class ReleaseValidationTests(unittest.TestCase):
 
     def test_untracked_forbidden_binary_suffixes_fail_closed(self):
         suffixes = (
-            ".jpg",
-            ".jpeg",
-            ".png",
+            ".bmp",
             ".gif",
+            ".heic",
+            ".heif",
+            ".ico",
+            ".jpeg",
+            ".jpg",
+            ".png",
+            ".svg",
+            ".tif",
+            ".tiff",
             ".webp",
-            ".pdf",
             ".doc",
+            ".docm",
             ".docx",
+            ".odt",
+            ".ods",
+            ".odp",
+            ".pdf",
+            ".ppt",
+            ".pptm",
+            ".pptx",
             ".xls",
+            ".xlsb",
+            ".xlsm",
             ".xlsx",
-            ".zip",
             ".7z",
+            ".bz2",
+            ".gz",
             ".rar",
             ".tar",
-            ".gz",
+            ".tgz",
+            ".xz",
+            ".zip",
         )
-        private_bytes = b"private-client-binary-contents-\xff\xfe\x00\x80"
+        private_bytes = b"safe-looking-utf8-private-client-binary-contents"
 
         for suffix in suffixes:
             with self.subTest(suffix=suffix):
