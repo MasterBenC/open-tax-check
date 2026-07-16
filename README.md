@@ -64,6 +64,8 @@ python scripts/run_fictional_example.py --output work/fictional-demo
 - `output/findings.json`：硬规则结果和待复核语义候选；
 - `output/report.md`：仅供内部复核的 Markdown 草稿。
 
+CSV 日期确定性支持 `YYYY-MM-DD`、`YYYY/M/D` 和 `YYYY.M.D`。有效日期会被标准化，凭证按“会计月份 + 凭证号”检查平衡，年度税务规则按纳税年度分别计算；日期或关键行字段缺失/无效时，流水线会以数据质量问题阻止计算。
+
 专业 `workpaper.xlsx`、`report.docx`、`report.pdf` 和完整 `evidence-pack/` 是后续目标，不是 v0.1 现有输出。
 
 ## AI modes

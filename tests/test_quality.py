@@ -1,6 +1,6 @@
 import unittest
 
-from open_tax_check.quality import validate_voucher_balance
+from open_tax_check.quality import validate_journal_quality, validate_voucher_balance
 
 
 class DataQualityTests(unittest.TestCase):
@@ -18,6 +18,90 @@ class DataQualityTests(unittest.TestCase):
         self.assertEqual(findings[0]["voucher_no"], "记-002")
         self.assertEqual(findings[0]["difference"], "10.00")
         self.assertEqual(findings[0]["source_rows"], [4, 5])
+
+    def test_voucher_balance_is_scoped_by_period_and_normalizes_supported_dates(self):
+        rows = [
+            {
+                "voucher_no": "记-001",
+                "date": "2025/1/2",
+                "account_name": "银行存款",
+                "debit": "100",
+                "credit": "",
+                "source_file": "journal.csv",
+                "source_row": 2,
+            },
+            {
+                "voucher_no": "记-001",
+                "date": "2025.2.3",
+                "account_name": "银行存款",
+                "debit": "",
+                "credit": "100",
+                "source_file": "journal.csv",
+                "source_row": 3,
+            },
+        ]
+
+        findings = validate_journal_quality(rows)
+
+        balance_findings = [item for item in findings if item["rule_id"] == "DQ-VOUCHER-001"]
+        self.assertEqual(len(balance_findings), 2)
+        self.assertEqual(
+            [(item["period"], item["difference"]) for item in balance_findings],
+            [("2025-01", "100.00"), ("2025-02", "-100.00")],
+        )
+        self.assertEqual(rows[0]["date"], "2025-01-02")
+        self.assertEqual(rows[0]["period"], "2025-01")
+        self.assertEqual(rows[0]["tax_year"], "2025")
+        self.assertEqual(rows[1]["date"], "2025-02-03")
+
+    def test_missing_required_values_and_both_blank_amounts_are_blocking_without_values(self):
+        rows = [
+            {
+                "voucher_no": "",
+                "date": "",
+                "account_name": "",
+                "summary": "sensitive narrative must not leak",
+                "debit": " ",
+                "credit": "\t",
+                "source_file": "journal.csv",
+                "source_sheet": "CSV",
+                "source_row": 9,
+            }
+        ]
+
+        findings = validate_journal_quality(rows)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["rule_id"], "DQ-ROW-001")
+        self.assertEqual(
+            findings[0]["fields"],
+            ["voucher_no", "date", "account_name", "debit", "credit"],
+        )
+        self.assertEqual(findings[0]["source_file"], "journal.csv")
+        self.assertEqual(findings[0]["source_row"], 9)
+        self.assertNotIn("summary", findings[0])
+        self.assertNotIn("values", findings[0])
+
+    def test_invalid_date_is_blocking_and_does_not_guess_a_period(self):
+        rows = [
+            {
+                "voucher_no": "记-009",
+                "date": "2025-02-30",
+                "account_name": "银行存款",
+                "debit": "1",
+                "credit": "0",
+                "source_file": "journal.csv",
+                "source_row": 4,
+            }
+        ]
+
+        findings = validate_journal_quality(rows)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["rule_id"], "DQ-DATE-001")
+        self.assertEqual(findings[0]["fields"], ["date"])
+        self.assertNotIn("period", rows[0])
+        self.assertNotIn("tax_year", rows[0])
 
 
 if __name__ == "__main__":

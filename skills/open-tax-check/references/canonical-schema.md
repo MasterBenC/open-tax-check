@@ -24,7 +24,13 @@ Every source header must either map to a canonical field or be explicitly exclud
 
 ## Source lineage
 
-Normalized rows add `source_file`, `source_sheet`, `source_row`, and `mapping_version`. Later formats should also retain workbook cell ranges, OCR page and bounding box, extraction method, and confidence where applicable.
+Normalized rows add `source_file`, `source_sheet`, `source_row`, and `mapping_version`. A valid posting date is normalized to ISO form and adds `period` (`YYYY-MM`) and `tax_year` (`YYYY`) before any hard rule runs. Later formats should also retain workbook cell ranges, OCR page and bounding box, extraction method, and confidence where applicable.
+
+## Date handling and row completeness
+
+The deterministic CSV adapter accepts `YYYY-MM-DD`, `YYYY/M/D`, and `YYYY.M.D`; month and day may be one or two digits for slash and dot forms. It rejects missing dates, invalid calendar dates, mixed separators, timestamps, and ambiguous localized forms instead of guessing a period.
+
+An amount row is blocked when `voucher_no`, `date`, or `account_name` is blank. A blank debit or credit is treated as zero only when the other side is present; a row with both amounts blank is blocked. These diagnostics retain only field names and minimal source coordinates.
 
 ## Numeric handling
 

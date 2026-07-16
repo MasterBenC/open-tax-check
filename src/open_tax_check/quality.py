@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal, InvalidOperation
+import re
+
+
+def _blank(value) -> bool:
+    return value is None or not str(value).strip()
 
 
 def _decimal(value) -> Decimal:
-    if value in (None, ""):
+    if _blank(value):
         return Decimal("0")
     try:
         return Decimal(str(value).replace(",", ""))
@@ -19,21 +25,47 @@ def _money(value: Decimal) -> str:
     return f"{value.quantize(Decimal('0.01')):.2f}"
 
 
+_SUPPORTED_DATE = re.compile(r"^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})$")
+
+
+def _normalize_date(value) -> tuple[str, str, str]:
+    match = _SUPPORTED_DATE.fullmatch(str(value or "").strip())
+    if not match:
+        raise ValueError("unsupported posting date")
+    parsed = date(int(match.group(1)), int(match.group(3)), int(match.group(4)))
+    return parsed.isoformat(), f"{parsed.year:04d}-{parsed.month:02d}", f"{parsed.year:04d}"
+
+
+def _location(row: dict) -> dict:
+    return {
+        key: row[key]
+        for key in ("source_file", "source_sheet", "source_row")
+        if row.get(key) is not None
+    }
+
+
 def validate_voucher_balance(rows: list[dict], tolerance: Decimal = Decimal("0.01")) -> list[dict]:
-    grouped: dict[str, dict] = defaultdict(
+    grouped: dict[tuple[str | None, str], dict] = defaultdict(
         lambda: {"debit": Decimal("0"), "credit": Decimal("0"), "source_rows": []}
     )
     for row in rows:
         voucher_no = str(row.get("voucher_no") or "").strip()
         if not voucher_no:
             continue
-        grouped[voucher_no]["debit"] += _decimal(row.get("debit"))
-        grouped[voucher_no]["credit"] += _decimal(row.get("credit"))
+        period = row.get("period")
+        if period is None and row.get("date") not in (None, ""):
+            try:
+                _, period, _ = _normalize_date(row.get("date"))
+            except ValueError:
+                continue
+        key = (period, voucher_no)
+        grouped[key]["debit"] += _decimal(row.get("debit"))
+        grouped[key]["credit"] += _decimal(row.get("credit"))
         if row.get("source_row") is not None:
-            grouped[voucher_no]["source_rows"].append(row["source_row"])
+            grouped[key]["source_rows"].append(row["source_row"])
 
     findings = []
-    for voucher_no, totals in grouped.items():
+    for (period, voucher_no), totals in grouped.items():
         difference = totals["debit"] - totals["credit"]
         if abs(difference) > tolerance:
             findings.append(
@@ -41,6 +73,7 @@ def validate_voucher_balance(rows: list[dict], tolerance: Decimal = Decimal("0.0
                     "rule_id": "DQ-VOUCHER-001",
                     "rule_version": "0.1.0",
                     "status": "blocking",
+                    "period": period,
                     "voucher_no": voucher_no,
                     "debit_total": _money(totals["debit"]),
                     "credit_total": _money(totals["credit"]),
@@ -50,3 +83,51 @@ def validate_voucher_balance(rows: list[dict], tolerance: Decimal = Decimal("0.0
             )
     return findings
 
+
+def validate_journal_quality(rows: list[dict]) -> list[dict]:
+    """Normalize supported dates and return all blocking pre-calculation findings."""
+
+    findings: list[dict] = []
+    balance_rows: list[dict] = []
+    for row in rows:
+        missing = [
+            field
+            for field in ("voucher_no", "date", "account_name")
+            if not str(row.get(field) or "").strip()
+        ]
+        if _blank(row.get("debit")) and _blank(row.get("credit")):
+            missing.extend(["debit", "credit"])
+        if missing:
+            findings.append(
+                {
+                    "rule_id": "DQ-ROW-001",
+                    "rule_version": "0.1.0",
+                    "status": "blocking",
+                    "fields": missing,
+                    **_location(row),
+                }
+            )
+
+        date_valid = False
+        if "date" not in missing:
+            try:
+                normalized, period, tax_year = _normalize_date(row.get("date"))
+            except (TypeError, ValueError):
+                findings.append(
+                    {
+                        "rule_id": "DQ-DATE-001",
+                        "rule_version": "0.1.0",
+                        "status": "blocking",
+                        "fields": ["date"],
+                        **_location(row),
+                    }
+                )
+            else:
+                row.update({"date": normalized, "period": period, "tax_year": tax_year})
+                date_valid = True
+
+        if not missing and date_valid:
+            balance_rows.append(row)
+
+    findings.extend(validate_voucher_balance(balance_rows))
+    return findings

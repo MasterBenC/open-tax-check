@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .mapping import map_headers
-from .quality import validate_voucher_balance
+from .quality import validate_journal_quality
 from .rules import business_entertainment_adjustment
 from .semantic import detect_semantic_candidates
 
@@ -29,7 +29,7 @@ def _utc_now() -> str:
 
 
 def _decimal(value) -> Decimal:
-    if value in (None, ""):
+    if value is None or not str(value).strip():
         return Decimal("0")
     return Decimal(str(value).replace(",", ""))
 
@@ -388,32 +388,49 @@ def _lineage(row: dict, contribution: Decimal) -> dict:
         "source_sheet": row.get("source_sheet"),
         "source_row": row.get("source_row"),
         "voucher_no": row.get("voucher_no"),
+        "period": row.get("period"),
+        "tax_year": row.get("tax_year"),
         "contribution": _money(contribution),
     }
 
 
 def _hard_rule_findings(rows: list[dict]) -> list[dict]:
-    revenue = Decimal("0")
-    entertainment = Decimal("0")
-    revenue_sources = []
-    entertainment_sources = []
+    annual: dict[str, dict] = {}
     for row in rows:
+        tax_year = str(row["tax_year"])
+        totals = annual.setdefault(
+            tax_year,
+            {
+                "revenue": Decimal("0"),
+                "entertainment": Decimal("0"),
+                "revenue_sources": [],
+                "entertainment_sources": [],
+            },
+        )
         account = str(row.get("account_name") or "")
         if "主营业务收入" in account or account == "营业收入":
             contribution = _decimal(row.get("credit")) - _decimal(row.get("debit"))
-            revenue += contribution
-            revenue_sources.append(_lineage(row, contribution))
+            totals["revenue"] += contribution
+            totals["revenue_sources"].append(_lineage(row, contribution))
         if "业务招待费" in account:
             contribution = _decimal(row.get("debit")) - _decimal(row.get("credit"))
-            entertainment += contribution
-            entertainment_sources.append(_lineage(row, contribution))
+            totals["entertainment"] += contribution
+            totals["entertainment_sources"].append(_lineage(row, contribution))
 
     findings = []
-    if entertainment > 0:
+    for tax_year in sorted(annual):
+        totals = annual[tax_year]
+        revenue = totals["revenue"]
+        entertainment = totals["entertainment"]
+        revenue_sources = totals["revenue_sources"]
+        entertainment_sources = totals["entertainment_sources"]
+        if entertainment <= 0:
+            continue
         result = business_entertainment_adjustment(entertainment, revenue)
         result.update(
             {
-                "finding_id": "CIT-BE-001-aggregate",
+                "finding_id": f"CIT-BE-001-{tax_year}",
+                "tax_year": tax_year,
                 "review_status": "unreviewed",
                 "severity": "medium" if Decimal(result["tax_adjustment"]) > 0 else "low",
                 "confidence": "deterministic_from_mapped_data",
@@ -499,7 +516,8 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
                 response_details = {}
             else:
                 _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
-                quality_findings = validate_voucher_balance(rows)
+                quality_findings = validate_journal_quality(rows)
+                _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
                 _write_json(run_work_dir / "data_quality.json", quality_findings)
                 if quality_findings:
                     exit_code = 4

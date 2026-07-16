@@ -85,6 +85,27 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("recorded in `conflicts`", text)
         self.assertIn("block automatic calculation", text)
 
+    def test_skill_documents_deterministic_date_and_period_quality_contract(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        schema = (SKILL / "references" / "canonical-schema.md").read_text(
+            encoding="utf-8"
+        )
+        methodology = (SKILL / "references" / "methodology.md").read_text(
+            encoding="utf-8"
+        )
+        catalog = (SKILL / "references" / "rule-catalog.md").read_text(
+            encoding="utf-8"
+        )
+
+        for date_form in ("`YYYY-MM-DD`", "`YYYY/M/D`", "`YYYY.M.D`"):
+            self.assertIn(date_form, schema)
+        self.assertIn("`period` (`YYYY-MM`)", schema)
+        self.assertIn("`tax_year` (`YYYY`)", schema)
+        self.assertIn("voucher number within each accounting period", methodology)
+        self.assertIn("Missing or invalid dates block hard rules", methodology)
+        self.assertIn("calculated separately for each tax year", catalog)
+        self.assertIn("resolve_data_quality_findings", skill)
+
     def test_openai_metadata_matches_interface_contract(self):
         expected = (
             'interface:\n'

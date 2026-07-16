@@ -16,6 +16,7 @@ Use this skill as a thin workflow controller around the bundled Python engine. L
 - Never issue an overall numeric health score in v0.1.
 - Treat the output as advisory screening, not an audit, assurance report, legal opinion, or tax authority determination.
 - Preserve source lineage. Every finding must remain traceable to source file, sheet, row, voucher, rule, and rule version where available.
+- Stop at `blocked_data_quality` / `resolve_data_quality_findings` when a required row value or date is missing or invalid, both amount fields are blank, or a voucher is unbalanced within its accounting period.
 
 ## Supported scope in v0.1
 
@@ -35,7 +36,7 @@ Run:
 python <skill-dir>/scripts/opentaxcheck.py init --case <case-dir> --entity "企业全称"
 ```
 
-Put exactly one journal CSV in `<case-dir>/input/`. Keep original source files unchanged. If the folder contains zero or multiple CSV files, stop at `blocked_data_quality` with `next_action` set to `provide_exactly_one_csv_journal`.
+Put exactly one journal CSV in `<case-dir>/input/`. Keep original source files unchanged. If the folder contains zero or multiple CSV files, stop at `blocked_data_quality` with `next_action` set to `provide_exactly_one_csv_journal`. Posting dates must use one of the deterministic forms documented in [references/canonical-schema.md](references/canonical-schema.md); never ask AI to infer a missing year or period.
 
 ### 2. Run the deterministic engine
 

@@ -106,6 +106,8 @@ class PipelineTests(unittest.TestCase):
                     "source_sheet": "CSV",
                     "source_row": 3,
                     "voucher_no": "记-001",
+                    "period": "2025-01",
+                    "tax_year": "2025",
                     "contribution": "1000000.00",
                 },
             )
@@ -126,6 +128,92 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(
                 (case_dir / "runs" / "run-0001" / "output" / "findings.json").is_file()
             )
+
+    def test_business_entertainment_is_calculated_separately_by_tax_year(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-cross-year")
+            input_file = case_dir / "input" / "journal.csv"
+            with input_file.open("w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    ["凭证号", "记账日期", "科目名称", "借方发生额", "贷方发生额"]
+                )
+                writer.writerows(
+                    [
+                        ["记-001", "2024-01-02", "银行存款", "100000", ""],
+                        ["记-001", "2024-01-02", "主营业务收入", " ", "100000"],
+                        ["记-002", "2024/3/8", "管理费用-业务招待费", "100", "0"],
+                        ["记-002", "2024/3/8", "银行存款", "0", "100"],
+                        ["记-001", "2025.01.02", "银行存款", "80000", "0"],
+                        ["记-001", "2025.01.02", "主营业务收入", "0", "80000"],
+                        ["记-002", "2025-03-08", "管理费用-业务招待费", "1400", "0"],
+                        ["记-002", "2025-03-08", "银行存款", "0", "1400"],
+                    ]
+                )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 0, run_proc.stderr)
+            findings = json.loads(
+                (case_dir / "output" / "findings.json").read_text(encoding="utf-8")
+            )
+            entertainment = [item for item in findings if item["rule_id"] == "CIT-BE-001"]
+            self.assertEqual(len(entertainment), 2)
+            self.assertEqual(
+                [(item["tax_year"], item["tax_adjustment"]) for item in entertainment],
+                [("2024", "40.00"), ("2025", "1000.00")],
+            )
+            self.assertEqual(
+                [item["finding_id"] for item in entertainment],
+                ["CIT-BE-001-2024", "CIT-BE-001-2025"],
+            )
+            for finding in entertainment:
+                tax_year = finding["tax_year"]
+                inputs = finding["calculation_inputs"]
+                all_lineage = (
+                    inputs["actual_expense"]["lineage"]
+                    + inputs["revenue_basis"]["lineage"]
+                )
+                self.assertTrue(all(item["tax_year"] == tax_year for item in all_lineage))
+
+    def test_invalid_or_incomplete_rows_block_before_rules_without_client_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-invalid-row")
+            input_file = case_dir / "input" / "journal.csv"
+            with input_file.open("w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    ["凭证号", "记账日期", "科目名称", "业务说明", "借方发生额", "贷方发生额"]
+                )
+                writer.writerows(
+                    [
+                        ["", "2025-01-01", "银行存款", "private detail", "100", "0"],
+                        ["记-002", "2025-02-30", "银行存款", "another private detail", "0", "100"],
+                        ["记-003", "2025-03-01", "", "third private detail", "", ""],
+                    ]
+                )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 4, run_proc.stderr)
+            response = json.loads(run_proc.stdout)
+            state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+            quality_text = (case_dir / "work" / "data_quality.json").read_text(
+                encoding="utf-8"
+            )
+            quality_findings = json.loads(quality_text)
+            self.assertEqual(response["status"], "blocked_data_quality")
+            self.assertEqual(state["next_action"], "resolve_data_quality_findings")
+            self.assertIn("DQ-ROW-001", [item["rule_id"] for item in quality_findings])
+            self.assertIn("DQ-DATE-001", [item["rule_id"] for item in quality_findings])
+            incomplete = [item for item in quality_findings if item["rule_id"] == "DQ-ROW-001"]
+            self.assertTrue(any("voucher_no" in item["fields"] for item in incomplete))
+            self.assertTrue(any("account_name" in item["fields"] for item in incomplete))
+            self.assertNotIn("private detail", quality_text)
+            self.assertNotIn("another private detail", quality_text)
+            self.assertNotIn("third private detail", quality_text)
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+            self.assertFalse((case_dir / "output" / "report.md").exists())
 
     def test_run_stops_when_header_mapping_is_unresolved(self):
         with tempfile.TemporaryDirectory() as temp_dir:
