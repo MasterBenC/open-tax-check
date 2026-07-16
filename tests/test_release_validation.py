@@ -131,15 +131,88 @@ class ReleaseValidationTests(unittest.TestCase):
             "untracked.payload (undecodable_public_content)\n",
         )
 
-    def test_non_utf8_content_in_explicit_binary_suffixes_is_allowed(self):
+    def test_untracked_forbidden_binary_suffixes_fail_closed(self):
+        suffixes = (
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".zip",
+            ".7z",
+            ".rar",
+            ".tar",
+            ".gz",
+        )
+        private_bytes = b"private-client-binary-contents-\xff\xfe\x00\x80"
+
+        for suffix in suffixes:
+            with self.subTest(suffix=suffix):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    relative_path = Path(f"public{suffix}")
+                    (root / relative_path).write_bytes(private_bytes)
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 1, message)
+                self.assertEqual(
+                    message,
+                    "forbidden public binary content in "
+                    f"{relative_path}: binary_public_content\n",
+                )
+                self.assertNotIn("private-client-binary-contents", message)
+
+    def test_tracked_forbidden_binary_suffix_fails_closed_case_insensitively(self):
+        private_bytes = b"tracked-private-client-binary-contents"
         with tempfile.TemporaryDirectory() as directory:
             root = self.create_repository(directory)
-            for suffix in (".jpg", ".jpeg", ".png", ".zip"):
-                (root / f"public{suffix}").write_bytes(b"\xff\xfe\x00\x80")
+            relative_path = Path("evidence.PnG")
+            (root / relative_path).write_bytes(private_bytes)
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
             result, message = self.run_validator(root)
 
-        self.assertEqual(result, 0, message)
-        self.assertEqual(message, "release validation passed\n")
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            "evidence.PnG: binary_public_content\n",
+        )
+        self.assertNotIn("tracked-private-client-binary-contents", message)
+
+    def test_tracked_forbidden_binary_remains_rejected_after_it_is_ignored(self):
+        private_bytes = b"ignored-private-client-binary-contents"
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            relative_path = Path("client-document.pdf")
+            (root / relative_path).write_bytes(private_bytes)
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            (root / ".gitignore").write_text(
+                f"{relative_path}\n", encoding="utf-8"
+            )
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            "client-document.pdf: binary_public_content\n",
+        )
+        self.assertNotIn("ignored-private-client-binary-contents", message)
 
     def test_tracked_read_error_fails_without_exception_details(self):
         exception_detail = "sensitive operating-system detail"

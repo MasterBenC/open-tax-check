@@ -22,7 +22,23 @@ FORBIDDEN = re.compile(
     + r"|(?P<api_key>api[_-]?key\s*[:=]\s*['\"][^'\"]+)"
     + r"|(?P<private_key>BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY)"
 )
-BINARY_SUFFIXES = {".jpg", ".jpeg", ".png", ".zip"}
+FORBIDDEN_BINARY_SUFFIXES = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".gz",
+}
 
 
 def public_paths(root: Path) -> tuple[Path, ...] | None:
@@ -60,8 +76,14 @@ def main() -> int:
         return 1
     for relative_path in candidates:
         path = ROOT / relative_path
-        if not path.is_file() or path.suffix.lower() in BINARY_SUFFIXES:
+        if not path.is_file():
             continue
+        if path.suffix.lower() in FORBIDDEN_BINARY_SUFFIXES:
+            print(
+                "forbidden public binary content in "
+                f"{relative_path}: binary_public_content"
+            )
+            return 1
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
