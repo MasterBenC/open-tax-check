@@ -89,11 +89,11 @@ def _start_run(case_dir: Path) -> tuple[str, Path, str]:
     run_dir.mkdir()
     (run_dir / "work").mkdir()
     (run_dir / "output").mkdir()
-    _reset_current_view(case_dir)
     return run_id, run_dir, _utc_now()
 
 
 def _publish_current_view(case_dir: Path, run_dir: Path) -> None:
+    _reset_current_view(case_dir)
     for name in ("work", "output"):
         shutil.copytree(run_dir / name, case_dir / name, dirs_exist_ok=True)
 
@@ -110,6 +110,7 @@ def _finalize_run(
     next_action: str,
     artifacts: list[str],
     completed_steps: list[str],
+    error_type: str | None = None,
 ) -> dict:
     completed_at = _utc_now()
     manifest_path = run_dir / "manifest.json"
@@ -123,6 +124,8 @@ def _finalize_run(
         "input_files": input_files,
         "artifacts": [*artifacts, "manifest.json"],
     }
+    if error_type is not None:
+        manifest["error_type"] = error_type
     _write_json(manifest_path, manifest)
     _publish_current_view(case_dir, run_dir)
 
@@ -149,8 +152,33 @@ def _finalize_run(
             "run_history": history,
         }
     )
+    if error_type is None:
+        state.pop("error_type", None)
+    else:
+        state["error_type"] = error_type
     _write_json(state_path, state)
     return state
+
+
+def _safe_error_type(error: Exception) -> str:
+    if isinstance(error, ValueError):
+        return "invalid_numeric_value"
+    if isinstance(error, UnicodeError):
+        return "input_encoding_error"
+    if isinstance(error, csv.Error):
+        return "invalid_csv"
+    if isinstance(error, OSError):
+        return "input_output_error"
+    return "unexpected_processing_error"
+
+
+def _run_artifacts(run_dir: Path) -> list[str]:
+    return sorted(
+        path.relative_to(run_dir).as_posix()
+        for folder in (run_dir / "work", run_dir / "output")
+        for path in folder.rglob("*")
+        if path.is_file() and not path.name.startswith(".")
+    )
 
 
 def _select_journal(case_dir: Path, run_work_dir: Path) -> tuple[Path | None, list[Path]]:
@@ -282,82 +310,103 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
     run_id, run_dir, started_at = _start_run(case_dir)
     run_work_dir = run_dir / "work"
     run_output_dir = run_dir / "output"
-    source_file, candidates = _select_journal(case_dir, run_work_dir)
-    input_files = _input_manifest(candidates)
+    input_files: list[dict] = []
+    error_type = None
 
-    if source_file is None:
-        artifacts = ["work/input_selection.json"]
-        state = _finalize_run(
-            case_dir=case_dir,
-            run_id=run_id,
-            run_dir=run_dir,
-            started_at=started_at,
-            ai_mode=ai_mode,
-            input_files=input_files,
-            status="blocked_data_quality",
-            next_action="provide_exactly_one_csv_journal",
-            artifacts=artifacts,
-            completed_steps=["init", "input_selection"],
+    try:
+        source_file, candidates = _select_journal(case_dir, run_work_dir)
+        input_files = _input_manifest(candidates)
+
+        if source_file is None:
+            exit_code = 4
+            status = "blocked_data_quality"
+            next_action = "provide_exactly_one_csv_journal"
+            artifacts = ["work/input_selection.json"]
+            completed_steps = ["init", "input_selection"]
+            response_details = {}
+        else:
+            mapping, rows = _load_and_normalize(source_file)
+            _write_json(run_work_dir / "mapping_review.json", mapping)
+            if not mapping["ready_for_calculation"]:
+                exit_code = 3
+                status = "needs_mapping_review"
+                next_action = "confirm_field_mapping"
+                artifacts = ["work/input_selection.json", "work/mapping_review.json"]
+                completed_steps = ["init", "input_selection", "ingest", "mapping"]
+                response_details = {}
+            else:
+                _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
+                quality_findings = validate_voucher_balance(rows)
+                _write_json(run_work_dir / "data_quality.json", quality_findings)
+                if quality_findings:
+                    exit_code = 4
+                    status = "blocked_data_quality"
+                    next_action = "resolve_data_quality_findings"
+                    artifacts = [
+                        "work/input_selection.json",
+                        "work/mapping_review.json",
+                        "work/normalized_journal.jsonl",
+                        "work/data_quality.json",
+                    ]
+                    completed_steps = [
+                        "init",
+                        "input_selection",
+                        "ingest",
+                        "mapping",
+                        "data_quality",
+                    ]
+                    response_details = {}
+                else:
+                    findings = _hard_rule_findings(rows) + detect_semantic_candidates(rows)
+                    _write_json(run_output_dir / "findings.json", findings)
+                    entity_name = json.loads(
+                        (case_dir / "state.json").read_text(encoding="utf-8")
+                    )["entity_name"]
+                    _atomic_write_text(
+                        run_output_dir / "report.md",
+                        _render_markdown(entity_name, len(rows), findings, ai_mode),
+                    )
+                    exit_code = 0
+                    status = "needs_professional_review"
+                    next_action = "review_findings"
+                    artifacts = [
+                        "work/input_selection.json",
+                        "work/mapping_review.json",
+                        "work/normalized_journal.jsonl",
+                        "work/data_quality.json",
+                        "output/findings.json",
+                        "output/report.md",
+                    ]
+                    completed_steps = [
+                        "init",
+                        "input_selection",
+                        "ingest",
+                        "mapping",
+                        "data_quality",
+                        "hard_rules",
+                        "semantic_screening",
+                    ]
+                    response_details = {
+                        "finding_count": len(findings),
+                        "artifacts": artifacts,
+                    }
+    except Exception as error:
+        error_type = _safe_error_type(error)
+        _write_json(
+            run_work_dir / "processing_error.json",
+            {
+                "status": "blocked_processing_error",
+                "next_action": "inspect_processing_error",
+                "error_type": error_type,
+            },
         )
-        return 4, {"status": state["status"], "next_action": state["next_action"]}
+        exit_code = 5
+        status = "blocked_processing_error"
+        next_action = "inspect_processing_error"
+        artifacts = _run_artifacts(run_dir)
+        completed_steps = ["init", "processing_error"]
+        response_details = {"error_type": error_type}
 
-    mapping, rows = _load_and_normalize(source_file)
-    _write_json(run_work_dir / "mapping_review.json", mapping)
-    if not mapping["ready_for_calculation"]:
-        artifacts = ["work/input_selection.json", "work/mapping_review.json"]
-        state = _finalize_run(
-            case_dir=case_dir,
-            run_id=run_id,
-            run_dir=run_dir,
-            started_at=started_at,
-            ai_mode=ai_mode,
-            input_files=input_files,
-            status="needs_mapping_review",
-            next_action="confirm_field_mapping",
-            artifacts=artifacts,
-            completed_steps=["init", "input_selection", "ingest", "mapping"],
-        )
-        return 3, {"status": state["status"], "next_action": state["next_action"]}
-
-    _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
-    quality_findings = validate_voucher_balance(rows)
-    _write_json(run_work_dir / "data_quality.json", quality_findings)
-    if quality_findings:
-        artifacts = [
-            "work/input_selection.json",
-            "work/mapping_review.json",
-            "work/normalized_journal.jsonl",
-            "work/data_quality.json",
-        ]
-        state = _finalize_run(
-            case_dir=case_dir,
-            run_id=run_id,
-            run_dir=run_dir,
-            started_at=started_at,
-            ai_mode=ai_mode,
-            input_files=input_files,
-            status="blocked_data_quality",
-            next_action="resolve_data_quality_findings",
-            artifacts=artifacts,
-            completed_steps=["init", "input_selection", "ingest", "mapping", "data_quality"],
-        )
-        return 4, {"status": state["status"], "next_action": state["next_action"]}
-
-    findings = _hard_rule_findings(rows) + detect_semantic_candidates(rows)
-    _write_json(run_output_dir / "findings.json", findings)
-    entity_name = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))["entity_name"]
-    _atomic_write_text(
-        run_output_dir / "report.md",
-        _render_markdown(entity_name, len(rows), findings, ai_mode),
-    )
-    artifacts = [
-        "work/input_selection.json",
-        "work/mapping_review.json",
-        "work/normalized_journal.jsonl",
-        "work/data_quality.json",
-        "output/findings.json",
-        "output/report.md",
-    ]
     state = _finalize_run(
         case_dir=case_dir,
         run_id=run_id,
@@ -365,22 +414,14 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
         started_at=started_at,
         ai_mode=ai_mode,
         input_files=input_files,
-        status="needs_professional_review",
-        next_action="review_findings",
+        status=status,
+        next_action=next_action,
         artifacts=artifacts,
-        completed_steps=[
-            "init",
-            "input_selection",
-            "ingest",
-            "mapping",
-            "data_quality",
-            "hard_rules",
-            "semantic_screening",
-        ],
+        completed_steps=completed_steps,
+        error_type=error_type,
     )
-    return 0, {
+    return exit_code, {
         "status": state["status"],
         "next_action": state["next_action"],
-        "finding_count": len(findings),
-        "artifacts": artifacts,
+        **response_details,
     }

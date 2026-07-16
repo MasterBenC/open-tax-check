@@ -56,9 +56,10 @@ Read `status` and `next_action`; do not improvise around a blocked state.
 | `ready_for_input` | Add the source journal. |
 | `needs_mapping_review` | Confirm or extend the field mapping before calculation. |
 | `blocked_data_quality` | Resolve or document blocking data-quality exceptions. |
+| `blocked_processing_error` | Follow `inspect_processing_error` and inspect the failed run's safe error category and completed artifacts. |
 | `needs_professional_review` | Review every finding and supporting evidence. |
 
-Exit code `0` means screening completed and awaits professional review. `3` means mapping review is required. `4` means a blocking data-quality issue exists.
+Exit code `0` means screening completed and awaits professional review. `3` means mapping review is required. `4` means a blocking data-quality issue exists. Exit code `5` means a processing error was captured in a failed run and requires inspection; do not bypass that run or reuse an earlier output as the current result.
 
 ### 4. Review findings
 

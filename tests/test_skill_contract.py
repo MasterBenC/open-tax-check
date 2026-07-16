@@ -37,6 +37,9 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("Put exactly one journal CSV", text)
         self.assertIn("provide_exactly_one_csv_journal", text)
         self.assertIn("`runs/run-XXXX/manifest.json`", text)
+        self.assertIn("`blocked_processing_error`", text)
+        self.assertIn("`inspect_processing_error`", text)
+        self.assertIn("Exit code `5`", text)
 
     def test_skill_uses_only_portable_commands_and_ai_modes(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")

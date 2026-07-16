@@ -163,6 +163,54 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse((case_dir / "output" / "report.md").exists())
             self.assertTrue((case_dir / "work" / "mapping_review.json").is_file())
 
+    def test_processing_error_becomes_a_traceable_failed_run_without_stale_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir)
+            input_file = case_dir / "input" / "journal.csv"
+            self._write_balanced_journal(input_file)
+            first = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+            self.assertEqual(first.returncode, 0, first.stderr)
+            first_findings = case_dir / "runs" / "run-0001" / "output" / "findings.json"
+            first_manifest = case_dir / "runs" / "run-0001" / "manifest.json"
+            findings_before = first_findings.read_bytes()
+            manifest_before = first_manifest.read_bytes()
+
+            with input_file.open("r", newline="", encoding="utf-8-sig") as handle:
+                rows = list(csv.reader(handle))
+            invalid_value = "not-a-number-sensitive-90210"
+            rows[1][5] = invalid_value
+            with input_file.open("w", newline="", encoding="utf-8-sig") as handle:
+                csv.writer(handle).writerows(rows)
+
+            second = run_cli("run", "--case", str(case_dir), "--ai-mode", "assist")
+
+            self.assertEqual(second.returncode, 5)
+            self.assertNotIn("Traceback", second.stderr)
+            self.assertNotIn(invalid_value, second.stdout + second.stderr)
+            response = json.loads(second.stdout)
+            self.assertEqual(response["status"], "blocked_processing_error")
+            self.assertEqual(response["next_action"], "inspect_processing_error")
+            self.assertEqual(response["error_type"], "invalid_numeric_value")
+
+            state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+            second_manifest_path = case_dir / "runs" / "run-0002" / "manifest.json"
+            second_manifest_text = second_manifest_path.read_text(encoding="utf-8")
+            second_manifest = json.loads(second_manifest_text)
+            self.assertEqual(state["status"], "blocked_processing_error")
+            self.assertEqual(state["current_run"], "run-0002")
+            self.assertEqual([run["run_id"] for run in state["run_history"]], ["run-0001", "run-0002"])
+            self.assertEqual(second_manifest["status"], "blocked_processing_error")
+            self.assertEqual(second_manifest["error_type"], "invalid_numeric_value")
+            self.assertNotIn(invalid_value, second_manifest_text)
+            self.assertIn("work/input_selection.json", second_manifest["artifacts"])
+            self.assertIn("work/mapping_review.json", second_manifest["artifacts"])
+            self.assertIn("work/normalized_journal.jsonl", second_manifest["artifacts"])
+            self.assertTrue((case_dir / "work" / "processing_error.json").is_file())
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+            self.assertFalse((case_dir / "output" / "report.md").exists())
+            self.assertEqual(first_findings.read_bytes(), findings_before)
+            self.assertEqual(first_manifest.read_bytes(), manifest_before)
+
     def test_run_with_multiple_csv_files_blocks_with_explicit_input_selection(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = self._init_case(temp_dir)
