@@ -140,6 +140,9 @@ class DataQualityTests(unittest.TestCase):
             "2023-02-29",
             "2025-01-02T10:00:00",
             "2025-01-02 00:00:00",
+            "２０２５-０１-０２",
+            "٢٠٢٥/١/٢",
+            "२०२५.१.२",
         )
 
         for supplied in values:

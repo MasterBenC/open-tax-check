@@ -25,8 +25,10 @@ def _money(value: Decimal) -> str:
     return f"{value.quantize(Decimal('0.01')):.2f}"
 
 
-_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
-_FLEXIBLE_DATE = re.compile(r"^(\d{4})([/.])(\d{1,2})\2(\d{1,2})$")
+_ISO_DATE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$")
+_FLEXIBLE_DATE = re.compile(
+    r"^([0-9]{4})([/.])([0-9]{1,2})\2([0-9]{1,2})$"
+)
 
 
 def _normalize_date(value) -> tuple[str, str, str]:
