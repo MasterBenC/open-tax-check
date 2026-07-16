@@ -4,6 +4,17 @@ from open_tax_check.quality import validate_journal_quality, validate_voucher_ba
 
 
 class DataQualityTests(unittest.TestCase):
+    def _date_row(self, value: str) -> dict:
+        return {
+            "voucher_no": "记-001",
+            "date": value,
+            "account_name": "银行存款",
+            "debit": "0",
+            "credit": "0",
+            "source_file": "journal.csv",
+            "source_row": 2,
+        }
+
     def test_reports_unbalanced_voucher_with_source_rows(self):
         rows = [
             {"voucher_no": "记-001", "debit": "100.00", "credit": "0", "source_row": 2},
@@ -102,6 +113,42 @@ class DataQualityTests(unittest.TestCase):
         self.assertEqual(findings[0]["fields"], ["date"])
         self.assertNotIn("period", rows[0])
         self.assertNotIn("tax_year", rows[0])
+
+    def test_supported_date_contract_is_explicit_and_normalized(self):
+        cases = (
+            ("2025-01-02", "2025-01-02"),
+            ("2025/1/2", "2025-01-02"),
+            ("2025/01/02", "2025-01-02"),
+            ("2025.1.2", "2025-01-02"),
+            ("2025.01.02", "2025-01-02"),
+            ("2024-02-29", "2024-02-29"),
+            (" 2025-01-02 ", "2025-01-02"),
+        )
+
+        for supplied, expected in cases:
+            with self.subTest(supplied=supplied):
+                row = self._date_row(supplied)
+                findings = validate_journal_quality([row])
+                self.assertEqual(findings, [])
+                self.assertEqual(row["date"], expected)
+                self.assertEqual(row["period"], expected[:7])
+                self.assertEqual(row["tax_year"], expected[:4])
+
+    def test_unsupported_or_invalid_dates_fail_closed(self):
+        values = (
+            "2025-1-2",
+            "2023-02-29",
+            "2025-01-02T10:00:00",
+            "2025-01-02 00:00:00",
+        )
+
+        for supplied in values:
+            with self.subTest(supplied=supplied):
+                row = self._date_row(supplied)
+                findings = validate_journal_quality([row])
+                self.assertEqual([item["rule_id"] for item in findings], ["DQ-DATE-001"])
+                self.assertNotIn("period", row)
+                self.assertNotIn("tax_year", row)
 
 
 if __name__ == "__main__":

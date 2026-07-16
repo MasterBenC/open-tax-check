@@ -25,14 +25,21 @@ def _money(value: Decimal) -> str:
     return f"{value.quantize(Decimal('0.01')):.2f}"
 
 
-_SUPPORTED_DATE = re.compile(r"^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})$")
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_FLEXIBLE_DATE = re.compile(r"^(\d{4})([/.])(\d{1,2})\2(\d{1,2})$")
 
 
 def _normalize_date(value) -> tuple[str, str, str]:
-    match = _SUPPORTED_DATE.fullmatch(str(value or "").strip())
-    if not match:
+    supplied = str(value or "").strip()
+    iso_match = _ISO_DATE.fullmatch(supplied)
+    flexible_match = _FLEXIBLE_DATE.fullmatch(supplied)
+    if iso_match:
+        year, month, day = iso_match.groups()
+    elif flexible_match:
+        year, _, month, day = flexible_match.groups()
+    else:
         raise ValueError("unsupported posting date")
-    parsed = date(int(match.group(1)), int(match.group(3)), int(match.group(4)))
+    parsed = date(int(year), int(month), int(day))
     return parsed.isoformat(), f"{parsed.year:04d}-{parsed.month:02d}", f"{parsed.year:04d}"
 
 

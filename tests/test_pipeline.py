@@ -215,6 +215,29 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse((case_dir / "output" / "findings.json").exists())
             self.assertFalse((case_dir / "output" / "report.md").exists())
 
+    def test_normalized_journal_is_written_once_after_quality_normalization(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-single-normalized-write")
+            self._write_balanced_journal(case_dir / "input" / "journal.csv")
+
+            with patch.object(
+                pipeline,
+                "_write_jsonl",
+                wraps=pipeline._write_jsonl,
+            ) as write_jsonl:
+                code, _ = pipeline.run_case(case_dir, "off")
+
+            self.assertEqual(code, 0)
+            self.assertEqual(write_jsonl.call_count, 1)
+            normalized_path = write_jsonl.call_args.args[0]
+            self.assertEqual(normalized_path.name, "normalized_journal.jsonl")
+            normalized_rows = [
+                json.loads(line)
+                for line in normalized_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(normalized_rows[0]["period"], "2025-01")
+            self.assertEqual(normalized_rows[0]["tax_year"], "2025")
+
     def test_run_stops_when_header_mapping_is_unresolved(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = Path(temp_dir) / "case-b"

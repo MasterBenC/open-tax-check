@@ -515,9 +515,10 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
                 completed_steps = ["init", "input_selection", "ingest", "mapping"]
                 response_details = {}
             else:
-                _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
-                quality_findings = validate_journal_quality(rows)
-                _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
+                try:
+                    quality_findings = validate_journal_quality(rows)
+                finally:
+                    _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
                 _write_json(run_work_dir / "data_quality.json", quality_findings)
                 if quality_findings:
                     exit_code = 4
