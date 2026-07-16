@@ -64,8 +64,11 @@ def main() -> int:
             continue
         try:
             content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except UnicodeDecodeError:
             continue
+        except OSError:
+            print(f"unable to read public release content: {relative_path}")
+            return 1
         match = FORBIDDEN.search(content)
         if match:
             category = match.lastgroup or "sensitive_content"
