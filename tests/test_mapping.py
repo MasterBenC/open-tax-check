@@ -22,6 +22,23 @@ class HeaderMappingTests(unittest.TestCase):
         self.assertIn("debit", result["missing_required"])
         self.assertIn("credit", result["missing_required"])
 
+    def test_duplicate_aliases_for_one_canonical_field_require_review(self):
+        result = map_headers(
+            ["凭证号", "日期", "科目名称", "借方", "借方发生额", "贷方"]
+        )
+
+        self.assertFalse(result["ready_for_calculation"])
+        self.assertEqual(result["conflicts"], {"debit": ["借方", "借方发生额"]})
+        self.assertEqual(result["unresolved"], [])
+        self.assertEqual(result["missing_required"], [])
+
+    def test_maps_posting_voucher_number_alias(self):
+        result = map_headers(["记账凭证号", "日期", "科目名称", "借方", "贷方"])
+
+        self.assertTrue(result["ready_for_calculation"])
+        self.assertEqual(result["mapping"]["记账凭证号"], "voucher_no")
+        self.assertEqual(result["conflicts"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

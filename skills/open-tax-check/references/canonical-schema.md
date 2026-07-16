@@ -20,7 +20,7 @@
 
 ## Mapping control
 
-Every source header must either map to a canonical field or be explicitly excluded by a reviewer. Missing required fields and unresolved headers block automatic calculation. Mapping output must include a mapping version and be retained with the case.
+Every source header must either map to a canonical field or be explicitly excluded by a reviewer. Missing required fields and unresolved headers block automatic calculation. Multiple source headers that resolve to the same canonical field are recorded in `conflicts` and block automatic calculation until a reviewer selects the intended source. Mapping output must include a mapping version and be retained with the case.
 
 ## Source lineage
 
@@ -29,4 +29,3 @@ Normalized rows add `source_file`, `source_sheet`, `source_row`, and `mapping_ve
 ## Numeric handling
 
 Use decimal arithmetic for currency. Do not use binary floating point for tax calculations. Preserve source values separately if cleaning changes separators, signs, or blank values.
-

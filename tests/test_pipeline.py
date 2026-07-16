@@ -142,6 +142,31 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(state["status"], "needs_mapping_review")
             self.assertIn("神秘借方", mapping_review["unresolved"])
 
+    def test_run_stops_when_two_headers_map_to_the_same_canonical_field(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-conflicting-headers")
+            input_file = case_dir / "input" / "journal.csv"
+            input_file.write_text(
+                "凭证号,日期,科目名称,借方,借方发生额,贷方\n"
+                "记-001,2025-01-01,银行存款,100,999,0\n",
+                encoding="utf-8-sig",
+            )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 3, run_proc.stderr)
+            state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+            mapping_review = json.loads(
+                (case_dir / "work" / "mapping_review.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["status"], "needs_mapping_review")
+            self.assertEqual(state["next_action"], "confirm_field_mapping")
+            self.assertEqual(
+                mapping_review["conflicts"], {"debit": ["借方", "借方发生额"]}
+            )
+            self.assertFalse((case_dir / "work" / "normalized_journal.jsonl").exists())
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+
     def test_blocked_rerun_preserves_history_and_hides_stale_current_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = self._init_case(temp_dir)

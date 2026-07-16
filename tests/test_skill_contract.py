@@ -77,6 +77,14 @@ class SkillContractTests(unittest.TestCase):
             with self.subTest(reference=name):
                 self.assertIn(link, text)
 
+    def test_canonical_schema_documents_conflicting_alias_gate(self):
+        text = (SKILL / "references" / "canonical-schema.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("recorded in `conflicts`", text)
+        self.assertIn("block automatic calculation", text)
+
     def test_openai_metadata_matches_interface_contract(self):
         expected = (
             'interface:\n'

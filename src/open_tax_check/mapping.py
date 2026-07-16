@@ -6,7 +6,7 @@ import re
 
 
 HEADER_ALIASES = {
-    "voucher_no": {"凭证号", "凭证编号", "凭证号码", "字号"},
+    "voucher_no": {"凭证号", "凭证编号", "凭证号码", "记账凭证号", "字号"},
     "date": {"日期", "记账日期", "凭证日期", "业务日期"},
     "account_code": {"科目编码", "科目代码", "科目编号"},
     "account_name": {"科目名称", "会计科目", "科目"},
@@ -33,20 +33,27 @@ NORMALIZED_ALIASES = {
 def map_headers(headers: list[str]) -> dict:
     mapping: dict[str, str] = {}
     unresolved: list[str] = []
+    canonical_sources: dict[str, list[str]] = {}
     for header in headers:
         canonical = NORMALIZED_ALIASES.get(_normalize(header))
         if canonical:
             mapping[header] = canonical
+            canonical_sources.setdefault(canonical, []).append(header)
         else:
             unresolved.append(header)
 
     mapped_fields = set(mapping.values())
     missing_required = sorted(REQUIRED_JOURNAL_FIELDS - mapped_fields)
+    conflicts = {
+        canonical: source_headers
+        for canonical, source_headers in canonical_sources.items()
+        if len(source_headers) > 1
+    }
     return {
         "mapping": mapping,
         "unresolved": unresolved,
         "missing_required": missing_required,
-        "ready_for_calculation": not unresolved and not missing_required,
+        "conflicts": conflicts,
+        "ready_for_calculation": not unresolved and not missing_required and not conflicts,
         "mapping_version": "0.1.0",
     }
-
