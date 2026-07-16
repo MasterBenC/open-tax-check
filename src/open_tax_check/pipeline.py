@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +16,11 @@ from .mapping import map_headers
 from .quality import validate_voucher_balance
 from .rules import business_entertainment_adjustment
 from .semantic import detect_semantic_candidates
+
+
+_CURRENT_VIEW_DIRS = ("work", "output")
+_STAGING_PREFIX = ".opentaxcheck-current-stage-"
+_BACKUP_PREFIX = ".opentaxcheck-current-backup-"
 
 
 def _utc_now() -> str:
@@ -34,6 +40,12 @@ def _money(value: Decimal) -> str:
 def _atomic_write_text(path: Path, content: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_bytes(content)
     os.replace(temporary, path)
 
 
@@ -73,14 +85,6 @@ def _next_run_id(case_dir: Path) -> str:
     return f"run-{max(run_numbers, default=0) + 1:04d}"
 
 
-def _reset_current_view(case_dir: Path) -> None:
-    for name in ("work", "output"):
-        path = case_dir / name
-        if path.exists():
-            shutil.rmtree(path)
-        path.mkdir()
-
-
 def _start_run(case_dir: Path) -> tuple[str, Path, str]:
     runs_dir = case_dir / "runs"
     runs_dir.mkdir(exist_ok=True)
@@ -92,10 +96,128 @@ def _start_run(case_dir: Path) -> tuple[str, Path, str]:
     return run_id, run_dir, _utc_now()
 
 
-def _publish_current_view(case_dir: Path, run_dir: Path) -> None:
-    _reset_current_view(case_dir)
-    for name in ("work", "output"):
-        shutil.copytree(run_dir / name, case_dir / name, dirs_exist_ok=True)
+def _transaction_dir(case_dir: Path, prefix: str, run_id: str) -> Path:
+    case_root = case_dir.resolve()
+    path = case_dir / f"{prefix}{run_id}-{uuid.uuid4().hex}"
+    if path.resolve(strict=False).parent != case_root or not path.name.startswith(prefix):
+        raise RuntimeError("invalid current-view transaction path")
+    return path
+
+
+def _remove_transaction_dir(case_dir: Path, path: Path, prefix: str) -> None:
+    try:
+        if path.resolve(strict=False).parent != case_dir.resolve():
+            return
+        if not path.name.startswith(prefix):
+            return
+        if path.exists():
+            shutil.rmtree(path)
+    except OSError:
+        pass
+
+
+def _rollback_current_view(
+    case_dir: Path,
+    staging_dir: Path,
+    backup_dir: Path,
+    activated: list[str],
+    backed_up: list[str],
+) -> bool:
+    restored = True
+    for name in reversed(activated):
+        current = case_dir / name
+        staged = staging_dir / name
+        if not current.exists():
+            continue
+        try:
+            os.replace(current, staged)
+        except OSError:
+            try:
+                shutil.rmtree(current)
+            except OSError:
+                restored = False
+
+    for name in reversed(backed_up):
+        backup = backup_dir / name
+        current = case_dir / name
+        if not backup.exists():
+            continue
+        if current.exists():
+            try:
+                shutil.rmtree(current)
+            except OSError:
+                restored = False
+                continue
+        try:
+            os.replace(backup, current)
+        except OSError:
+            restored = False
+    return restored
+
+
+def _commit_current_view_and_state(
+    *,
+    case_dir: Path,
+    run_id: str,
+    run_dir: Path,
+    state_path: Path,
+    state: dict,
+    original_state: bytes,
+) -> None:
+    staging_dir = _transaction_dir(case_dir, _STAGING_PREFIX, run_id)
+    backup_dir = _transaction_dir(case_dir, _BACKUP_PREFIX, run_id)
+    activated: list[str] = []
+    backed_up: list[str] = []
+
+    staging_dir.mkdir()
+    try:
+        for name in _CURRENT_VIEW_DIRS:
+            shutil.copytree(run_dir / name, staging_dir / name)
+    except Exception:
+        _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
+        raise
+
+    backup_dir.mkdir()
+    try:
+        for name in _CURRENT_VIEW_DIRS:
+            current = case_dir / name
+            backup = backup_dir / name
+            staged = staging_dir / name
+            if current.exists():
+                os.replace(current, backup)
+                backed_up.append(name)
+            os.replace(staged, current)
+            activated.append(name)
+    except Exception:
+        restored = _rollback_current_view(
+            case_dir, staging_dir, backup_dir, activated, backed_up
+        )
+        if restored:
+            _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
+            _remove_transaction_dir(case_dir, backup_dir, _BACKUP_PREFIX)
+        raise
+
+    try:
+        _write_json(state_path, state)
+    except Exception:
+        restored = _rollback_current_view(
+            case_dir, staging_dir, backup_dir, activated, backed_up
+        )
+        try:
+            _atomic_write_bytes(state_path, original_state)
+        except OSError:
+            temporary = state_path.with_name(f".{state_path.name}.tmp")
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if restored:
+            _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
+            _remove_transaction_dir(case_dir, backup_dir, _BACKUP_PREFIX)
+        raise
+
+    _remove_transaction_dir(case_dir, staging_dir, _STAGING_PREFIX)
+    _remove_transaction_dir(case_dir, backup_dir, _BACKUP_PREFIX)
 
 
 def _finalize_run(
@@ -127,10 +249,10 @@ def _finalize_run(
     if error_type is not None:
         manifest["error_type"] = error_type
     _write_json(manifest_path, manifest)
-    _publish_current_view(case_dir, run_dir)
 
     state_path = case_dir / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+    original_state = state_path.read_bytes()
+    state = json.loads(original_state.decode("utf-8"))
     history = list(state.get("run_history", []))
     history.append(
         {
@@ -156,7 +278,14 @@ def _finalize_run(
         state.pop("error_type", None)
     else:
         state["error_type"] = error_type
-    _write_json(state_path, state)
+    _commit_current_view_and_state(
+        case_dir=case_dir,
+        run_id=run_id,
+        run_dir=run_dir,
+        state_path=state_path,
+        state=state,
+        original_state=original_state,
+    )
     return state
 
 
