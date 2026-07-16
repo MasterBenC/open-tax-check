@@ -20,6 +20,20 @@ class CaseTests(unittest.TestCase):
             self.assertTrue((case_dir / "work").is_dir())
             self.assertTrue((case_dir / "output").is_dir())
 
+    def test_init_refuses_an_existing_nonempty_case_without_changing_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "case-a"
+            init_case(case_dir, "原企业")
+            marker = case_dir / "input" / "keep.me"
+            marker.write_text("original input", encoding="utf-8")
+            original_state = (case_dir / "state.json").read_bytes()
+
+            with self.assertRaisesRegex(FileExistsError, "case directory must be empty"):
+                init_case(case_dir, "新企业")
+
+            self.assertEqual((case_dir / "state.json").read_bytes(), original_state)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "original input")
+
 
 if __name__ == "__main__":
     unittest.main()

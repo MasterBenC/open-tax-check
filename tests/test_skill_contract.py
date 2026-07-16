@@ -31,6 +31,13 @@ class SkillContractTests(unittest.TestCase):
             text,
         )
 
+    def test_skill_requires_unambiguous_csv_selection_and_explains_run_history(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("Put exactly one journal CSV", text)
+        self.assertIn("provide_exactly_one_csv_journal", text)
+        self.assertIn("`runs/run-XXXX/manifest.json`", text)
+
     def test_skill_uses_only_portable_commands_and_ai_modes(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         expected_mode_declaration = (

@@ -35,7 +35,7 @@ Run:
 python <skill-dir>/scripts/opentaxcheck.py init --case <case-dir> --entity "企业全称"
 ```
 
-Put one journal CSV in `<case-dir>/input/`. Keep original source files unchanged.
+Put exactly one journal CSV in `<case-dir>/input/`. Keep original source files unchanged. If the folder contains zero or multiple CSV files, stop at `blocked_data_quality` with `next_action` set to `provide_exactly_one_csv_journal`.
 
 ### 2. Run the deterministic engine
 
@@ -48,6 +48,8 @@ Use `assist` or `deep` only if the host can provide an AI layer. These modes do 
 ### 3. Follow `state.json`
 
 Read `status` and `next_action`; do not improvise around a blocked state.
+
+`state.json` points to the current run. Each attempt also has an immutable `runs/run-XXXX/manifest.json`; use that history when comparing a blocked rerun with an earlier successful result. The top-level `work/` and `output/` directories are only the current-run view.
 
 | Status | Required action |
 | --- | --- |

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import os
+import shutil
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -14,30 +17,155 @@ from .rules import business_entertainment_adjustment
 from .semantic import detect_semantic_candidates
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _decimal(value) -> Decimal:
     if value in (None, ""):
         return Decimal("0")
     return Decimal(str(value).replace(",", ""))
 
 
+def _money(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.01')):.2f}"
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def _write_json(path: Path, payload) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def _update_state(case_dir: Path, **changes) -> dict:
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    content = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
+    _atomic_write_text(path, content + ("\n" if content else ""))
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _input_manifest(candidates: list[Path]) -> list[dict]:
+    return [
+        {
+            "path": f"input/{path.name}",
+            "size_bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        }
+        for path in candidates
+    ]
+
+
+def _next_run_id(case_dir: Path) -> str:
+    run_numbers = []
+    for path in (case_dir / "runs").glob("run-[0-9][0-9][0-9][0-9]"):
+        if path.is_dir():
+            run_numbers.append(int(path.name.removeprefix("run-")))
+    return f"run-{max(run_numbers, default=0) + 1:04d}"
+
+
+def _reset_current_view(case_dir: Path) -> None:
+    for name in ("work", "output"):
+        path = case_dir / name
+        if path.exists():
+            shutil.rmtree(path)
+        path.mkdir()
+
+
+def _start_run(case_dir: Path) -> tuple[str, Path, str]:
+    runs_dir = case_dir / "runs"
+    runs_dir.mkdir(exist_ok=True)
+    run_id = _next_run_id(case_dir)
+    run_dir = runs_dir / run_id
+    run_dir.mkdir()
+    (run_dir / "work").mkdir()
+    (run_dir / "output").mkdir()
+    _reset_current_view(case_dir)
+    return run_id, run_dir, _utc_now()
+
+
+def _publish_current_view(case_dir: Path, run_dir: Path) -> None:
+    for name in ("work", "output"):
+        shutil.copytree(run_dir / name, case_dir / name, dirs_exist_ok=True)
+
+
+def _finalize_run(
+    *,
+    case_dir: Path,
+    run_id: str,
+    run_dir: Path,
+    started_at: str,
+    ai_mode: str,
+    input_files: list[dict],
+    status: str,
+    next_action: str,
+    artifacts: list[str],
+    completed_steps: list[str],
+) -> dict:
+    completed_at = _utc_now()
+    manifest_path = run_dir / "manifest.json"
+    manifest = {
+        "schema_version": "0.1.0",
+        "run_id": run_id,
+        "status": status,
+        "ai_mode": ai_mode,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "input_files": input_files,
+        "artifacts": [*artifacts, "manifest.json"],
+    }
+    _write_json(manifest_path, manifest)
+    _publish_current_view(case_dir, run_dir)
+
     state_path = case_dir / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state.update(changes)
-    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    history = list(state.get("run_history", []))
+    history.append(
+        {
+            "run_id": run_id,
+            "status": status,
+            "manifest": f"runs/{run_id}/manifest.json",
+            "completed_at": completed_at,
+        }
+    )
+    state.update(
+        {
+            "status": status,
+            "completed_steps": completed_steps,
+            "next_action": next_action,
+            "updated_at": completed_at,
+            "artifacts": artifacts,
+            "current_run": run_id,
+            "current_run_manifest": f"runs/{run_id}/manifest.json",
+            "run_history": history,
+        }
+    )
     _write_json(state_path, state)
     return state
 
 
-def _find_journal(case_dir: Path) -> Path:
+def _select_journal(case_dir: Path, run_work_dir: Path) -> tuple[Path | None, list[Path]]:
     candidates = sorted((case_dir / "input").glob("*.csv"))
-    if not candidates:
-        raise FileNotFoundError("No CSV journal found in case/input")
-    return candidates[0]
+    selected = candidates[0] if len(candidates) == 1 else None
+    selection = {
+        "status": "selected" if selected else "blocked",
+        "required_count": 1,
+        "candidate_count": len(candidates),
+        "candidates": [path.name for path in candidates],
+        "selected_file": selected.name if selected else None,
+        "next_action": None if selected else "provide_exactly_one_csv_journal",
+    }
+    _write_json(run_work_dir / "input_selection.json", selection)
+    return selected, candidates
 
 
 def _load_and_normalize(source_file: Path) -> tuple[dict, list[dict]]:
@@ -63,30 +191,31 @@ def _load_and_normalize(source_file: Path) -> tuple[dict, list[dict]]:
         return mapping, normalized
 
 
-def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    content = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
-    path.write_text(content + ("\n" if content else ""), encoding="utf-8")
+def _lineage(row: dict, contribution: Decimal) -> dict:
+    return {
+        "source_file": row.get("source_file"),
+        "source_sheet": row.get("source_sheet"),
+        "source_row": row.get("source_row"),
+        "voucher_no": row.get("voucher_no"),
+        "contribution": _money(contribution),
+    }
 
 
 def _hard_rule_findings(rows: list[dict]) -> list[dict]:
     revenue = Decimal("0")
     entertainment = Decimal("0")
+    revenue_sources = []
     entertainment_sources = []
     for row in rows:
         account = str(row.get("account_name") or "")
         if "主营业务收入" in account or account == "营业收入":
-            revenue += _decimal(row.get("credit")) - _decimal(row.get("debit"))
+            contribution = _decimal(row.get("credit")) - _decimal(row.get("debit"))
+            revenue += contribution
+            revenue_sources.append(_lineage(row, contribution))
         if "业务招待费" in account:
-            amount = _decimal(row.get("debit")) - _decimal(row.get("credit"))
-            entertainment += amount
-            entertainment_sources.append(
-                {
-                    "source_file": row.get("source_file"),
-                    "source_sheet": row.get("source_sheet"),
-                    "source_row": row.get("source_row"),
-                    "voucher_no": row.get("voucher_no"),
-                }
-            )
+            contribution = _decimal(row.get("debit")) - _decimal(row.get("credit"))
+            entertainment += contribution
+            entertainment_sources.append(_lineage(row, contribution))
 
     findings = []
     if entertainment > 0:
@@ -98,6 +227,17 @@ def _hard_rule_findings(rows: list[dict]) -> list[dict]:
                 "severity": "medium" if Decimal(result["tax_adjustment"]) > 0 else "low",
                 "confidence": "deterministic_from_mapped_data",
                 "required_evidence": ["annual_cit_return", "revenue_reconciliation", "expense_ledger"],
+                "revenue_basis": _money(revenue),
+                "calculation_inputs": {
+                    "actual_expense": {
+                        "value": _money(entertainment),
+                        "lineage": entertainment_sources,
+                    },
+                    "revenue_basis": {
+                        "value": _money(revenue),
+                        "lineage": revenue_sources,
+                    },
+                },
                 "source": entertainment_sources,
             }
         )
@@ -139,54 +279,104 @@ def _render_markdown(entity_name: str, row_count: int, findings: list[dict], ai_
 
 
 def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
-    work_dir = case_dir / "work"
-    output_dir = case_dir / "output"
-    work_dir.mkdir(exist_ok=True)
-    output_dir.mkdir(exist_ok=True)
+    run_id, run_dir, started_at = _start_run(case_dir)
+    run_work_dir = run_dir / "work"
+    run_output_dir = run_dir / "output"
+    source_file, candidates = _select_journal(case_dir, run_work_dir)
+    input_files = _input_manifest(candidates)
 
-    source_file = _find_journal(case_dir)
+    if source_file is None:
+        artifacts = ["work/input_selection.json"]
+        state = _finalize_run(
+            case_dir=case_dir,
+            run_id=run_id,
+            run_dir=run_dir,
+            started_at=started_at,
+            ai_mode=ai_mode,
+            input_files=input_files,
+            status="blocked_data_quality",
+            next_action="provide_exactly_one_csv_journal",
+            artifacts=artifacts,
+            completed_steps=["init", "input_selection"],
+        )
+        return 4, {"status": state["status"], "next_action": state["next_action"]}
+
     mapping, rows = _load_and_normalize(source_file)
-    _write_json(work_dir / "mapping_review.json", mapping)
+    _write_json(run_work_dir / "mapping_review.json", mapping)
     if not mapping["ready_for_calculation"]:
-        state = _update_state(
-            case_dir,
+        artifacts = ["work/input_selection.json", "work/mapping_review.json"]
+        state = _finalize_run(
+            case_dir=case_dir,
+            run_id=run_id,
+            run_dir=run_dir,
+            started_at=started_at,
+            ai_mode=ai_mode,
+            input_files=input_files,
             status="needs_mapping_review",
             next_action="confirm_field_mapping",
-            artifacts=["work/mapping_review.json"],
+            artifacts=artifacts,
+            completed_steps=["init", "input_selection", "ingest", "mapping"],
         )
         return 3, {"status": state["status"], "next_action": state["next_action"]}
 
-    _write_jsonl(work_dir / "normalized_journal.jsonl", rows)
+    _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
     quality_findings = validate_voucher_balance(rows)
-    _write_json(work_dir / "data_quality.json", quality_findings)
+    _write_json(run_work_dir / "data_quality.json", quality_findings)
     if quality_findings:
-        state = _update_state(
-            case_dir,
+        artifacts = [
+            "work/input_selection.json",
+            "work/mapping_review.json",
+            "work/normalized_journal.jsonl",
+            "work/data_quality.json",
+        ]
+        state = _finalize_run(
+            case_dir=case_dir,
+            run_id=run_id,
+            run_dir=run_dir,
+            started_at=started_at,
+            ai_mode=ai_mode,
+            input_files=input_files,
             status="blocked_data_quality",
             next_action="resolve_data_quality_findings",
-            artifacts=["work/normalized_journal.jsonl", "work/data_quality.json"],
+            artifacts=artifacts,
+            completed_steps=["init", "input_selection", "ingest", "mapping", "data_quality"],
         )
         return 4, {"status": state["status"], "next_action": state["next_action"]}
 
     findings = _hard_rule_findings(rows) + detect_semantic_candidates(rows)
-    _write_json(output_dir / "findings.json", findings)
+    _write_json(run_output_dir / "findings.json", findings)
     entity_name = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))["entity_name"]
-    (output_dir / "report.md").write_text(
-        _render_markdown(entity_name, len(rows), findings, ai_mode), encoding="utf-8"
+    _atomic_write_text(
+        run_output_dir / "report.md",
+        _render_markdown(entity_name, len(rows), findings, ai_mode),
     )
     artifacts = [
+        "work/input_selection.json",
         "work/mapping_review.json",
         "work/normalized_journal.jsonl",
         "work/data_quality.json",
         "output/findings.json",
         "output/report.md",
     ]
-    state = _update_state(
-        case_dir,
+    state = _finalize_run(
+        case_dir=case_dir,
+        run_id=run_id,
+        run_dir=run_dir,
+        started_at=started_at,
+        ai_mode=ai_mode,
+        input_files=input_files,
         status="needs_professional_review",
-        completed_steps=["init", "ingest", "mapping", "data_quality", "hard_rules", "semantic_screening"],
         next_action="review_findings",
         artifacts=artifacts,
+        completed_steps=[
+            "init",
+            "input_selection",
+            "ingest",
+            "mapping",
+            "data_quality",
+            "hard_rules",
+            "semantic_screening",
+        ],
     )
     return 0, {
         "status": state["status"],
@@ -194,4 +384,3 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
         "finding_count": len(findings),
         "artifacts": artifacts,
     }
-
