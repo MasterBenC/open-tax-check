@@ -11,6 +11,6 @@ def select_reportable_findings(findings: list[dict]) -> list[dict]:
         finding
         for finding in findings
         if finding.get("review_status") == "reviewed"
+        and finding.get("report_status") == "approved"
         and finding.get("status") in REPORTABLE_STATUSES
     ]
-

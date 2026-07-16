@@ -21,6 +21,9 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_declares_complete_professional_review_gate(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        methodology = (SKILL / "references" / "methodology.md").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("needs_professional_review", text)
         self.assertIn(
             "Never put an unreviewed finding into a client-facing conclusion.", text
@@ -30,6 +33,9 @@ class SkillContractTests(unittest.TestCase):
             "client-facing report.",
             text,
         )
+        self.assertIn("`report_status`", methodology)
+        self.assertIn("exactly `approved`", methodology)
+        self.assertIn("does not generate a formal client report", methodology)
 
     def test_skill_requires_unambiguous_csv_selection_and_explains_run_history(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")

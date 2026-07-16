@@ -26,6 +26,8 @@ Missing or invalid dates block hard rules. The engine derives the tax year and a
 
 The transition requires a review record. Preserve the original engine result so later reviewers can distinguish source facts, system calculation, AI commentary, and professional judgment.
 
+The review layer must record `report_status` separately from `review_status`. A finding is eligible for client-facing reporting only when `review_status` is `reviewed`, `report_status` is exactly `approved`, and its finding status is `suspected`, `confirmed`, or `insufficient_data`. A missing, draft, rejected, or any other report status is not approval; `candidate` and `closed` findings remain excluded even if marked approved.
+
 ## Reporting boundary
 
-The report is consulting advice based on documents supplied and procedures described. It is not a statutory audit, assurance engagement, legal opinion, tax filing, or binding interpretation by a tax authority. Never hide missing inputs behind a health score.
+Version 0.1 produces screening findings and an internal Markdown draft; it does not generate a formal client report. Any later client-facing report is consulting advice based on documents supplied and procedures described. It is not a statutory audit, assurance engagement, legal opinion, tax filing, or binding interpretation by a tax authority. Never hide missing inputs behind a health score.
