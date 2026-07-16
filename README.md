@@ -8,7 +8,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎、AI 税务项目助理�
 
 当前仓库处于 **v0.1 基础版本**，仅支持单一法律实体的 UTF-8/UTF-8-BOM **CSV 序时账**：字段映射、凭证借贷平衡检查、首批确定性硬规则、确定性语义候选筛查，以及 JSON/JSONL 和 Markdown 内部草稿输出。
 
-Excel、PDF、图片、OCR、申报表解析、企业外部信息、云端大模型调用、专业 Excel 工作底稿、DOCX 和 PDF 报告均属于后续版本，当前版本尚不支持。公开路线不代表已经交付的能力。
+Excel、PDF、图片、OCR、申报表解析、企业外部信息、云端大模型调用、专业 Excel 工作底稿、DOCX 和 PDF 报告均属于后续版本，当前版本尚不支持。也就是说，Excel、OCR、DOCX、PDF、扩展税务规则和云端适配器尚未支持。公开路线不代表已经交付的能力；各阶段的当前状态见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## How it works
 

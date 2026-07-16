@@ -67,6 +67,12 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("当前版本尚不支持", current_scope)
         self.assertIn("公开路线不代表已经交付的能力", current_scope)
 
+    def test_readme_links_scope_and_roadmap(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("CSV", text)
+        self.assertIn("docs/roadmap.md", text)
+        self.assertIn("尚未支持", text)
+
     def test_rule_form_requires_authority_test_case_and_data_confirmation(self):
         text = (ROOT / ".github/ISSUE_TEMPLATE/rule-proposal.yml").read_text(encoding="utf-8")
         self.assertIn("官方法规依据", text)
