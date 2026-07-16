@@ -38,6 +38,7 @@ class FictionalExampleTests(unittest.TestCase):
         self.assertIn("公司、交易、凭证、金额、人物和结论均为完全虚构", text)
         self.assertIn("不包含任何真实客户信息", text)
         self.assertIn("随本仓库按 Apache License 2.0 许可", text)
+        self.assertIn("`--output` 必须指向不存在或空目录", text)
 
     def test_example_generates_expected_findings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -60,6 +61,31 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertTrue((Path(temp_dir) / "output/report.md").is_file())
             self.assertEqual(JOURNAL.read_bytes(), source_before)
 
+    def test_example_refuses_nonempty_output_without_changing_existing_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            state = output_dir / "state.json"
+            journal = output_dir / "input/journal.csv"
+            marker = output_dir / "keep.me"
+            journal.parent.mkdir()
+            state.write_text("sentinel state", encoding="utf-8")
+            journal.write_text("sentinel journal", encoding="utf-8")
+            marker.write_text("sentinel marker", encoding="utf-8")
+
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/run_fictional_example.py"), "--output", temp_dir],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("output directory must not exist or must be empty", proc.stderr)
+            self.assertEqual(state.read_text(encoding="utf-8"), "sentinel state")
+            self.assertEqual(journal.read_text(encoding="utf-8"), "sentinel journal")
+            self.assertEqual(marker.read_text(encoding="utf-8"), "sentinel marker")
+            self.assertFalse((output_dir / "output").exists())
+
     def test_root_readme_runs_the_example_without_claiming_it_is_missing(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
         section = text.split("## Run the fictional example", 1)[1].split("## Outputs", 1)[0]
@@ -69,6 +95,7 @@ class FictionalExampleTests(unittest.TestCase):
         self.assertIn("output/findings.json", section)
         self.assertIn("output/report.md", section)
         self.assertIn("needs_professional_review", section)
+        self.assertIn("`--output` 必须指向不存在或空目录", section)
         self.assertNotIn("尚未提供", section)
 
 

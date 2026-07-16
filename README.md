@@ -51,7 +51,7 @@ macOS 或 Linux 激活虚拟环境时使用 `source .venv/bin/activate`；其余
 python scripts/run_fictional_example.py --output work/fictional-demo
 ```
 
-runner 只会向 `--output` 指定的独立案件目录写入文件，不会修改 `examples/fictional-company/` 中的源数据。成功运行后，状态为 `needs_professional_review`，主要产物是 `work/fictional-demo/output/findings.json` 和 `work/fictional-demo/output/report.md`。示例中的公司、交易、凭证、金额、人物和结论均为完全虚构，请勿用真实客户账套覆盖示例数据。
+`--output` 必须指向不存在或空目录；runner 会拒绝非空目录，避免覆盖已有数据或混杂旧产物。runner 只会向该独立案件目录写入文件，不会修改 `examples/fictional-company/` 中的源数据。成功运行后，状态为 `needs_professional_review`，主要产物是 `work/fictional-demo/output/findings.json` 和 `work/fictional-demo/output/report.md`。示例中的公司、交易、凭证、金额、人物和结论均为完全虚构，请勿用真实客户账套覆盖示例数据。
 
 ## Outputs
 

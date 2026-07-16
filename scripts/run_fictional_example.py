@@ -16,6 +16,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    if args.output.exists() and (
+        not args.output.is_dir() or any(args.output.iterdir())
+    ):
+        parser.error("output directory must not exist or must be empty")
     init_case(args.output, "开源示例科技有限公司")
     shutil.copy2(SOURCE, args.output / "input" / "journal.csv")
     code, result = run_case(args.output, "off")
