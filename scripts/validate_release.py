@@ -65,7 +65,11 @@ def main() -> int:
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            continue
+            print(
+                "unable to decode public release content: "
+                f"{relative_path} (undecodable_public_content)"
+            )
+            return 1
         except OSError:
             print(f"unable to read public release content: {relative_path}")
             return 1

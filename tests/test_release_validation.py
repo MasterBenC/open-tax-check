@@ -98,6 +98,49 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertIn("public.txt", message)
         self.assertNotIn(secret, message)
 
+    def test_tracked_non_utf8_unknown_content_fails_with_safe_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            public_file = root / "tracked.payload"
+            public_file.write_bytes(b"\xff\xfe\x00\x80")
+            subprocess.run(
+                ["git", "add", "tracked.payload"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "unable to decode public release content: "
+            "tracked.payload (undecodable_public_content)\n",
+        )
+
+    def test_untracked_non_utf8_unknown_content_fails_with_safe_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / "untracked.payload").write_bytes(b"\xff\xfe\x00\x80")
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "unable to decode public release content: "
+            "untracked.payload (undecodable_public_content)\n",
+        )
+
+    def test_non_utf8_content_in_explicit_binary_suffixes_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            for suffix in (".jpg", ".jpeg", ".png", ".zip"):
+                (root / f"public{suffix}").write_bytes(b"\xff\xfe\x00\x80")
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 0, message)
+        self.assertEqual(message, "release validation passed\n")
+
     def test_tracked_read_error_fails_without_exception_details(self):
         exception_detail = "sensitive operating-system detail"
         with tempfile.TemporaryDirectory() as directory:
