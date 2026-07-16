@@ -39,7 +39,19 @@ macOS 或 Linux 激活虚拟环境时使用 `source .venv/bin/activate`；其余
 
 ## Run the fictional example
 
-完整虚构案例将在首个公开完整版本前加入。目前 v0.1 仓库基础阶段尚未提供可直接运行的示例目录，请勿使用真实客户账套代替示例数据。
+仓库包含一个完全虚构且借贷平衡的 CSV 示例。安装项目后，在 Windows PowerShell 中运行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_fictional_example.py --output work\fictional-demo
+```
+
+如果已经激活虚拟环境，macOS、Linux 和 Windows 均可运行：
+
+```text
+python scripts/run_fictional_example.py --output work/fictional-demo
+```
+
+runner 只会向 `--output` 指定的独立案件目录写入文件，不会修改 `examples/fictional-company/` 中的源数据。成功运行后，状态为 `needs_professional_review`，主要产物是 `work/fictional-demo/output/findings.json` 和 `work/fictional-demo/output/report.md`。示例中的公司、交易、凭证、金额、人物和结论均为完全虚构，请勿用真实客户账套覆盖示例数据。
 
 ## Outputs
 
