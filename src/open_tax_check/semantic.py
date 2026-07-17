@@ -74,4 +74,3 @@ def detect_semantic_candidates(entries: list[dict]) -> list[dict]:
                 }
             )
     return candidates
-

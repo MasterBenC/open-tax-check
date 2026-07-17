@@ -34,6 +34,22 @@ class ReleaseValidationTests(unittest.TestCase):
                 result = validate_release.main()
         return result, output.getvalue()
 
+    def write_api_key_assignment(
+        self, path, variable_name, value, separator="=", quote="", spacing=""
+    ):
+        assignment = (
+            variable_name
+            + spacing
+            + separator
+            + spacing
+            + quote
+            + value
+            + quote
+            + "\n"
+        )
+        path.write_text(assignment, encoding="utf-8")
+        return assignment
+
     def test_release_validator_passes(self):
         proc = subprocess.run(
             [sys.executable, str(ROOT / "scripts/validate_release.py")],
@@ -97,6 +113,107 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(result, 1, message)
         self.assertIn("public.txt", message)
         self.assertNotIn(secret, message)
+
+    def test_api_key_assignments_fail_closed_without_echoing_values(self):
+        cases = (
+            ("FN_API_KEY", "=", "", "", "untracked"),
+            ("API_KEY", "=", '"', " ", "tracked"),
+            ("api_key", ":", "'", " ", "tracked_after_ignore"),
+            ("BAIDU_OCR_API_KEY", ":", "", " ", "untracked"),
+            ("vendor-api-key", "=", '"', "", "tracked"),
+        )
+
+        for variable_name, separator, quote, spacing, repository_state in cases:
+            with self.subTest(
+                variable_name=variable_name,
+                separator=separator,
+                quote=quote,
+                repository_state=repository_state,
+            ):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    relative_path = Path("public.txt")
+                    secret = "synthetic" + "_secret"
+                    assignment = self.write_api_key_assignment(
+                        root / relative_path,
+                        variable_name,
+                        secret,
+                        separator=separator,
+                        quote=quote,
+                        spacing=spacing,
+                    )
+                    if repository_state in {"tracked", "tracked_after_ignore"}:
+                        subprocess.run(
+                            ["git", "add", str(relative_path)],
+                            cwd=root,
+                            check=True,
+                            capture_output=True,
+                        )
+                    if repository_state == "tracked_after_ignore":
+                        (root / ".gitignore").write_text(
+                            f"{relative_path}\n", encoding="utf-8"
+                        )
+
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 1, message)
+                self.assertEqual(
+                    message,
+                    "forbidden public content in public.txt: api_key\n",
+                )
+                self.assertNotIn(secret, message)
+                self.assertNotIn(assignment.strip(), message)
+
+    def test_empty_api_key_assignments_do_not_fail_validation(self):
+        cases = (
+            ("FN_API_KEY", "=", "", ""),
+            ("API_KEY", "=", '"', ""),
+            ("api_key", ":", "'", ""),
+            ("BAIDU_OCR_API_KEY", ":", "", ""),
+            ("FN_API_KEY", "=", "", "|"),
+        )
+
+        for variable_name, separator, quote, value in cases:
+            with self.subTest(
+                variable_name=variable_name,
+                separator=separator,
+                quote=quote,
+                value=value,
+            ):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    self.write_api_key_assignment(
+                        root / "public.txt",
+                        variable_name,
+                        value,
+                        separator=separator,
+                        quote=quote,
+                        spacing=" ",
+                    )
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 0, message)
+                self.assertEqual(message, "release validation passed\n")
+
+    def test_existing_sensitive_patterns_keep_safe_fixed_categories(self):
+        cases = (
+            (("f" + "n_sk_") + "synthetic-existing-test", "credential_prefix"),
+            ("BEGIN " + "RSA " + "PRIVATE KEY", "private_key"),
+        )
+
+        for payload, category in cases:
+            with self.subTest(category=category):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / "public.txt").write_text(payload, encoding="utf-8")
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 1, message)
+                self.assertEqual(
+                    message,
+                    f"forbidden public content in public.txt: {category}\n",
+                )
+                self.assertNotIn(payload, message)
 
     def test_tracked_non_utf8_unknown_content_fails_with_safe_diagnostic(self):
         with tempfile.TemporaryDirectory() as directory:

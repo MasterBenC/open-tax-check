@@ -58,4 +58,3 @@ def shareholder_loan_candidate(
         ],
         "conclusion_boundary": "Scenario estimate only; professional review required.",
     }
-

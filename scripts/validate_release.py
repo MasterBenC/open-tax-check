@@ -19,8 +19,11 @@ REQUIRED = (
 )
 FORBIDDEN = re.compile(
     r"(?P<credential_prefix>" + ("f" + "n_sk_") + r")"
-    + r"|(?P<api_key>api[_-]?key\s*[:=]\s*['\"][^'\"]+)"
-    + r"|(?P<private_key>BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY)"
+    + r"|(?P<api_key>\b(?:[a-z0-9]+[_-])*api[_-]?key\b"
+    + r"[ \t]*[:=][ \t]*(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|"
+    + r"[^\s'\"#;,|:=]+))"
+    + r"|(?P<private_key>BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY)",
+    re.IGNORECASE,
 )
 FORBIDDEN_BINARY_SUFFIXES = {
     ".bmp",
