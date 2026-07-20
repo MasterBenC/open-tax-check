@@ -299,6 +299,126 @@ class ReleaseValidationTests(unittest.TestCase):
                         self.assertNotIn(secret, message)
                         self.assertNotIn(payload, message)
 
+    def test_nested_yaml_block_scalar_requires_content_deeper_than_key(self):
+        secret = "synthetic" + "_nested_block_value"
+        variable_name = "API" + "_KEY"
+
+        for indicator in ("|", "|-", "|+"):
+            for line_ending in ("\n", "\r\n"):
+                with self.subTest(
+                    indicator=indicator, line_ending=repr(line_ending)
+                ):
+                    payload = "".join(
+                        (
+                            "outer:",
+                            line_ending,
+                            "  ",
+                            variable_name,
+                            ": ",
+                            indicator,
+                            line_ending,
+                            "  ",
+                            line_ending,
+                            "    ",
+                            secret,
+                            line_ending,
+                        )
+                    )
+                    with tempfile.TemporaryDirectory() as directory:
+                        root = self.create_repository(directory)
+                        (root / "public.yaml").write_text(
+                            payload, encoding="utf-8", newline=""
+                        )
+                        result, message = self.run_validator(root)
+
+                    self.assertEqual(result, 1, message)
+                    self.assertEqual(
+                        message,
+                        "forbidden public content in public.yaml: api_key\n",
+                    )
+                    self.assertNotIn(secret, message)
+                    self.assertNotIn(payload, message)
+
+    def test_nested_yaml_block_scalar_stops_at_same_or_lower_indentation(self):
+        secret = "synthetic" + "_later_nested_value"
+        variable_name = "API" + "_KEY"
+
+        for line_ending in ("\n", "\r\n"):
+            cases = (
+                "".join(
+                    (
+                        "outer:",
+                        line_ending,
+                        "  ",
+                        variable_name,
+                        ": |",
+                        line_ending,
+                        "  sibling: safe",
+                        line_ending,
+                    )
+                ),
+                "".join(
+                    (
+                        "outer:",
+                        line_ending,
+                        "  ",
+                        variable_name,
+                        ": |+",
+                        line_ending,
+                        "  ",
+                        line_ending,
+                        "  sibling: safe",
+                        line_ending,
+                        "    ",
+                        secret,
+                        line_ending,
+                    )
+                ),
+                "".join(
+                    (
+                        "outer:",
+                        line_ending,
+                        "  ",
+                        variable_name,
+                        ": |-",
+                        line_ending,
+                        "    ",
+                        line_ending,
+                        "next: safe",
+                        line_ending,
+                        "    ",
+                        secret,
+                        line_ending,
+                    )
+                ),
+                "".join(
+                    (
+                        "items:",
+                        line_ending,
+                        "  - ",
+                        variable_name,
+                        ": |",
+                        line_ending,
+                        "    sibling: safe",
+                        line_ending,
+                    )
+                ),
+            )
+            for case_index, payload in enumerate(cases):
+                with self.subTest(
+                    line_ending=repr(line_ending), case_index=case_index
+                ):
+                    with tempfile.TemporaryDirectory() as directory:
+                        root = self.create_repository(directory)
+                        (root / "public.yaml").write_text(
+                            payload, encoding="utf-8", newline=""
+                        )
+                        result, message = self.run_validator(root)
+
+                    self.assertEqual(result, 0, message)
+                    self.assertEqual(message, "release validation passed\n")
+                    self.assertNotIn(secret, message)
+
     def test_empty_and_regex_like_api_key_forms_remain_allowed(self):
         variable_name = "FN" + "_API" + "_KEY"
         non_key_value = "synthetic" + "_non_key_value"
