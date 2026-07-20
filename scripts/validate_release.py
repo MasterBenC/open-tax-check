@@ -17,12 +17,26 @@ REQUIRED = (
     "skills/open-tax-check/SKILL.md",
     "skills/open-tax-check/agents/openai.yaml",
 )
-FORBIDDEN = re.compile(
-    r"(?P<credential_prefix>" + ("f" + "n_sk_") + r")"
-    + r"|(?P<api_key>\b(?:[a-z0-9]+[_-])*api[_-]?key\b"
+API_KEY_NAME = r"(?:[a-z0-9]+[_-])*[a-z0-9]*api[_-]?key"
+API_KEY_TOKEN = (
+    rf"(?:\"{API_KEY_NAME}\"|'{API_KEY_NAME}'|"
+    rf"(?<![a-z0-9_'\"-]){API_KEY_NAME}(?![a-z0-9_'\"-]))"
+)
+API_KEY_ASSIGNMENT = re.compile(
+    API_KEY_TOKEN
     + r"[ \t]*[:=][ \t]*(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|"
-    + r"[^\s'\"#;,|:=]+))"
-    + r"|(?P<private_key>BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY)",
+    + r"(?:(?:\"\"|'')+)?[^\s'\"#;,|=\r\n]+)",
+    re.IGNORECASE,
+)
+API_KEY_BLOCK_SCALAR = re.compile(
+    API_KEY_TOKEN
+    + r"[ \t]*:[ \t]*\|[+-]?[ \t]*(?:#[^\r\n]*)?\r?\n"
+    + r"[ \t]+(?=[^ \t\r\n])[^\r\n]+",
+    re.IGNORECASE,
+)
+CREDENTIAL_PREFIX = re.compile(("f" + "n_sk_"), re.IGNORECASE)
+PRIVATE_KEY = re.compile(
+    r"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY",
     re.IGNORECASE,
 )
 FORBIDDEN_BINARY_SUFFIXES = {
@@ -87,6 +101,22 @@ def public_paths(root: Path) -> tuple[Path, ...] | None:
     return tuple(Path(name.decode("utf-8", errors="surrogateescape")) for name in names)
 
 
+def sensitive_category(content: str) -> str | None:
+    candidates = []
+    for pattern, category in (
+        (API_KEY_ASSIGNMENT, "api_key"),
+        (API_KEY_BLOCK_SCALAR, "api_key"),
+        (CREDENTIAL_PREFIX, "credential_prefix"),
+        (PRIVATE_KEY, "private_key"),
+    ):
+        match = pattern.search(content)
+        if match:
+            candidates.append((match.start(), category))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: candidate[0])[1]
+
+
 def main() -> int:
     missing = [name for name in REQUIRED if not (ROOT / name).is_file()]
     if missing:
@@ -117,9 +147,8 @@ def main() -> int:
         except OSError:
             print(f"unable to read public release content: {relative_path}")
             return 1
-        match = FORBIDDEN.search(content)
-        if match:
-            category = match.lastgroup or "sensitive_content"
+        category = sensitive_category(content)
+        if category:
             print(f"forbidden public content in {relative_path}: {category}")
             return 1
     print("release validation passed")

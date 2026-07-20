@@ -195,6 +195,92 @@ class ReleaseValidationTests(unittest.TestCase):
                 self.assertEqual(result, 0, message)
                 self.assertEqual(message, "release validation passed\n")
 
+    def test_extended_api_key_config_syntaxes_fail_without_echoing_values(self):
+        secret = "synthetic" + "_config_value"
+        snake_name = "FN" + "_API" + "_KEY"
+        lower_name = "api" + "_key"
+        camel_name = "baidu" + "Ocr" + "Api" + "Key"
+        cases = (
+            ("camel_case", "".join((camel_name, " = ", secret))),
+            (
+                "double_quoted_json_key",
+                "".join(('"', snake_name, '"', ': "', secret, '"')),
+            ),
+            (
+                "double_quoted_camel_case_key",
+                "".join(('"', camel_name, '"', ': "', secret, '"')),
+            ),
+            (
+                "single_quoted_yaml_key",
+                "".join(("'", lower_name, "'", ": '", secret, "'")),
+            ),
+            ("shell_adjacent_single_quotes", "".join((snake_name, "=", "''", secret))),
+            ("shell_adjacent_double_quotes", "".join((snake_name, "=", '""', secret))),
+            ("leading_colon_value", "".join((snake_name, "=", ":", secret))),
+        )
+
+        for syntax, payload in cases:
+            with self.subTest(syntax=syntax):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / "public.txt").write_text(payload, encoding="utf-8")
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 1, message)
+                self.assertEqual(
+                    message,
+                    "forbidden public content in public.txt: api_key\n",
+                )
+                self.assertNotIn(secret, message)
+                self.assertNotIn(payload, message)
+
+    def test_yaml_block_scalar_api_keys_require_indented_nonempty_content(self):
+        secret = "synthetic" + "_block_value"
+        variable_name = "API" + "_KEY"
+
+        for indicator in ("|", "|-", "|+"):
+            with self.subTest(indicator=indicator):
+                payload = "".join(
+                    (variable_name, ": ", indicator, "\n", "  ", secret, "\n")
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / "public.yaml").write_text(payload, encoding="utf-8")
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 1, message)
+                self.assertEqual(
+                    message,
+                    "forbidden public content in public.yaml: api_key\n",
+                )
+                self.assertNotIn(secret, message)
+                self.assertNotIn(payload, message)
+
+    def test_empty_and_regex_like_api_key_forms_remain_allowed(self):
+        variable_name = "FN" + "_API" + "_KEY"
+        non_key_value = "synthetic" + "_non_key_value"
+        cases = (
+            "".join((variable_name, "=")),
+            "".join((variable_name, "=", "''")),
+            "".join((variable_name, "=", '""')),
+            "".join((variable_name, "=", "|", "api[_-]?key")),
+            "".join((variable_name, ": ", "|", "\n")),
+            "".join((variable_name, ": ", "|-", "\n", "  ", "\n")),
+            "".join((variable_name, ": ", "|+", "\n", "not_indented", "\n")),
+            "".join(('"', variable_name, "'", ": ", non_key_value)),
+            "".join(("'", variable_name, '"', ": ", non_key_value)),
+        )
+
+        for payload in cases:
+            with self.subTest(payload_length=len(payload)):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / "public.txt").write_text(payload, encoding="utf-8")
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 0, message)
+                self.assertEqual(message, "release validation passed\n")
+
     def test_existing_sensitive_patterns_keep_safe_fixed_categories(self):
         cases = (
             (("f" + "n_sk_") + "synthetic-existing-test", "credential_prefix"),
