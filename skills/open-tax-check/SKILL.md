@@ -36,7 +36,7 @@ Run:
 python <skill-dir>/scripts/opentaxcheck.py init --case <case-dir> --entity "企业全称"
 ```
 
-Put exactly one journal CSV in `<case-dir>/input/`. Keep original source files unchanged. If the folder contains zero or multiple CSV files, stop at `blocked_data_quality` with `next_action` set to `provide_exactly_one_csv_journal`. Posting dates must use one of the deterministic forms documented in [references/canonical-schema.md](references/canonical-schema.md); never ask AI to infer a missing year or period.
+Put exactly one journal CSV in `<case-dir>/input/`; the adapter recognizes a case-insensitive `.csv` suffix. Keep original source files unchanged. If the folder contains unsupported files, stop at `blocked_data_quality` with `next_action` set to `remove_unsupported_input_files`. If it contains zero or multiple CSV files, use `provide_exactly_one_csv_journal`. Rows with extra or missing cells are blocking structure findings and must never be inferred or repaired by AI. Posting dates and numeric values must use the deterministic forms documented in [references/canonical-schema.md](references/canonical-schema.md).
 
 ### 2. Run the deterministic engine
 

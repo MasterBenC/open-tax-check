@@ -66,6 +66,10 @@ python scripts/run_fictional_example.py --output work/fictional-demo
 
 CSV 日期确定性支持 `YYYY-MM-DD`、`YYYY/M/D` 和 `YYYY.M.D`。有效日期会被标准化，凭证按“会计月份 + 凭证号”检查平衡，年度税务规则按纳税年度分别计算；日期或关键行字段缺失/无效时，流水线会以数据质量问题阻止计算。
 
+v0.1 要求 `input/` 顶层只有一份 CSV 序时账；`.csv` 后缀不区分大小写。存在任何其他不支持文件时，程序会列出文件名并阻止计算，要求先移除不支持文件。CSV 行中出现多余或缺失单元格同样会阻止计算，且诊断不会回显单元格内容。
+
+金额只接受 ASCII 数字、可选 ASCII 正负号、普通整数或小数，以及合法三位千分位；字段首尾空白会被忽略，空白金额按零处理。程序会拒绝畸形千分位、`NaN`、`Infinity`、指数记法、全角数字、内部空格、货币符号和括号负数，并在任何硬规则运行前生成不含原值的数据质量问题。
+
 专业 `workpaper.xlsx`、`report.docx`、`report.pdf` 和完整 `evidence-pack/` 是后续目标，不是 v0.1 现有输出。
 
 ## AI modes

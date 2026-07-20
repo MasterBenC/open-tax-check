@@ -120,6 +120,15 @@ class PublicRepositoryContractTests(unittest.TestCase):
         assert_readme_phase_scope(self, text)
         self.assertTrue((ROOT / "docs/roadmap.md").is_file())
 
+    def test_readme_documents_csv_and_numeric_integrity_gates(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("`.csv` 后缀不区分大小写", text)
+        self.assertIn("不支持文件", text)
+        self.assertIn("多余或缺失单元格", text)
+        self.assertIn("合法三位千分位", text)
+        self.assertIn("指数记法", text)
+
     def test_roadmap_preserves_exact_phase_statuses(self):
         path = ROOT / "docs/roadmap.md"
         self.assertTrue(path.is_file())

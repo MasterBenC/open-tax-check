@@ -4,21 +4,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import re
+
+from .numeric import parse_decimal
 
 
 def _blank(value) -> bool:
     return value is None or not str(value).strip()
-
-
-def _decimal(value) -> Decimal:
-    if _blank(value):
-        return Decimal("0")
-    try:
-        return Decimal(str(value).replace(",", ""))
-    except InvalidOperation as exc:
-        raise ValueError(f"Invalid monetary value: {value!r}") from exc
 
 
 def _money(value: Decimal) -> str:
@@ -68,8 +61,8 @@ def validate_voucher_balance(rows: list[dict], tolerance: Decimal = Decimal("0.0
             except ValueError:
                 continue
         key = (period, voucher_no)
-        grouped[key]["debit"] += _decimal(row.get("debit"))
-        grouped[key]["credit"] += _decimal(row.get("credit"))
+        grouped[key]["debit"] += parse_decimal(row.get("debit"))
+        grouped[key]["credit"] += parse_decimal(row.get("credit"))
         if row.get("source_row") is not None:
             grouped[key]["source_rows"].append(row["source_row"])
 
@@ -99,6 +92,20 @@ def validate_journal_quality(rows: list[dict]) -> list[dict]:
     findings: list[dict] = []
     balance_rows: list[dict] = []
     for row in rows:
+        structure_issues = row.get("_csv_structure_issues") or []
+        if structure_issues:
+            findings.extend(
+                {
+                    "rule_id": "DQ-CSV-STRUCTURE-001",
+                    "rule_version": "0.1.0",
+                    "status": "blocking",
+                    "issue": issue,
+                    **_location(row),
+                }
+                for issue in structure_issues
+            )
+            continue
+
         missing = [
             field
             for field in ("voucher_no", "date", "account_name")
@@ -113,6 +120,23 @@ def validate_journal_quality(rows: list[dict]) -> list[dict]:
                     "rule_version": "0.1.0",
                     "status": "blocking",
                     "fields": missing,
+                    **_location(row),
+                }
+            )
+
+        invalid_numeric_fields = []
+        for field in ("debit", "credit"):
+            try:
+                parse_decimal(row.get(field))
+            except ValueError:
+                invalid_numeric_fields.append(field)
+        if invalid_numeric_fields:
+            findings.append(
+                {
+                    "rule_id": "DQ-NUMERIC-001",
+                    "rule_version": "0.1.0",
+                    "status": "blocking",
+                    "fields": invalid_numeric_fields,
                     **_location(row),
                 }
             )
@@ -135,7 +159,7 @@ def validate_journal_quality(rows: list[dict]) -> list[dict]:
                 row.update({"date": normalized, "period": period, "tax_year": tax_year})
                 date_valid = True
 
-        if not missing and date_valid:
+        if not missing and not invalid_numeric_fields and date_valid:
             balance_rows.append(row)
 
     findings.extend(validate_voucher_balance(balance_rows))

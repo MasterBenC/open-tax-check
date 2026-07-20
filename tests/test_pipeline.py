@@ -310,7 +310,7 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse((case_dir / "output" / "report.md").exists())
             self.assertTrue((case_dir / "work" / "mapping_review.json").is_file())
 
-    def test_processing_error_becomes_a_traceable_failed_run_without_stale_output(self):
+    def test_invalid_numeric_value_is_a_data_quality_run_without_stale_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = self._init_case(temp_dir)
             input_file = case_dir / "input" / "journal.csv"
@@ -331,32 +331,187 @@ class PipelineTests(unittest.TestCase):
 
             second = run_cli("run", "--case", str(case_dir), "--ai-mode", "assist")
 
-            self.assertEqual(second.returncode, 5)
+            self.assertEqual(second.returncode, 4)
             self.assertNotIn("Traceback", second.stderr)
             self.assertNotIn(invalid_value, second.stdout + second.stderr)
             response = json.loads(second.stdout)
-            self.assertEqual(response["status"], "blocked_processing_error")
-            self.assertEqual(response["next_action"], "inspect_processing_error")
-            self.assertEqual(response["error_type"], "invalid_numeric_value")
+            self.assertEqual(response["status"], "blocked_data_quality")
+            self.assertEqual(response["next_action"], "resolve_data_quality_findings")
 
             state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
             second_manifest_path = case_dir / "runs" / "run-0002" / "manifest.json"
             second_manifest_text = second_manifest_path.read_text(encoding="utf-8")
             second_manifest = json.loads(second_manifest_text)
-            self.assertEqual(state["status"], "blocked_processing_error")
+            quality_text = (case_dir / "work" / "data_quality.json").read_text(
+                encoding="utf-8"
+            )
+            quality = json.loads(quality_text)
+            numeric = [item for item in quality if item["rule_id"] == "DQ-NUMERIC-001"]
+            self.assertEqual(len(numeric), 1)
+            self.assertEqual(numeric[0]["fields"], ["debit"])
+            self.assertNotIn(invalid_value, quality_text)
+            self.assertEqual(state["status"], "blocked_data_quality")
             self.assertEqual(state["current_run"], "run-0002")
             self.assertEqual([run["run_id"] for run in state["run_history"]], ["run-0001", "run-0002"])
-            self.assertEqual(second_manifest["status"], "blocked_processing_error")
-            self.assertEqual(second_manifest["error_type"], "invalid_numeric_value")
+            self.assertEqual(second_manifest["status"], "blocked_data_quality")
+            self.assertNotIn("error_type", second_manifest)
             self.assertNotIn(invalid_value, second_manifest_text)
             self.assertIn("work/input_selection.json", second_manifest["artifacts"])
             self.assertIn("work/mapping_review.json", second_manifest["artifacts"])
             self.assertIn("work/normalized_journal.jsonl", second_manifest["artifacts"])
-            self.assertTrue((case_dir / "work" / "processing_error.json").is_file())
+            self.assertIn("work/data_quality.json", second_manifest["artifacts"])
+            self.assertFalse((case_dir / "work" / "processing_error.json").exists())
             self.assertFalse((case_dir / "output" / "findings.json").exists())
             self.assertFalse((case_dir / "output" / "report.md").exists())
             self.assertEqual(first_findings.read_bytes(), findings_before)
             self.assertEqual(first_manifest.read_bytes(), manifest_before)
+
+    def test_single_uppercase_csv_is_selected_and_processed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-uppercase-csv")
+            self._write_balanced_journal(case_dir / "input" / "JOURNAL.CSV")
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 0, run_proc.stderr)
+            selection = json.loads(
+                (case_dir / "work" / "input_selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(selection["status"], "selected")
+            self.assertEqual(selection["selected_file"], "JOURNAL.CSV")
+
+    def test_unsupported_input_alongside_csv_blocks_and_manifest_hashes_all_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-unsupported-input")
+            csv_file = case_dir / "input" / "journal.csv"
+            pdf_file = case_dir / "input" / "support.pdf"
+            self._write_balanced_journal(csv_file)
+            pdf_file.write_bytes(b"fictional-pdf-placeholder")
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 4, run_proc.stderr)
+            response = json.loads(run_proc.stdout)
+            state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+            selection = json.loads(
+                (case_dir / "work" / "input_selection.json").read_text(encoding="utf-8")
+            )
+            manifest = json.loads(
+                (case_dir / "runs" / "run-0001" / "manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(response["status"], "blocked_data_quality")
+            self.assertEqual(state["next_action"], "remove_unsupported_input_files")
+            self.assertEqual(selection["status"], "blocked")
+            self.assertEqual(selection["input_files"], ["journal.csv", "support.pdf"])
+            self.assertEqual(selection["unsupported_files"], ["support.pdf"])
+            self.assertEqual(selection["selected_file"], None)
+            manifest_by_path = {item["path"]: item for item in manifest["input_files"]}
+            self.assertEqual(
+                set(manifest_by_path), {"input/journal.csv", "input/support.pdf"}
+            )
+            self.assertEqual(
+                manifest_by_path["input/journal.csv"]["sha256"],
+                hashlib.sha256(csv_file.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                manifest_by_path["input/support.pdf"]["sha256"],
+                hashlib.sha256(pdf_file.read_bytes()).hexdigest(),
+            )
+            self.assertFalse((case_dir / "work" / "mapping_review.json").exists())
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+            self.assertFalse((case_dir / "output" / "report.md").exists())
+
+    def test_extra_csv_cells_block_without_echoing_values_or_client_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-extra-cell")
+            sensitive = "sensitive-extra-cell-90210"
+            input_file = case_dir / "input" / "journal.csv"
+            input_file.write_text(
+                "凭证号,记账日期,科目名称,借方发生额,贷方发生额\n"
+                f"记-001,2025-01-02,银行存款,100,100,{sensitive}\n",
+                encoding="utf-8-sig",
+            )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 4, run_proc.stderr)
+            quality_text = (case_dir / "work" / "data_quality.json").read_text(
+                encoding="utf-8"
+            )
+            findings = json.loads(quality_text)
+            structure = [
+                item
+                for item in findings
+                if item["rule_id"] == "DQ-CSV-STRUCTURE-001"
+            ]
+            self.assertEqual(len(structure), 1)
+            self.assertEqual(structure[0]["issue"], "extra_cells")
+            self.assertEqual(structure[0]["source_file"], "journal.csv")
+            self.assertEqual(structure[0]["source_row"], 2)
+            self.assertNotIn(sensitive, quality_text)
+            self.assertNotIn(sensitive, run_proc.stdout + run_proc.stderr)
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+            self.assertFalse((case_dir / "output" / "report.md").exists())
+
+    def test_missing_trailing_csv_cell_blocks_before_rules(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-missing-cell")
+            input_file = case_dir / "input" / "journal.csv"
+            input_file.write_text(
+                "凭证号,记账日期,科目名称,借方发生额,贷方发生额\n"
+                "记-001,2025-01-02,银行存款,100\n",
+                encoding="utf-8-sig",
+            )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 4, run_proc.stderr)
+            state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+            findings = json.loads(
+                (case_dir / "work" / "data_quality.json").read_text(encoding="utf-8")
+            )
+            structure = [
+                item
+                for item in findings
+                if item["rule_id"] == "DQ-CSV-STRUCTURE-001"
+            ]
+            self.assertEqual(state["next_action"], "resolve_data_quality_findings")
+            self.assertEqual(len(structure), 1)
+            self.assertEqual(structure[0]["issue"], "missing_cells")
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+            self.assertFalse((case_dir / "output" / "report.md").exists())
+
+    def test_quoted_grouped_numeric_values_are_calculated_end_to_end(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-grouped-numeric")
+            input_file = case_dir / "input" / "journal.csv"
+            with input_file.open("w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    ["凭证号", "记账日期", "科目名称", "借方发生额", "贷方发生额"]
+                )
+                writer.writerows(
+                    [
+                        ["记-001", "2025-01-02", "银行存款", "1,000,000.00", "0"],
+                        ["记-001", "2025-01-02", "主营业务收入", "0", "1,000,000.00"],
+                        ["记-002", "2025-03-08", "管理费用-业务招待费", "20,000", "0"],
+                        ["记-002", "2025-03-08", "银行存款", "0", "20,000"],
+                    ]
+                )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 0, run_proc.stderr)
+            findings = json.loads(
+                (case_dir / "output" / "findings.json").read_text(encoding="utf-8")
+            )
+            entertainment = next(
+                item for item in findings if item["rule_id"] == "CIT-BE-001"
+            )
+            self.assertEqual(entertainment["revenue_basis"], "1000000.00")
+            self.assertEqual(entertainment["tax_adjustment"], "15000.00")
 
     def test_current_view_stays_on_previous_run_when_staging_copy_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:

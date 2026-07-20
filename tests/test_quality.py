@@ -153,6 +153,77 @@ class DataQualityTests(unittest.TestCase):
                 self.assertNotIn("period", row)
                 self.assertNotIn("tax_year", row)
 
+    def test_invalid_numeric_lexemes_are_blocking_without_echoing_values(self):
+        invalid_values = (
+            "1,2,3",
+            "1,,000",
+            "12,34",
+            "NaN",
+            "sNaN",
+            "Infinity",
+            "-Infinity",
+            "1e3",
+            "１２３",
+            "1 000",
+            "¥100",
+            "(100)",
+        )
+
+        for supplied in invalid_values:
+            with self.subTest(supplied=supplied):
+                row = self._date_row("2025-01-02")
+                row["debit"] = supplied
+                findings = validate_journal_quality([row])
+                numeric = [
+                    item for item in findings if item["rule_id"] == "DQ-NUMERIC-001"
+                ]
+                self.assertEqual(len(numeric), 1)
+                self.assertEqual(numeric[0]["fields"], ["debit"])
+                self.assertEqual(numeric[0]["source_file"], "journal.csv")
+                self.assertEqual(numeric[0]["source_row"], 2)
+                self.assertNotIn("value", numeric[0])
+                self.assertNotIn("values", numeric[0])
+                self.assertNotIn(supplied, repr(numeric[0]))
+                self.assertFalse(
+                    any(item["rule_id"] == "DQ-VOUCHER-001" for item in findings)
+                )
+
+    def test_supported_numeric_lexemes_use_decimal_balance_semantics(self):
+        supported_pairs = (
+            ("", "0"),
+            ("  +1000.25  ", "1,000.25"),
+            ("-1,000", "-1000.00"),
+            ("0012.50", "12.5"),
+        )
+
+        for debit, credit in supported_pairs:
+            with self.subTest(debit=debit, credit=credit):
+                row = self._date_row("2025-01-02")
+                row.update({"debit": debit, "credit": credit})
+                self.assertEqual(validate_journal_quality([row]), [])
+
+    def test_csv_structure_issues_block_rows_before_other_quality_checks(self):
+        for issue in ("extra_cells", "missing_cells"):
+            with self.subTest(issue=issue):
+                row = self._date_row("2025-01-02")
+                row["_csv_structure_issues"] = [issue]
+
+                findings = validate_journal_quality([row])
+
+                self.assertEqual(
+                    findings,
+                    [
+                        {
+                            "rule_id": "DQ-CSV-STRUCTURE-001",
+                            "rule_version": "0.1.0",
+                            "status": "blocking",
+                            "issue": issue,
+                            "source_file": "journal.csv",
+                            "source_row": 2,
+                        }
+                    ],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

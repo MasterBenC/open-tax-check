@@ -34,4 +34,6 @@ An amount row is blocked when `voucher_no`, `date`, or `account_name` is blank. 
 
 ## Numeric handling
 
-Use decimal arithmetic for currency. Do not use binary floating point for tax calculations. Preserve source values separately if cleaning changes separators, signs, or blank values.
+Use decimal arithmetic for currency. Do not use binary floating point for tax calculations. Accepted values use ASCII digits with an optional ASCII `+` or `-`, and are ordinary integers or decimals with either no grouping or valid three-digit thousands grouping. Leading and trailing whitespace is ignored, and a blank amount is zero.
+
+Malformed grouping, non-finite values such as `NaN` or `Infinity`, scientific notation, Unicode digits, internal whitespace, currency symbols, and parenthesized negatives are blocking data-quality issues. Diagnostics identify only affected fields and source coordinates; they do not echo rejected values. Preserve source values separately if cleaning changes separators, signs, or blank values.

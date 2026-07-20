@@ -13,6 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .mapping import map_headers
+from .numeric import parse_decimal
 from .quality import validate_journal_quality
 from .rules import business_entertainment_adjustment
 from .semantic import detect_semantic_candidates
@@ -26,12 +27,6 @@ _STATE_BACKUP_PREFIX = ".opentaxcheck-state-backup-"
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _decimal(value) -> Decimal:
-    if value is None or not str(value).strip():
-        return Decimal("0")
-    return Decimal(str(value).replace(",", ""))
 
 
 def _money(value: Decimal) -> str:
@@ -344,19 +339,34 @@ def _run_artifacts(run_dir: Path) -> list[str]:
     )
 
 
-def _select_journal(case_dir: Path, run_work_dir: Path) -> tuple[Path | None, list[Path]]:
-    candidates = sorted((case_dir / "input").glob("*.csv"))
-    selected = candidates[0] if len(candidates) == 1 else None
+def _select_journal(
+    case_dir: Path, run_work_dir: Path
+) -> tuple[Path | None, list[Path], str | None]:
+    input_files = sorted(
+        (path for path in (case_dir / "input").iterdir() if path.is_file()),
+        key=lambda path: path.name,
+    )
+    candidates = [path for path in input_files if path.suffix.lower() == ".csv"]
+    unsupported = [path for path in input_files if path.suffix.lower() != ".csv"]
+    selected = candidates[0] if len(candidates) == 1 and not unsupported else None
+    if unsupported:
+        next_action = "remove_unsupported_input_files"
+    elif selected is None:
+        next_action = "provide_exactly_one_csv_journal"
+    else:
+        next_action = None
     selection = {
         "status": "selected" if selected else "blocked",
         "required_count": 1,
         "candidate_count": len(candidates),
         "candidates": [path.name for path in candidates],
+        "input_files": [path.name for path in input_files],
+        "unsupported_files": [path.name for path in unsupported],
         "selected_file": selected.name if selected else None,
-        "next_action": None if selected else "provide_exactly_one_csv_journal",
+        "next_action": next_action,
     }
     _write_json(run_work_dir / "input_selection.json", selection)
-    return selected, candidates
+    return selected, input_files, next_action
 
 
 def _load_and_normalize(source_file: Path) -> tuple[dict, list[dict]]:
@@ -370,6 +380,13 @@ def _load_and_normalize(source_file: Path) -> tuple[dict, list[dict]]:
         normalized = []
         for source_row, row in enumerate(reader, start=2):
             entry = {canonical: row.get(original) for original, canonical in mapping["mapping"].items()}
+            structure_issues = []
+            if None in row:
+                structure_issues.append("extra_cells")
+            if any(row.get(header) is None for header in headers):
+                structure_issues.append("missing_cells")
+            if structure_issues:
+                entry["_csv_structure_issues"] = structure_issues
             entry.update(
                 {
                     "source_file": source_file.name,
@@ -409,11 +426,11 @@ def _hard_rule_findings(rows: list[dict]) -> list[dict]:
         )
         account = str(row.get("account_name") or "")
         if "主营业务收入" in account or account == "营业收入":
-            contribution = _decimal(row.get("credit")) - _decimal(row.get("debit"))
+            contribution = parse_decimal(row.get("credit")) - parse_decimal(row.get("debit"))
             totals["revenue"] += contribution
             totals["revenue_sources"].append(_lineage(row, contribution))
         if "业务招待费" in account:
-            contribution = _decimal(row.get("debit")) - _decimal(row.get("credit"))
+            contribution = parse_decimal(row.get("debit")) - parse_decimal(row.get("credit"))
             totals["entertainment"] += contribution
             totals["entertainment_sources"].append(_lineage(row, contribution))
 
@@ -494,13 +511,15 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
     error_type = None
 
     try:
-        source_file, candidates = _select_journal(case_dir, run_work_dir)
-        input_files = _input_manifest(candidates)
+        source_file, discovered_files, selection_next_action = _select_journal(
+            case_dir, run_work_dir
+        )
+        input_files = _input_manifest(discovered_files)
 
         if source_file is None:
             exit_code = 4
             status = "blocked_data_quality"
-            next_action = "provide_exactly_one_csv_journal"
+            next_action = selection_next_action or "provide_exactly_one_csv_journal"
             artifacts = ["work/input_selection.json"]
             completed_steps = ["init", "input_selection"]
             response_details = {}

@@ -112,6 +112,19 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("calculated separately for each tax year", catalog)
         self.assertIn("resolve_data_quality_findings", skill)
 
+    def test_skill_documents_csv_input_and_numeric_integrity_gates(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        schema = (SKILL / "references" / "canonical-schema.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("case-insensitive `.csv` suffix", skill)
+        self.assertIn("remove_unsupported_input_files", skill)
+        self.assertIn("extra or missing cells", skill)
+        self.assertIn("ASCII digits", schema)
+        self.assertIn("three-digit thousands grouping", schema)
+        self.assertIn("scientific notation", schema)
+
     def test_openai_metadata_matches_interface_contract(self):
         expected = (
             'interface:\n'
