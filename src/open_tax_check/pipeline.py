@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .mapping import map_headers
-from .numeric import parse_decimal
+from .numeric import exact_add, exact_subtract, format_money, parse_decimal
 from .quality import validate_journal_quality
 from .rules import business_entertainment_adjustment
 from .semantic import detect_semantic_candidates
@@ -30,7 +30,7 @@ def _utc_now() -> str:
 
 
 def _money(value: Decimal) -> str:
-    return f"{value.quantize(Decimal('0.01')):.2f}"
+    return format_money(value)
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -426,12 +426,18 @@ def _hard_rule_findings(rows: list[dict]) -> list[dict]:
         )
         account = str(row.get("account_name") or "")
         if "主营业务收入" in account or account == "营业收入":
-            contribution = parse_decimal(row.get("credit")) - parse_decimal(row.get("debit"))
-            totals["revenue"] += contribution
+            contribution = exact_subtract(
+                parse_decimal(row.get("credit")), parse_decimal(row.get("debit"))
+            )
+            totals["revenue"] = exact_add(totals["revenue"], contribution)
             totals["revenue_sources"].append(_lineage(row, contribution))
         if "业务招待费" in account:
-            contribution = parse_decimal(row.get("debit")) - parse_decimal(row.get("credit"))
-            totals["entertainment"] += contribution
+            contribution = exact_subtract(
+                parse_decimal(row.get("debit")), parse_decimal(row.get("credit"))
+            )
+            totals["entertainment"] = exact_add(
+                totals["entertainment"], contribution
+            )
             totals["entertainment_sources"].append(_lineage(row, contribution))
 
     findings = []

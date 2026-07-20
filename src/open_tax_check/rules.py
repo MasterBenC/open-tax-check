@@ -4,18 +4,20 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from .numeric import exact_multiply, exact_subtract, format_money
+
 
 def _money(value: Decimal) -> str:
-    return f"{value.quantize(Decimal('0.01')):.2f}"
+    return format_money(value)
 
 
 def business_entertainment_adjustment(actual_expense: Decimal, revenue: Decimal) -> dict:
     actual_expense = max(Decimal("0"), Decimal(actual_expense))
     revenue = max(Decimal("0"), Decimal(revenue))
-    sixty_percent = actual_expense * Decimal("0.60")
-    revenue_cap = revenue * Decimal("0.005")
+    sixty_percent = exact_multiply(actual_expense, Decimal("0.60"))
+    revenue_cap = exact_multiply(revenue, Decimal("0.005"))
     deductible = min(sixty_percent, revenue_cap)
-    adjustment = actual_expense - deductible
+    adjustment = exact_subtract(actual_expense, deductible)
     return {
         "rule_id": "CIT-BE-001",
         "rule_version": "2026.1",
@@ -49,7 +51,9 @@ def shareholder_loan_candidate(
         "status": "candidate",
         "review_status": "unreviewed",
         "ending_balance": _money(ending_balance),
-        "scenario_tax_exposure": _money(ending_balance * Decimal("0.20")),
+        "scenario_tax_exposure": _money(
+            exact_multiply(ending_balance, Decimal("0.20"))
+        ),
         "required_evidence": [
             "shareholder_identity",
             "year_end_repayment_evidence",

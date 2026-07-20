@@ -7,7 +7,13 @@ from datetime import date
 from decimal import Decimal
 import re
 
-from .numeric import parse_decimal
+from .numeric import (
+    AGGREGATE_ABSOLUTE_TOTAL_LIMIT,
+    exact_add,
+    exact_subtract,
+    format_money,
+    parse_decimal,
+)
 
 
 def _blank(value) -> bool:
@@ -15,7 +21,7 @@ def _blank(value) -> bool:
 
 
 def _money(value: Decimal) -> str:
-    return f"{value.quantize(Decimal('0.01')):.2f}"
+    return format_money(value)
 
 
 _ISO_DATE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$")
@@ -61,15 +67,19 @@ def validate_voucher_balance(rows: list[dict], tolerance: Decimal = Decimal("0.0
             except ValueError:
                 continue
         key = (period, voucher_no)
-        grouped[key]["debit"] += parse_decimal(row.get("debit"))
-        grouped[key]["credit"] += parse_decimal(row.get("credit"))
+        grouped[key]["debit"] = exact_add(
+            grouped[key]["debit"], parse_decimal(row.get("debit"))
+        )
+        grouped[key]["credit"] = exact_add(
+            grouped[key]["credit"], parse_decimal(row.get("credit"))
+        )
         if row.get("source_row") is not None:
             grouped[key]["source_rows"].append(row["source_row"])
 
     findings = []
     for (period, voucher_no), totals in grouped.items():
-        difference = totals["debit"] - totals["credit"]
-        if abs(difference) > tolerance:
+        difference = exact_subtract(totals["debit"], totals["credit"])
+        if difference.copy_abs() > tolerance:
             findings.append(
                 {
                     "rule_id": "DQ-VOUCHER-001",
@@ -91,6 +101,8 @@ def validate_journal_quality(rows: list[dict]) -> list[dict]:
 
     findings: list[dict] = []
     balance_rows: list[dict] = []
+    aggregate_absolute_total = Decimal("0")
+    aggregate_exceeded = False
     for row in rows:
         structure_issues = row.get("_csv_structure_issues") or []
         if structure_issues:
@@ -125,11 +137,20 @@ def validate_journal_quality(rows: list[dict]) -> list[dict]:
             )
 
         invalid_numeric_fields = []
+        parsed_amounts = {}
         for field in ("debit", "credit"):
             try:
-                parse_decimal(row.get(field))
+                parsed_amounts[field] = parse_decimal(row.get(field))
             except ValueError:
                 invalid_numeric_fields.append(field)
+        if not aggregate_exceeded:
+            for amount in parsed_amounts.values():
+                aggregate_absolute_total = exact_add(
+                    aggregate_absolute_total, amount.copy_abs()
+                )
+                if aggregate_absolute_total > AGGREGATE_ABSOLUTE_TOTAL_LIMIT:
+                    aggregate_exceeded = True
+                    break
         if invalid_numeric_fields:
             findings.append(
                 {
@@ -162,5 +183,16 @@ def validate_journal_quality(rows: list[dict]) -> list[dict]:
         if not missing and not invalid_numeric_fields and date_valid:
             balance_rows.append(row)
 
-    findings.extend(validate_voucher_balance(balance_rows))
+    if aggregate_exceeded:
+        findings.append(
+            {
+                "rule_id": "DQ-NUMERIC-001",
+                "rule_version": "0.1.0",
+                "status": "blocking",
+                "scope": "aggregate",
+                "fields": ["debit", "credit"],
+            }
+        )
+    else:
+        findings.extend(validate_voucher_balance(balance_rows))
     return findings

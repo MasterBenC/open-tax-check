@@ -513,6 +513,93 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(entertainment["revenue_basis"], "1000000.00")
             self.assertEqual(entertainment["tax_adjustment"], "15000.00")
 
+    def test_oversized_or_over_scale_amounts_block_as_numeric_data_quality(self):
+        invalid_values = (
+            "123456789012345678901234567",
+            "999999999999999999.999",
+        )
+        for index, invalid_value in enumerate(invalid_values):
+            with self.subTest(invalid_value=invalid_value):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    case_dir = self._init_case(temp_dir, f"case-numeric-bound-{index}")
+                    input_file = case_dir / "input" / "journal.csv"
+                    input_file.write_text(
+                        "凭证号,记账日期,科目名称,借方发生额,贷方发生额\n"
+                        f"记-001,2025-01-02,银行存款,{invalid_value},0\n",
+                        encoding="utf-8-sig",
+                    )
+
+                    run_proc = run_cli(
+                        "run", "--case", str(case_dir), "--ai-mode", "off"
+                    )
+
+                    self.assertEqual(run_proc.returncode, 4, run_proc.stderr)
+                    response = json.loads(run_proc.stdout)
+                    quality_text = (
+                        case_dir / "work" / "data_quality.json"
+                    ).read_text(encoding="utf-8")
+                    manifest_text = (
+                        case_dir / "runs" / "run-0001" / "manifest.json"
+                    ).read_text(encoding="utf-8")
+                    quality = json.loads(quality_text)
+                    numeric = [
+                        item
+                        for item in quality
+                        if item["rule_id"] == "DQ-NUMERIC-001"
+                    ]
+                    self.assertEqual(response["status"], "blocked_data_quality")
+                    self.assertEqual(numeric[0]["fields"], ["debit"])
+                    self.assertNotIn("error_type", response)
+                    self.assertNotIn(invalid_value, run_proc.stdout + run_proc.stderr)
+                    self.assertNotIn(invalid_value, quality_text)
+                    self.assertNotIn(invalid_value, manifest_text)
+                    self.assertFalse(
+                        (case_dir / "work" / "processing_error.json").exists()
+                    )
+                    self.assertFalse(
+                        (case_dir / "output" / "findings.json").exists()
+                    )
+                    self.assertFalse((case_dir / "output" / "report.md").exists())
+
+    def test_large_valid_dataset_is_aggregated_exactly_by_hard_rules(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-exact-large-aggregate")
+            input_file = case_dir / "input" / "journal.csv"
+            maximum = "999999999999999999.99"
+            with input_file.open("w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    ["凭证号", "记账日期", "科目名称", "借方发生额", "贷方发生额"]
+                )
+                for index in range(25):
+                    voucher = f"记-revenue-{index:02d}"
+                    writer.writerow(
+                        [voucher, "2025-01-02", "银行存款", maximum, "0"]
+                    )
+                    writer.writerow(
+                        [voucher, "2025-01-02", "主营业务收入", "0", maximum]
+                    )
+                writer.writerow(
+                    ["记-expense", "2025-02-03", "管理费用-业务招待费", "1.00", "0"]
+                )
+                writer.writerow(
+                    ["记-expense", "2025-02-03", "银行存款", "0", "1.00"]
+                )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 0, run_proc.stderr)
+            findings = json.loads(
+                (case_dir / "output" / "findings.json").read_text(encoding="utf-8")
+            )
+            entertainment = next(
+                item for item in findings if item["rule_id"] == "CIT-BE-001"
+            )
+            self.assertEqual(
+                entertainment["revenue_basis"], "24999999999999999999.75"
+            )
+            self.assertEqual(entertainment["tax_adjustment"], "0.40")
+
     def test_current_view_stays_on_previous_run_when_staging_copy_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = Path(temp_dir) / "case-a"

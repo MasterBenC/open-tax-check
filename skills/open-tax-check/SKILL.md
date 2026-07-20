@@ -38,6 +38,8 @@ python <skill-dir>/scripts/opentaxcheck.py init --case <case-dir> --entity "‰ºÅ‰
 
 Put exactly one journal CSV in `<case-dir>/input/`; the adapter recognizes a case-insensitive `.csv` suffix. Keep original source files unchanged. If the folder contains unsupported files, stop at `blocked_data_quality` with `next_action` set to `remove_unsupported_input_files`. If it contains zero or multiple CSV files, use `provide_exactly_one_csv_journal`. Rows with extra or missing cells are blocking structure findings and must never be inferred or repaired by AI. Posting dates and numeric values must use the deterministic forms documented in [references/canonical-schema.md](references/canonical-schema.md).
 
+The Phase 1 numeric gate also blocks when any value exceeds its precision or scale limit, or when the dataset's aggregate absolute amount exceeds the documented limit. Do not split, round, truncate, or summarize values to bypass this gate.
+
 ### 2. Run the deterministic engine
 
 ```text

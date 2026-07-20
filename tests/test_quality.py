@@ -194,6 +194,7 @@ class DataQualityTests(unittest.TestCase):
             ("  +1000.25  ", "1,000.25"),
             ("-1,000", "-1000.00"),
             ("0012.50", "12.5"),
+            ("999999999999999999.99", "999,999,999,999,999,999.99"),
         )
 
         for debit, credit in supported_pairs:
@@ -201,6 +202,63 @@ class DataQualityTests(unittest.TestCase):
                 row = self._date_row("2025-01-02")
                 row.update({"debit": debit, "credit": credit})
                 self.assertEqual(validate_journal_quality([row]), [])
+
+    def test_aggregate_absolute_amount_limit_blocks_before_voucher_balance(self):
+        maximum = "999999999999999999.99"
+        rows = []
+        for index in range(101):
+            row = self._date_row("2025-01-02")
+            row.update(
+                {
+                    "voucher_no": "记-aggregate",
+                    "debit": maximum,
+                    "credit": "0",
+                    "source_row": index + 2,
+                }
+            )
+            rows.append(row)
+
+        findings = validate_journal_quality(rows)
+
+        aggregate = [
+            item
+            for item in findings
+            if item["rule_id"] == "DQ-NUMERIC-001"
+            and item.get("scope") == "aggregate"
+        ]
+        self.assertEqual(
+            aggregate,
+            [
+                {
+                    "rule_id": "DQ-NUMERIC-001",
+                    "rule_version": "0.1.0",
+                    "status": "blocking",
+                    "scope": "aggregate",
+                    "fields": ["debit", "credit"],
+                }
+            ],
+        )
+        self.assertFalse(
+            any(item["rule_id"] == "DQ-VOUCHER-001" for item in findings)
+        )
+        self.assertNotIn(maximum, repr(aggregate))
+
+    def test_aggregate_boundary_and_voucher_balance_remain_exact(self):
+        maximum = "999999999999999999.99"
+        rows = []
+        for index in range(50):
+            row = self._date_row("2025-01-02")
+            row.update(
+                {
+                    "voucher_no": "记-boundary",
+                    "debit": maximum,
+                    "credit": maximum,
+                    "source_row": index + 2,
+                }
+            )
+            rows.append(row)
+
+        self.assertEqual(validate_journal_quality(rows), [])
 
     def test_csv_structure_issues_block_rows_before_other_quality_checks(self):
         for issue in ("extra_cells", "missing_cells"):

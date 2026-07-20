@@ -128,6 +128,10 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("多余或缺失单元格", text)
         self.assertIn("合法三位千分位", text)
         self.assertIn("指数记法", text)
+        self.assertIn("18 位整数", text)
+        self.assertIn("2 位小数", text)
+        self.assertIn("20 位整数", text)
+        self.assertIn("绝对金额总额", text)
 
     def test_roadmap_preserves_exact_phase_statuses(self):
         path = ROOT / "docs/roadmap.md"

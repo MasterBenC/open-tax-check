@@ -34,6 +34,8 @@ An amount row is blocked when `voucher_no`, `date`, or `account_name` is blank. 
 
 ## Numeric handling
 
-Use decimal arithmetic for currency. Do not use binary floating point for tax calculations. Accepted values use ASCII digits with an optional ASCII `+` or `-`, and are ordinary integers or decimals with either no grouping or valid three-digit thousands grouping. Leading and trailing whitespace is ignored, and a blank amount is zero.
+Use decimal arithmetic for currency. Do not use binary floating point for tax calculations. Accepted values use ASCII digits with an optional ASCII `+` or `-`, and are ordinary integers or decimals with either no grouping or valid three-digit thousands grouping. Leading and trailing whitespace is ignored, and a blank amount is zero. Each Phase 1 amount allows at most 18 integer digits and 2 fractional digits.
+
+The sum of the absolute values of all valid debit and credit amounts must not exceed `99,999,999,999,999,999,999.99` (20 integer digits). This aggregate is accumulated with an explicit 50-digit exact decimal context. Exceeding either the per-value or aggregate limit is blocking and prevents voucher balancing and tax rules.
 
 Malformed grouping, non-finite values such as `NaN` or `Infinity`, scientific notation, Unicode digits, internal whitespace, currency symbols, and parenthesized negatives are blocking data-quality issues. Diagnostics identify only affected fields and source coordinates; they do not echo rejected values. Preserve source values separately if cleaning changes separators, signs, or blank values.

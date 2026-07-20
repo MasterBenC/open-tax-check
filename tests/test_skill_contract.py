@@ -124,6 +124,10 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("ASCII digits", schema)
         self.assertIn("three-digit thousands grouping", schema)
         self.assertIn("scientific notation", schema)
+        self.assertIn("18 integer digits", schema)
+        self.assertIn("2 fractional digits", schema)
+        self.assertIn("20 integer digits", schema)
+        self.assertIn("aggregate absolute amount", skill)
 
     def test_openai_metadata_matches_interface_contract(self):
         expected = (
