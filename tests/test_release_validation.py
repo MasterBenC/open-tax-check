@@ -256,6 +256,49 @@ class ReleaseValidationTests(unittest.TestCase):
                 self.assertNotIn(secret, message)
                 self.assertNotIn(payload, message)
 
+    def test_yaml_block_scalar_skips_only_blank_lines_before_content(self):
+        secret = "synthetic" + "_delayed_block_value"
+        variable_name = "API" + "_KEY"
+
+        for indicator in ("|", "|-", "|+"):
+            for line_ending in ("\n", "\r\n"):
+                blank_prefixes = (
+                    line_ending,
+                    "".join(("  ", line_ending, "\t", line_ending)),
+                )
+                for blank_prefix in blank_prefixes:
+                    with self.subTest(
+                        indicator=indicator,
+                        line_ending=repr(line_ending),
+                        blank_line_count=blank_prefix.count(line_ending),
+                    ):
+                        payload = "".join(
+                            (
+                                variable_name,
+                                ": ",
+                                indicator,
+                                line_ending,
+                                blank_prefix,
+                                "  ",
+                                secret,
+                                line_ending,
+                            )
+                        )
+                        with tempfile.TemporaryDirectory() as directory:
+                            root = self.create_repository(directory)
+                            (root / "public.yaml").write_text(
+                                payload, encoding="utf-8", newline=""
+                            )
+                            result, message = self.run_validator(root)
+
+                        self.assertEqual(result, 1, message)
+                        self.assertEqual(
+                            message,
+                            "forbidden public content in public.yaml: api_key\n",
+                        )
+                        self.assertNotIn(secret, message)
+                        self.assertNotIn(payload, message)
+
     def test_empty_and_regex_like_api_key_forms_remain_allowed(self):
         variable_name = "FN" + "_API" + "_KEY"
         non_key_value = "synthetic" + "_non_key_value"
@@ -267,6 +310,22 @@ class ReleaseValidationTests(unittest.TestCase):
             "".join((variable_name, ": ", "|", "\n")),
             "".join((variable_name, ": ", "|-", "\n", "  ", "\n")),
             "".join((variable_name, ": ", "|+", "\n", "not_indented", "\n")),
+            "".join(
+                (
+                    variable_name,
+                    ": ",
+                    "|",
+                    "\n",
+                    "not_indented",
+                    "\n",
+                    "  ",
+                    non_key_value,
+                    "\n",
+                )
+            ),
+            "".join(
+                (variable_name, ": ", "|+", "\r\n", " \r\n", "\t\r\n")
+            ),
             "".join(('"', variable_name, "'", ": ", non_key_value)),
             "".join(("'", variable_name, '"', ": ", non_key_value)),
         )

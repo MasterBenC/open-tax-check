@@ -31,6 +31,7 @@ API_KEY_ASSIGNMENT = re.compile(
 API_KEY_BLOCK_SCALAR = re.compile(
     API_KEY_TOKEN
     + r"[ \t]*:[ \t]*\|[+-]?[ \t]*(?:#[^\r\n]*)?\r?\n"
+    + r"(?:[ \t]*\r?\n)*"
     + r"[ \t]+(?=[^ \t\r\n])[^\r\n]+",
     re.IGNORECASE,
 )
