@@ -38,4 +38,6 @@ Use decimal arithmetic for currency. Do not use binary floating point for tax ca
 
 The sum of the absolute values of all valid debit and credit amounts must not exceed `99,999,999,999,999,999,999.99` (20 integer digits). This aggregate is accumulated with an explicit 50-digit exact decimal context. Exceeding either the per-value or aggregate limit is blocking and prevents voucher balancing and tax rules.
 
+Calculations retain exact decimal values. Final displayed money is rounded to 2 fractional digits with `ROUND_HALF_UP`, independently of the host process's decimal context. This display convention does not decide a return-specific filing convention; professional review must confirm the applicable filing and statutory presentation rules.
+
 Malformed grouping, non-finite values such as `NaN` or `Infinity`, scientific notation, Unicode digits, internal whitespace, currency symbols, and parenthesized negatives are blocking data-quality issues. Diagnostics identify only affected fields and source coordinates; they do not echo rejected values. Preserve source values separately if cleaning changes separators, signs, or blank values.

@@ -1,5 +1,13 @@
 import unittest
-from decimal import Decimal, localcontext
+from decimal import (
+    Decimal,
+    Inexact,
+    ROUND_DOWN,
+    ROUND_HALF_EVEN,
+    ROUND_UP,
+    Rounded,
+    localcontext,
+)
 
 from open_tax_check.numeric import (
     AGGREGATE_ABSOLUTE_TOTAL_LIMIT,
@@ -9,6 +17,7 @@ from open_tax_check.numeric import (
     exact_add,
     exact_multiply,
     exact_subtract,
+    format_money,
     parse_decimal,
 )
 
@@ -47,6 +56,18 @@ class NumericContractTests(unittest.TestCase):
         self.assertEqual(doubled, Decimal("1999999999999999999.98"))
         self.assertEqual(restored, maximum)
         self.assertEqual(percentage, Decimal("4999999999999999.99995"))
+
+    def test_money_formatting_uses_half_up_independent_of_ambient_context(self):
+        for rounding in (ROUND_DOWN, ROUND_UP, ROUND_HALF_EVEN):
+            with self.subTest(rounding=rounding):
+                with localcontext() as context:
+                    context.prec = 2
+                    context.rounding = rounding
+                    context.traps[Inexact] = True
+                    context.traps[Rounded] = True
+
+                    self.assertEqual(format_money(Decimal("0.006")), "0.01")
+                    self.assertEqual(format_money(Decimal("-0.005")), "-0.01")
 
 
 if __name__ == "__main__":

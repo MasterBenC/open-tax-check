@@ -132,6 +132,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("2 位小数", text)
         self.assertIn("20 位整数", text)
         self.assertIn("绝对金额总额", text)
+        self.assertIn("ROUND_HALF_UP", text)
 
     def test_roadmap_preserves_exact_phase_statuses(self):
         path = ROOT / "docs/roadmap.md"

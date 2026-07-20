@@ -260,6 +260,108 @@ class DataQualityTests(unittest.TestCase):
 
         self.assertEqual(validate_journal_quality(rows), [])
 
+    def test_aggregate_exact_limit_includes_debit_and_credit_on_the_same_row(self):
+        maximum = "999999999999999999.99"
+        rows = []
+        for index in range(50):
+            row = self._date_row("2025-01-02")
+            row.update(
+                {
+                    "voucher_no": "记-exact-limit",
+                    "debit": maximum,
+                    "credit": maximum,
+                    "source_row": index + 2,
+                }
+            )
+            rows.append(row)
+        final_row = self._date_row("2025-01-02")
+        final_row.update(
+            {
+                "voucher_no": "记-exact-limit",
+                "debit": "0.49",
+                "credit": "0.50",
+                "source_row": 52,
+            }
+        )
+        rows.append(final_row)
+
+        self.assertEqual(validate_journal_quality(rows), [])
+
+    def test_aggregate_one_cent_over_limit_is_blocking(self):
+        maximum = "999999999999999999.99"
+        rows = []
+        for index in range(50):
+            row = self._date_row("2025-01-02")
+            row.update(
+                {
+                    "voucher_no": "记-over-limit",
+                    "debit": maximum,
+                    "credit": maximum,
+                    "source_row": index + 2,
+                }
+            )
+            rows.append(row)
+        final_row = self._date_row("2025-01-02")
+        final_row.update(
+            {
+                "voucher_no": "记-over-limit",
+                "debit": "0.50",
+                "credit": "0.50",
+                "source_row": 52,
+            }
+        )
+        rows.append(final_row)
+
+        findings = validate_journal_quality(rows)
+
+        self.assertEqual(
+            [
+                item
+                for item in findings
+                if item.get("scope") == "aggregate"
+            ],
+            [
+                {
+                    "rule_id": "DQ-NUMERIC-001",
+                    "rule_version": "0.1.0",
+                    "status": "blocking",
+                    "scope": "aggregate",
+                    "fields": ["debit", "credit"],
+                }
+            ],
+        )
+
+    def test_negative_amounts_count_toward_aggregate_limit_by_absolute_value(self):
+        negative_maximum = "-999999999999999999.99"
+        rows = []
+        for index in range(50):
+            row = self._date_row("2025-01-02")
+            row.update(
+                {
+                    "voucher_no": "记-negative-limit",
+                    "debit": negative_maximum,
+                    "credit": negative_maximum,
+                    "source_row": index + 2,
+                }
+            )
+            rows.append(row)
+        final_row = self._date_row("2025-01-02")
+        final_row.update(
+            {
+                "voucher_no": "记-negative-limit",
+                "debit": "-0.50",
+                "credit": "-0.50",
+                "source_row": 52,
+            }
+        )
+        rows.append(final_row)
+
+        findings = validate_journal_quality(rows)
+
+        self.assertTrue(
+            any(item.get("scope") == "aggregate" for item in findings)
+        )
+
     def test_csv_structure_issues_block_rows_before_other_quality_checks(self):
         for issue in ("extra_cells", "missing_cells"):
             with self.subTest(issue=issue):

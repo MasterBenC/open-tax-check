@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, DecimalException, Inexact, Rounded, localcontext
+from decimal import (
+    Context,
+    Decimal,
+    DecimalException,
+    Inexact,
+    InvalidOperation,
+    Overflow,
+    ROUND_HALF_UP,
+    Rounded,
+    localcontext,
+)
 import re
 
 
@@ -15,6 +25,18 @@ MAX_INTEGER_DIGITS = 18
 MAX_FRACTION_DIGITS = 2
 EXACT_CONTEXT_PRECISION = 50
 AGGREGATE_ABSOLUTE_TOTAL_LIMIT = Decimal("99999999999999999999.99")
+
+_EXACT_CONTEXT = Context(prec=EXACT_CONTEXT_PRECISION, rounding=ROUND_HALF_UP)
+_EXACT_CONTEXT.traps[Inexact] = True
+_EXACT_CONTEXT.traps[Rounded] = True
+_EXACT_CONTEXT.traps[InvalidOperation] = True
+_EXACT_CONTEXT.traps[Overflow] = True
+
+_DISPLAY_CONTEXT = Context(prec=EXACT_CONTEXT_PRECISION, rounding=ROUND_HALF_UP)
+_DISPLAY_CONTEXT.traps[Inexact] = False
+_DISPLAY_CONTEXT.traps[Rounded] = False
+_DISPLAY_CONTEXT.traps[InvalidOperation] = True
+_DISPLAY_CONTEXT.traps[Overflow] = True
 
 
 def parse_decimal(value) -> Decimal:
@@ -42,10 +64,7 @@ def _exact_binary(left: Decimal, right: Decimal, operation) -> Decimal:
     if not left.is_finite() or not right.is_finite():
         raise ValueError("non-finite decimal operand")
     try:
-        with localcontext() as context:
-            context.prec = EXACT_CONTEXT_PRECISION
-            context.traps[Inexact] = True
-            context.traps[Rounded] = True
+        with localcontext(_EXACT_CONTEXT):
             result = operation(left, right)
     except DecimalException as exc:
         raise ValueError("decimal operation exceeds exact context") from exc
@@ -78,7 +97,6 @@ def format_money(value: Decimal) -> str:
     value = Decimal(value)
     if not value.is_finite():
         raise ValueError("non-finite decimal operand")
-    with localcontext() as context:
-        context.prec = EXACT_CONTEXT_PRECISION
+    with localcontext(_DISPLAY_CONTEXT):
         rounded = value.quantize(Decimal("0.01"))
     return f"{rounded:.2f}"
