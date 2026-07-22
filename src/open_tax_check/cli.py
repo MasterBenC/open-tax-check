@@ -3,9 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 from .case import init_case
 from .pipeline import run_case
+
+
+def _configure_utf8_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    _configure_utf8_output()
     args = build_parser().parse_args()
     if args.command == "init":
         print(json.dumps(init_case(args.case, args.entity), ensure_ascii=False))
