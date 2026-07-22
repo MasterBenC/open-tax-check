@@ -1,0 +1,47 @@
+name: 程序缺陷
+description: 报告可复现且不含敏感数据的软件问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告问题。安全漏洞、泄露凭证或客户数据请按 SECURITY.md 私下报告，不要在此提交。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请说明预期行为和实际行为。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小复现步骤
+      description: 仅使用虚构数据，提供可重复执行的步骤。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenTaxCheck 版本
+      placeholder: 例如 0.1.0 或提交 SHA
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Python 版本、操作系统和安装方式。
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 数据安全确认
+      options:
+        - label: 我确认本 Issue、附件、截图和日志不含真实客户数据、个人敏感信息或凭证。
+          required: true
+        - label: 我确认此问题不是需要私下报告的安全漏洞。
+          required: true

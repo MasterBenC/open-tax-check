@@ -222,7 +222,7 @@ git commit -m "build: establish installable OpenTaxCheck package"
 
 - [ ] **Step 1: Copy the verified tests into focused repository tests**
 
-Use the assertions from `C:\Users\benhu\.codex\skills\tax-health-check\scripts\tests\test_engine.py` without weakening them. Split its test classes into the five named test files and change imports from `taxcheck.*` to `open_tax_check.*`.
+Use the assertions from `<legacy-skill-dir>/scripts/tests/test_engine.py` without weakening them. Split its test classes into the five named test files and change imports from `taxcheck.*` to `open_tax_check.*`.
 
 The required import blocks are:
 
@@ -265,7 +265,7 @@ Expected: import failures for the five missing `open_tax_check` modules.
 Run these mechanical copy operations from the repository root:
 
 ```powershell
-$source = "C:\Users\benhu\.codex\skills\tax-health-check\scripts\taxcheck"
+$source = "<legacy-skill-dir>\scripts\taxcheck"
 Copy-Item -LiteralPath "$source\mapping.py" -Destination "src\open_tax_check\mapping.py"
 Copy-Item -LiteralPath "$source\quality.py" -Destination "src\open_tax_check\quality.py"
 Copy-Item -LiteralPath "$source\rules.py" -Destination "src\open_tax_check\rules.py"
@@ -434,7 +434,7 @@ git commit -m "feat: add resumable case initialization"
 
 - [ ] **Step 1: Copy and update the verified pipeline tests**
 
-Copy `C:\Users\benhu\.codex\skills\tax-health-check\scripts\tests\test_pipeline.py` to `tests/test_pipeline.py`. Replace the script-path subprocess helper with:
+Copy `<legacy-skill-dir>/scripts/tests/test_pipeline.py` to `tests/test_pipeline.py`. Replace the script-path subprocess helper with:
 
 ```python
 def run_cli(*args):
@@ -468,7 +468,7 @@ Expected: FAIL because the CLI does not recognize the `run` command.
 Run:
 
 ```powershell
-Copy-Item -LiteralPath "C:\Users\benhu\.codex\skills\tax-health-check\scripts\taxcheck\pipeline.py" -Destination "src\open_tax_check\pipeline.py"
+Copy-Item -LiteralPath "<legacy-skill-dir>\scripts\taxcheck\pipeline.py" -Destination "src\open_tax_check\pipeline.py"
 ```
 
 The copied relative imports already resolve inside `open_tax_check`. Add this parser configuration to `build_parser()` in `src/open_tax_check/cli.py`:
@@ -572,7 +572,7 @@ Expected: FAIL with `FileNotFoundError` for `skills/open-tax-check/SKILL.md`.
 Copy these resources mechanically:
 
 ```powershell
-$source = "C:\Users\benhu\.codex\skills\tax-health-check"
+$source = "<legacy-skill-dir>"
 $target = "skills\open-tax-check"
 New-Item -ItemType Directory -Path "$target\agents","$target\scripts","$target\references" -Force | Out-Null
 Copy-Item -LiteralPath "$source\SKILL.md" -Destination "$target\SKILL.md"
