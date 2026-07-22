@@ -62,15 +62,45 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _input_manifest(candidates: list[Path]) -> list[dict]:
+def _describe_input_entry(path: Path) -> dict:
+    if path.is_symlink():
+        entry_type = "symlink"
+    elif path.is_file():
+        entry_type = "regular_file"
+    elif path.is_dir():
+        entry_type = "directory"
+    else:
+        entry_type = "other"
+    return {"name": path.name, "entry_type": entry_type}
+
+
+def _input_manifest(entries: list[Path]) -> list[dict]:
     return [
         {
             "path": f"input/{path.name}",
             "size_bytes": path.stat().st_size,
             "sha256": _sha256(path),
         }
-        for path in candidates
+        for path in entries
+        if _describe_input_entry(path)["entry_type"] == "regular_file"
     ]
+
+
+def _input_entries_manifest(entries: list[Path]) -> list[dict]:
+    manifest = []
+    for path in entries:
+        description = _describe_input_entry(path)
+        item = {
+            "path": f"input/{path.name}",
+            "entry_type": description["entry_type"],
+            "size_bytes": None,
+            "sha256": None,
+        }
+        if description["entry_type"] == "regular_file":
+            item["size_bytes"] = path.stat().st_size
+            item["sha256"] = _sha256(path)
+        manifest.append(item)
+    return manifest
 
 
 def _next_run_id(case_dir: Path) -> str:
@@ -257,6 +287,7 @@ def _finalize_run(
     started_at: str,
     ai_mode: str,
     input_files: list[dict],
+    input_entries: list[dict],
     status: str,
     next_action: str,
     artifacts: list[str],
@@ -273,6 +304,7 @@ def _finalize_run(
         "started_at": started_at,
         "completed_at": completed_at,
         "input_files": input_files,
+        "input_entries": input_entries,
         "artifacts": [*artifacts, "manifest.json"],
     }
     if error_type is not None:
@@ -342,12 +374,19 @@ def _run_artifacts(run_dir: Path) -> list[str]:
 def _select_journal(
     case_dir: Path, run_work_dir: Path
 ) -> tuple[Path | None, list[Path], str | None]:
-    input_files = sorted(
-        (path for path in (case_dir / "input").iterdir() if path.is_file()),
-        key=lambda path: path.name,
-    )
+    input_entries = sorted((case_dir / "input").iterdir(), key=lambda path: path.name)
+    described = [(path, _describe_input_entry(path)) for path in input_entries]
+    input_files = [
+        path for path, item in described if item["entry_type"] == "regular_file"
+    ]
     candidates = [path for path in input_files if path.suffix.lower() == ".csv"]
-    unsupported = [path for path in input_files if path.suffix.lower() != ".csv"]
+    unsupported = [
+        (path, item)
+        for path, item in described
+        if not (
+            item["entry_type"] == "regular_file" and path.suffix.lower() == ".csv"
+        )
+    ]
     selected = candidates[0] if len(candidates) == 1 and not unsupported else None
     if unsupported:
         next_action = "remove_unsupported_input_files"
@@ -361,12 +400,18 @@ def _select_journal(
         "candidate_count": len(candidates),
         "candidates": [path.name for path in candidates],
         "input_files": [path.name for path in input_files],
-        "unsupported_files": [path.name for path in unsupported],
+        "unsupported_files": [
+            path.name
+            for path, item in unsupported
+            if item["entry_type"] == "regular_file"
+        ],
+        "input_entries": [item for _, item in described],
+        "unsupported_entries": [item for _, item in unsupported],
         "selected_file": selected.name if selected else None,
         "next_action": next_action,
     }
     _write_json(run_work_dir / "input_selection.json", selection)
-    return selected, input_files, next_action
+    return selected, input_entries, next_action
 
 
 def _load_and_normalize(source_file: Path) -> tuple[dict, list[dict]]:
@@ -411,6 +456,17 @@ def _lineage(row: dict, contribution: Decimal) -> dict:
     }
 
 
+def _is_recognized_revenue_account(account_code: object, account_name: object) -> bool:
+    code = str(account_code or "").strip()
+    name = str(account_name or "").strip()
+    return (
+        code.startswith(("6001", "6051"))
+        or "主营业务收入" in name
+        or "其他业务收入" in name
+        or name == "营业收入"
+    )
+
+
 def _hard_rule_findings(rows: list[dict]) -> list[dict]:
     annual: dict[str, dict] = {}
     for row in rows:
@@ -425,7 +481,7 @@ def _hard_rule_findings(rows: list[dict]) -> list[dict]:
             },
         )
         account = str(row.get("account_name") or "")
-        if "主营业务收入" in account or account == "营业收入":
+        if _is_recognized_revenue_account(row.get("account_code"), account):
             contribution = exact_subtract(
                 parse_decimal(row.get("credit")), parse_decimal(row.get("debit"))
             )
@@ -457,7 +513,19 @@ def _hard_rule_findings(rows: list[dict]) -> list[dict]:
                 "review_status": "unreviewed",
                 "severity": "medium" if Decimal(result["tax_adjustment"]) > 0 else "low",
                 "confidence": "deterministic_from_mapped_data",
-                "required_evidence": ["annual_cit_return", "revenue_reconciliation", "expense_ledger"],
+                "required_evidence": [
+                    "annual_cit_return",
+                    "revenue_reconciliation",
+                    "deemed_sales_revenue_reconciliation",
+                    "expense_ledger",
+                ],
+                "basis_scope": "recognized_ledger_revenue_accounts",
+                "basis_completeness": "unconfirmed",
+                "conclusion_boundary": (
+                    "Calculated from recognized ledger revenue accounts only; "
+                    "reconcile to the annual CIT return and deemed-sales revenue "
+                    "before treating the adjustment as final."
+                ),
                 "revenue_basis": _money(revenue),
                 "calculation_inputs": {
                     "actual_expense": {
@@ -514,13 +582,15 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
     run_work_dir = run_dir / "work"
     run_output_dir = run_dir / "output"
     input_files: list[dict] = []
+    input_entries: list[dict] = []
     error_type = None
 
     try:
-        source_file, discovered_files, selection_next_action = _select_journal(
+        source_file, discovered_entries, selection_next_action = _select_journal(
             case_dir, run_work_dir
         )
-        input_files = _input_manifest(discovered_files)
+        input_files = _input_manifest(discovered_entries)
+        input_entries = _input_entries_manifest(discovered_entries)
 
         if source_file is None:
             exit_code = 4
@@ -621,6 +691,7 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
         started_at=started_at,
         ai_mode=ai_mode,
         input_files=input_files,
+        input_entries=input_entries,
         status=status,
         next_action=next_action,
         artifacts=artifacts,

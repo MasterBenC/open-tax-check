@@ -17,6 +17,7 @@ class HardRuleTests(unittest.TestCase):
         self.assertEqual(result["deductible_amount"], "50000.00")
         self.assertEqual(result["tax_adjustment"], "50000.00")
         self.assertEqual(result["rule_id"], "CIT-BE-001")
+        self.assertEqual(result["rule_version"], "2026.2")
 
     def test_shareholder_loan_is_candidate_not_automatic_conclusion(self):
         result = shareholder_loan_candidate(

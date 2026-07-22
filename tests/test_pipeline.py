@@ -423,6 +423,171 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse((case_dir / "output" / "findings.json").exists())
             self.assertFalse((case_dir / "output" / "report.md").exists())
 
+    def test_directory_alongside_csv_blocks_without_following_or_hashing_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-unsupported-directory")
+            csv_file = case_dir / "input" / "journal.csv"
+            evidence_dir = case_dir / "input" / "evidence"
+            self._write_balanced_journal(csv_file)
+            evidence_dir.mkdir()
+            (evidence_dir / "must-not-be-read-or-reported.txt").write_text(
+                "nested-secret-must-not-be-read", encoding="utf-8"
+            )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 4, run_proc.stderr)
+            state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+            selection_text = (case_dir / "work" / "input_selection.json").read_text(
+                encoding="utf-8"
+            )
+            selection = json.loads(selection_text)
+            manifest_text = (
+                case_dir / "runs" / "run-0001" / "manifest.json"
+            ).read_text(encoding="utf-8")
+            manifest = json.loads(manifest_text)
+
+            self.assertEqual(state["status"], "blocked_data_quality")
+            self.assertEqual(state["next_action"], "remove_unsupported_input_files")
+            self.assertEqual(
+                selection["input_entries"],
+                [
+                    {"name": "evidence", "entry_type": "directory"},
+                    {"name": "journal.csv", "entry_type": "regular_file"},
+                ],
+            )
+            self.assertEqual(
+                selection["unsupported_entries"],
+                [{"name": "evidence", "entry_type": "directory"}],
+            )
+            manifest_entries = {
+                item["path"]: item for item in manifest["input_entries"]
+            }
+            self.assertEqual(
+                manifest_entries["input/evidence"],
+                {
+                    "path": "input/evidence",
+                    "entry_type": "directory",
+                    "size_bytes": None,
+                    "sha256": None,
+                },
+            )
+            self.assertEqual(
+                manifest_entries["input/journal.csv"]["sha256"],
+                hashlib.sha256(csv_file.read_bytes()).hexdigest(),
+            )
+            self.assertNotIn("must-not-be-read-or-reported", selection_text)
+            self.assertNotIn("must-not-be-read-or-reported", manifest_text)
+            self.assertNotIn("nested-secret-must-not-be-read", manifest_text)
+            self.assertFalse((case_dir / "work" / "mapping_review.json").exists())
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+            self.assertFalse((case_dir / "output" / "report.md").exists())
+
+    def test_symlink_is_classified_before_any_target_file_or_directory_check(self):
+        class SymlinkEntry:
+            name = "linked.csv"
+
+            def is_symlink(self):
+                return True
+
+            def is_file(self):
+                raise AssertionError("symlink target must not be followed as a file")
+
+            def is_dir(self):
+                raise AssertionError("symlink target must not be followed as a directory")
+
+        self.assertEqual(
+            pipeline._describe_input_entry(SymlinkEntry()),
+            {"name": "linked.csv", "entry_type": "symlink"},
+        )
+
+    def test_blocked_rerun_for_directory_hides_previous_current_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-directory-rerun")
+            self._write_balanced_journal(case_dir / "input" / "journal.csv")
+            first_run = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+            self.assertEqual(first_run.returncode, 0, first_run.stderr)
+            first_findings = case_dir / "runs" / "run-0001" / "output" / "findings.json"
+            first_findings_before = first_findings.read_bytes()
+            (case_dir / "input" / "evidence").mkdir()
+
+            second_run = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(second_run.returncode, 4, second_run.stderr)
+            state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["current_run"], "run-0002")
+            self.assertEqual(state["next_action"], "remove_unsupported_input_files")
+            self.assertFalse((case_dir / "output" / "findings.json").exists())
+            self.assertFalse((case_dir / "output" / "report.md").exists())
+            self.assertEqual(first_findings.read_bytes(), first_findings_before)
+
+    def test_other_business_revenue_is_included_in_entertainment_basis_with_scope_boundary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-other-business-revenue")
+            input_file = case_dir / "input" / "journal.csv"
+            with input_file.open("w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    ["凭证号", "记账日期", "科目编码", "科目名称", "借方发生额", "贷方发生额"]
+                )
+                writer.writerows(
+                    [
+                        ["记-001", "2025-01-02", "1002", "银行存款", "100000", "0"],
+                        ["记-001", "2025-01-02", "6051", "技术服务明细", "0", "100000"],
+                        ["记-002", "2025-03-08", "6602", "管理费用-业务招待费", "100", "0"],
+                        ["记-002", "2025-03-08", "1002", "银行存款", "0", "100"],
+                    ]
+                )
+
+            run_proc = run_cli("run", "--case", str(case_dir), "--ai-mode", "off")
+
+            self.assertEqual(run_proc.returncode, 0, run_proc.stderr)
+            findings = json.loads(
+                (case_dir / "output" / "findings.json").read_text(encoding="utf-8")
+            )
+            finding = next(item for item in findings if item["rule_id"] == "CIT-BE-001")
+            self.assertEqual(finding["rule_version"], "2026.2")
+            self.assertEqual(finding["revenue_basis"], "100000.00")
+            self.assertEqual(finding["tax_adjustment"], "40.00")
+            self.assertEqual(finding["basis_scope"], "recognized_ledger_revenue_accounts")
+            self.assertEqual(finding["basis_completeness"], "unconfirmed")
+            self.assertIn("annual_cit_return", finding["required_evidence"])
+            self.assertIn("deemed_sales_revenue_reconciliation", finding["required_evidence"])
+            self.assertIn("annual CIT return", finding["conclusion_boundary"])
+            self.assertIn("deemed-sales revenue", finding["conclusion_boundary"])
+            lineage = finding["calculation_inputs"]["revenue_basis"]["lineage"]
+            self.assertEqual(len(lineage), 1)
+            self.assertEqual(lineage[0]["source_row"], 3)
+            self.assertEqual(lineage[0]["tax_year"], "2025")
+
+    def test_revenue_account_recognition_has_precise_positive_and_negative_boundaries(self):
+        positives = (
+            ("6001", "产品明细"),
+            ("600101", "产品明细"),
+            ("6051", "服务明细"),
+            ("60510", "服务明细"),
+            ("605199", "服务明细"),
+            ("", "主营业务收入-产品"),
+            ("", "其他业务收入-租赁"),
+            ("", "营业收入"),
+        )
+        negatives = (
+            ("6301", "营业外收入"),
+            ("", "营业外收入"),
+            ("16001", "资产"),
+            ("", "营业收入调整"),
+        )
+        for account_code, account_name in positives:
+            with self.subTest(account_code=account_code, account_name=account_name):
+                self.assertTrue(
+                    pipeline._is_recognized_revenue_account(account_code, account_name)
+                )
+        for account_code, account_name in negatives:
+            with self.subTest(account_code=account_code, account_name=account_name):
+                self.assertFalse(
+                    pipeline._is_recognized_revenue_account(account_code, account_name)
+                )
+
     def test_extra_csv_cells_block_without_echoing_values_or_client_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = self._init_case(temp_dir, "case-extra-cell")

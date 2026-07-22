@@ -20,7 +20,7 @@ def business_entertainment_adjustment(actual_expense: Decimal, revenue: Decimal)
     adjustment = exact_subtract(actual_expense, deductible)
     return {
         "rule_id": "CIT-BE-001",
-        "rule_version": "2026.1",
+        "rule_version": "2026.2",
         "status": "calculated",
         "actual_expense": _money(actual_expense),
         "deductible_amount": _money(deductible),

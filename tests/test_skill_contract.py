@@ -131,6 +131,19 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("ROUND_HALF_UP", schema)
         self.assertIn("filing convention", schema)
 
+    def test_skill_documents_input_entry_and_entertainment_basis_boundaries(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        catalog = (SKILL / "references" / "rule-catalog.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("regular, non-symlink CSV", skill)
+        self.assertIn("directories and symbolic links", skill)
+        self.assertIn("rule version `2026.2`", catalog)
+        self.assertIn("main-business and other-business revenue", catalog)
+        self.assertIn("deemed-sales revenue", catalog)
+        self.assertIn("basis completeness remains unconfirmed", catalog)
+
     def test_openai_metadata_matches_interface_contract(self):
         expected = (
             'interface:\n'
