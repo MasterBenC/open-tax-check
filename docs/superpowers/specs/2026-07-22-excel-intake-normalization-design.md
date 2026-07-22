@@ -1,7 +1,7 @@
 # OpenTaxCheck Phase 2A-2B Excel Intake and Normalization Design
 
 **Date:** 2026-07-22
-**Status:** Draft for user review
+**Status:** Approved by user on 2026-07-22
 **Scope:** Safe Excel intake, evidence coverage, journal and trial-balance normalization, and deterministic reconciliation
 
 ## 1. Purpose
