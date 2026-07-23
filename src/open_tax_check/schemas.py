@@ -103,7 +103,7 @@ def to_dict(value: Any) -> Any:
 
     if is_dataclass(value) and not isinstance(value, type):
         return {field.name: to_dict(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, tuple):
+    if isinstance(value, tuple | list):
         return [to_dict(item) for item in value]
     if isinstance(value, dict):
         return {key: to_dict(item) for key, item in value.items()}

@@ -1,3 +1,4 @@
+import json
 import unittest
 from dataclasses import FrozenInstanceError
 
@@ -66,6 +67,27 @@ class VersionedSchemaTests(unittest.TestCase):
             to_dict(value),
             {"items": [{"role": "journal", "score": 0, "signals": ["empty"]}]},
         )
+
+    def test_to_dict_recursively_serializes_nested_lists(self):
+        value = [
+            RoleScore("journal", 10, ("header",)),
+            {"nested": (RoleScore("trial_balance", 20, ("balance",)),)},
+        ]
+
+        serialized = to_dict(value)
+
+        self.assertEqual(
+            serialized,
+            [
+                {"role": "journal", "score": 10, "signals": ["header"]},
+                {
+                    "nested": [
+                        {"role": "trial_balance", "score": 20, "signals": ["balance"]}
+                    ]
+                },
+            ],
+        )
+        json.dumps(serialized)
 
 
 if __name__ == "__main__":
