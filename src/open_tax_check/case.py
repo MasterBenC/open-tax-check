@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,37 @@ def write_json(path: Path, payload) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _is_reparse_point(path_stat: os.stat_result) -> bool:
+    reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(getattr(path_stat, "st_file_attributes", 0) & reparse_point)
+
+
+def _ensure_safe_case_path(case_dir: Path) -> None:
+    absolute_case_dir = case_dir.absolute()
+    current = Path(absolute_case_dir.anchor)
+    components = absolute_case_dir.parts[1:]
+    for component in components:
+        current /= component
+        try:
+            path_stat = current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ValueError("unsafe_case_path") from error
+        if stat.S_ISLNK(path_stat.st_mode) or _is_reparse_point(path_stat):
+            raise ValueError("unsafe_case_path")
+
+    state_path = absolute_case_dir / "state.json"
+    try:
+        state_stat = state_path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ValueError("unsafe_case_path") from error
+    if stat.S_ISLNK(state_stat.st_mode) or _is_reparse_point(state_stat):
+        raise ValueError("unsafe_case_path")
 
 
 def _review_period(start: str | None, end: str | None) -> dict | None:
@@ -34,6 +66,7 @@ def init_case(
     period_end: str | None = None,
 ) -> dict:
     review_period = _review_period(period_start, period_end)
+    _ensure_safe_case_path(case_dir)
     if case_dir.exists() and any(case_dir.iterdir()):
         raise FileExistsError(f"case directory must be empty: {case_dir}")
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -56,6 +89,7 @@ def init_case(
 
 
 def set_case_scope(case_dir: Path, period_start: str, period_end: str) -> dict:
+    _ensure_safe_case_path(case_dir)
     state_path = case_dir / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["review_period"] = _review_period(period_start, period_end)
