@@ -4,7 +4,11 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageContractTests(unittest.TestCase):
@@ -46,6 +50,86 @@ class PackageContractTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", errors="replace"))
         payload = json.loads(proc.stdout.decode("utf-8"))
         self.assertEqual(payload["entity_name"], "中文测试企业")
+
+    def test_excel_extra_is_bounded(self):
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            data["project"]["optional-dependencies"]["excel"],
+            ["openpyxl>=3.1.5,<4", "xlrd>=2.0.2,<3", "defusedxml>=0.7.1,<1"],
+        )
+
+    def test_init_cli_emits_review_period(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "case"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "open_tax_check.cli",
+                    "init",
+                    "--case",
+                    str(case_dir),
+                    "--entity",
+                    "test entity",
+                    "--period-start",
+                    "2025-01-01",
+                    "--period-end",
+                    "2025-12-31",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            json.loads(proc.stdout)["review_period"],
+            {"start": "2025-01-01", "end": "2025-12-31"},
+        )
+
+    def test_set_scope_cli_emits_review_period(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "case"
+            init_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "open_tax_check.cli",
+                    "init",
+                    "--case",
+                    str(case_dir),
+                    "--entity",
+                    "test entity",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "open_tax_check.cli",
+                    "set-scope",
+                    "--case",
+                    str(case_dir),
+                    "--period-start",
+                    "2025-01-01",
+                    "--period-end",
+                    "2025-12-31",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+        self.assertEqual(init_proc.returncode, 0, init_proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            json.loads(proc.stdout)["review_period"],
+            {"start": "2025-01-01", "end": "2025-12-31"},
+        )
 
 
 if __name__ == "__main__":

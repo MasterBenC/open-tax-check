@@ -16,12 +16,12 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip build
-      - run: python -m pip install -e .
+      - run: python -m pip install -e ".[excel]"
       - run: python -m unittest discover -s tests -v
       - run: python scripts/validate_release.py
       - run: python scripts/run_fictional_example.py --output work/ci-demo

@@ -21,6 +21,13 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+excel = [
+  "openpyxl>=3.1.5,<4",
+  "xlrd>=2.0.2,<3",
+  "defusedxml>=0.7.1,<1",
+]
+
 [project.scripts]
 opentaxcheck = "open_tax_check.cli:main"
 

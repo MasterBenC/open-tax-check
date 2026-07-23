@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-from .case import init_case
+from .case import init_case, set_case_scope
 from .pipeline import run_case
 
 
@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init", help="Create a resumable case directory")
     init_parser.add_argument("--case", required=True, type=Path)
     init_parser.add_argument("--entity", required=True)
+    init_parser.add_argument("--period-start")
+    init_parser.add_argument("--period-end")
+    set_scope_parser = subparsers.add_parser("set-scope", help="Set the case review period")
+    set_scope_parser.add_argument("--case", required=True, type=Path)
+    set_scope_parser.add_argument("--period-start", required=True)
+    set_scope_parser.add_argument("--period-end", required=True)
     run_parser = subparsers.add_parser("run", help="Run deterministic ingestion and screening")
     run_parser.add_argument("--case", required=True, type=Path)
     run_parser.add_argument("--ai-mode", choices=["off", "assist", "deep"], default="assist")
@@ -35,7 +41,15 @@ def main() -> int:
     _configure_utf8_output()
     args = build_parser().parse_args()
     if args.command == "init":
-        print(json.dumps(init_case(args.case, args.entity), ensure_ascii=False))
+        print(
+            json.dumps(
+                init_case(args.case, args.entity, args.period_start, args.period_end),
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "set-scope":
+        print(json.dumps(set_case_scope(args.case, args.period_start, args.period_end), ensure_ascii=False))
         return 0
     if args.command == "run":
         code, result = run_case(args.case, args.ai_mode)
