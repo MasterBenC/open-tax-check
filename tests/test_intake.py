@@ -1,7 +1,9 @@
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from open_tax_check.intake import build_coverage_matrix, inventory_inputs
 
@@ -90,6 +92,54 @@ class IntakeTests(unittest.TestCase):
 
         self.assertEqual(result.sources[0].status, "ignored_office_lock")
         self.assertEqual(result.sources[0].sha256, "")
+
+    @unittest.skipUnless(os.name == "nt", "Windows junctions are only available on Windows")
+    def test_input_directory_junction_is_rejected_without_enumerating_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            case = root / "case"
+            case.mkdir()
+            target = root / "target"
+            target.mkdir()
+            protected = target / "journal.csv"
+            protected.write_text("do not inspect", encoding="utf-8")
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(case / "input"), str(target)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(f"junctions are unavailable: {result.stderr.strip()}")
+            self.addCleanup(
+                subprocess.run,
+                ["cmd", "/c", "rmdir", str(case / "input")],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            intake_result = inventory_inputs(case)
+
+            self.assertEqual(intake_result.sources, ())
+            self.assertIn("unsafe_input_directory", [issue.code for issue in intake_result.issues])
+            self.assertEqual(protected.read_text(encoding="utf-8"), "do not inspect")
+
+    def test_entry_limit_stops_before_requesting_fifty_second_entry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = Path(temp_dir)
+            input_dir = case / "input"
+            input_dir.mkdir()
+
+            def entries():
+                for index in range(51):
+                    yield input_dir / f"{index:02d}.csv"
+                raise AssertionError("enumeration asked for entry 52")
+
+            with patch.object(Path, "iterdir", return_value=entries()):
+                result = inventory_inputs(case)
+
+        self.assertIn("too_many_input_entries", [issue.code for issue in result.issues])
 
 
 if __name__ == "__main__":

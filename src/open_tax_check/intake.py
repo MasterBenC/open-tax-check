@@ -84,11 +84,13 @@ class IntakeResult:
 def _entry_kind(path: Path) -> str:
     """Classify an entry without following directory links or reparse points."""
 
-    try:
-        metadata = os.lstat(path)
-    except OSError:
+    metadata = _lstat(path)
+    if metadata is None:
         return "other"
+    return _metadata_kind(metadata)
 
+
+def _metadata_kind(metadata: os.stat_result) -> str:
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         return "symlink"
@@ -109,6 +111,17 @@ def _lstat(path: Path) -> os.stat_result | None:
         return os.lstat(path)
     except OSError:
         return None
+
+
+def _bounded_entries(input_dir: Path) -> tuple[Path, ...] | None:
+    """Collect no more than the permitted direct entries before sorting them."""
+
+    entries: list[Path] = []
+    for path in input_dir.iterdir():
+        entries.append(path)
+        if len(entries) > MAX_ENTRIES:
+            return None
+    return tuple(sorted(entries, key=lambda item: item.name.casefold()))
 
 
 def sha256_file(path: Path) -> str:
@@ -271,12 +284,17 @@ def inventory_inputs(case_dir: Path, review_period: dict | None = None) -> Intak
     """Safely inventory only the direct children of ``case_dir / 'input'``."""
 
     input_dir = case_dir / "input"
+    input_metadata = _lstat(input_dir)
+    if input_metadata is None:
+        return _result((), (IntakeIssue(None, "missing_input_directory"),), review_period=review_period)
+    if _metadata_kind(input_metadata) != "directory":
+        return _result((), (IntakeIssue("input", "unsafe_input_directory"),), review_period=review_period)
     try:
-        entries = sorted(input_dir.iterdir(), key=lambda item: item.name.casefold())
+        entries = _bounded_entries(input_dir)
     except OSError:
         return _result((), (IntakeIssue(None, "missing_input_directory"),), review_period=review_period)
 
-    if len(entries) > MAX_ENTRIES:
+    if entries is None:
         return _result((), (IntakeIssue(None, "too_many_input_entries"),), review_period=review_period)
 
     sources: list[SourceRecord] = []
