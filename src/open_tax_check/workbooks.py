@@ -19,6 +19,11 @@ MAX_VISITED_CELLS = 5_000_000
 MAX_WORKSHEETS = 200
 MAX_METADATA_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_METADATA_NODES = 5_500_000
+# Metadata allowance plus four start nodes per maximum cell covers the
+# common c/f/v and c/is/r/t shapes while bounding the whole worksheet.
+MAX_WORKSHEET_XML_NODES = 25_500_000
+# Rich cell payloads stay bounded independently of the worksheet total.
+MAX_CELL_SUBTREE_NODES = 1_024
 MAX_MERGED_RANGES = 100_000
 MAX_MERGE_RANGE_LENGTH = 128
 MAX_WORKBOOK_RELATIONSHIPS = 10_000
@@ -641,7 +646,9 @@ def _ooxml_single_sheet_features(
     merged_ranges = []
     visited_cells = 0
     metadata_nodes = 0
+    worksheet_nodes = 0
     cell_depth = 0
+    cell_subtree_nodes = 0
     merge_count = 0
     for event, element in _iter_xml_elements(
         package,
@@ -651,14 +658,32 @@ def _ooxml_single_sheet_features(
     ):
         local_name = _xml_local_name(element.tag)
         if event == "start":
-            if local_name == "c":
+            worksheet_nodes += 1
+            if worksheet_nodes > MAX_WORKSHEET_XML_NODES:
+                raise WorkbookSafetyError(
+                    "ooxml_worksheet_node_limit_exceeded"
+                )
+            if cell_depth:
+                cell_subtree_nodes += 1
+                if local_name == "c":
+                    cell_depth += 1
+                if cell_subtree_nodes > MAX_CELL_SUBTREE_NODES:
+                    raise WorkbookSafetyError(
+                        "ooxml_cell_node_limit_exceeded"
+                    )
+            elif local_name == "c":
                 visited_cells += 1
-                cell_depth += 1
+                cell_depth = 1
+                cell_subtree_nodes = 1
+                if cell_subtree_nodes > MAX_CELL_SUBTREE_NODES:
+                    raise WorkbookSafetyError(
+                        "ooxml_cell_node_limit_exceeded"
+                    )
                 if visited_cells > MAX_VISITED_CELLS:
                     raise WorkbookSafetyError(
                         "visited_cell_limit_exceeded"
                     )
-            elif cell_depth == 0:
+            else:
                 metadata_nodes += 1
                 if metadata_nodes > MAX_METADATA_NODES:
                     raise WorkbookSafetyError(

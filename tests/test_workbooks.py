@@ -60,6 +60,11 @@ class WorkbookReaderTests(unittest.TestCase):
             64 * 1024 * 1024,
         )
         self.assertEqual(workbooks.MAX_METADATA_NODES, 5_500_000)
+        self.assertEqual(
+            workbooks.MAX_WORKSHEET_XML_NODES,
+            25_500_000,
+        )
+        self.assertEqual(workbooks.MAX_CELL_SUBTREE_NODES, 1_024)
         self.assertEqual(workbooks.MAX_MERGED_RANGES, 100_000)
 
     def test_xlsx_reader_exposes_formula_metadata_without_recalculation(self):
@@ -169,6 +174,110 @@ class WorkbookReaderTests(unittest.TestCase):
                     "^ooxml_metadata_node_limit_exceeded$",
                 ):
                     open_workbook(path)
+
+    def test_ooxml_metadata_rejects_excessive_nodes_inside_one_cell(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "cell-nodes.xlsx")
+
+            def add_private_cell_nodes(content: bytes) -> bytes:
+                self.assertIn(b"</c>", content)
+                return content.replace(
+                    b"</c>",
+                    (b"<privateNode/>" * 100) + b"</c>",
+                    1,
+                )
+
+            rewrite_zip_member(
+                path,
+                "xl/worksheets/sheet1.xml",
+                add_private_cell_nodes,
+            )
+
+            with mock.patch.object(
+                workbooks,
+                "MAX_CELL_SUBTREE_NODES",
+                20,
+                create=True,
+            ):
+                with mock.patch(
+                    "open_tax_check.workbooks._open_binary_stream",
+                    side_effect=AssertionError(
+                        "openpyxl streams must not open"
+                    ),
+                ) as stream_opener:
+                    with self.assertRaisesRegex(
+                        WorkbookSafetyError,
+                        "^ooxml_cell_node_limit_exceeded$",
+                    ):
+                        open_workbook(path)
+
+            stream_opener.assert_not_called()
+            path.unlink()
+            self.assertFalse(path.exists())
+
+    def test_nested_cell_element_does_not_reset_cell_node_budget(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "nested-cell.xlsx")
+
+            def add_nested_cell_nodes(content: bytes) -> bytes:
+                self.assertIn(b"</c>", content)
+                nested = (
+                    (b"<privateNode/>" * 10)
+                    + b"<c>"
+                    + (b"<privateNode/>" * 15)
+                    + b"</c>"
+                )
+                return content.replace(b"</c>", nested + b"</c>", 1)
+
+            rewrite_zip_member(
+                path,
+                "xl/worksheets/sheet1.xml",
+                add_nested_cell_nodes,
+            )
+
+            with mock.patch.object(
+                workbooks,
+                "MAX_CELL_SUBTREE_NODES",
+                20,
+                create=True,
+            ):
+                with mock.patch(
+                    "open_tax_check.workbooks._open_binary_stream",
+                    side_effect=AssertionError(
+                        "openpyxl streams must not open"
+                    ),
+                ) as stream_opener:
+                    with self.assertRaisesRegex(
+                        WorkbookSafetyError,
+                        "^ooxml_cell_node_limit_exceeded$",
+                    ):
+                        open_workbook(path)
+
+            stream_opener.assert_not_called()
+
+    def test_ooxml_metadata_rejects_excessive_total_worksheet_nodes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "worksheet-nodes.xlsx")
+
+            with mock.patch.object(
+                workbooks,
+                "MAX_WORKSHEET_XML_NODES",
+                1,
+                create=True,
+            ):
+                with mock.patch(
+                    "open_tax_check.workbooks._open_binary_stream",
+                    side_effect=AssertionError(
+                        "openpyxl streams must not open"
+                    ),
+                ) as stream_opener:
+                    with self.assertRaisesRegex(
+                        WorkbookSafetyError,
+                        "^ooxml_worksheet_node_limit_exceeded$",
+                    ):
+                        open_workbook(path)
+
+            stream_opener.assert_not_called()
 
     def test_ooxml_metadata_rejects_oversized_key_xml_member(self):
         with tempfile.TemporaryDirectory() as temp_dir:
