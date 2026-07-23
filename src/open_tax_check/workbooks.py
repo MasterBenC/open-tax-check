@@ -65,8 +65,20 @@ class WorkbookReader:
     def __enter__(self) -> WorkbookReader:
         return self
 
-    def __exit__(self, *_exc_info: object) -> None:
-        self.close()
+    def __exit__(
+        self,
+        exc_type: object,
+        _exc_value: object,
+        _traceback: object,
+    ) -> bool | None:
+        if exc_type is None:
+            self.close()
+            return None
+        try:
+            self.close()
+        except BaseException:
+            pass
+        return False
 
     def sheets(self) -> tuple[SheetMeta, ...]:
         raise NotImplementedError
@@ -207,7 +219,7 @@ class OpenPyxlReader(WorkbookReader):
             raise WorkbookError("corrupt_workbook") from None
 
     def close(self) -> None:
-        first_error = None
+        close_failed = False
         for resource in (
             self._formula_workbook,
             self._cached_workbook,
@@ -218,11 +230,10 @@ class OpenPyxlReader(WorkbookReader):
                 continue
             try:
                 resource.close()
-            except Exception as error:
-                if first_error is None:
-                    first_error = error
-        if first_error is not None:
-            raise first_error
+            except Exception:
+                close_failed = True
+        if close_failed:
+            raise WorkbookError("workbook_io_error") from None
 
 
 class XlrdReader(WorkbookReader):
@@ -246,25 +257,32 @@ class XlrdReader(WorkbookReader):
         self._closed = False
 
     def sheets(self) -> tuple[SheetMeta, ...]:
-        metadata = []
-        visibility = getattr(self._workbook, "sheet_visibility", ())
-        for index in range(self._workbook.nsheets):
-            sheet = self._workbook.sheet_by_index(index)
-            visibility_code = visibility[index] if index < len(visibility) else 0
-            metadata.append(
-                SheetMeta(
-                    sheet_id=f"sheet-{index + 1:04d}",
-                    index=index + 1,
-                    name=sheet.name,
-                    visibility=self._VISIBILITY.get(
-                        visibility_code,
-                        "unknown",
-                    ),
-                    max_row=sheet.nrows,
-                    max_column=sheet.ncols,
+        try:
+            metadata = []
+            visibility = getattr(self._workbook, "sheet_visibility", ())
+            for index in range(self._workbook.nsheets):
+                sheet = self._workbook.sheet_by_index(index)
+                visibility_code = (
+                    visibility[index] if index < len(visibility) else 0
                 )
-            )
-        return tuple(metadata)
+                metadata.append(
+                    SheetMeta(
+                        sheet_id=f"sheet-{index + 1:04d}",
+                        index=index + 1,
+                        name=sheet.name,
+                        visibility=self._VISIBILITY.get(
+                            visibility_code,
+                            "unknown",
+                        ),
+                        max_row=sheet.nrows,
+                        max_column=sheet.ncols,
+                    )
+                )
+            return tuple(metadata)
+        except WorkbookError:
+            raise
+        except Exception as error:
+            _raise_xlrd_error(error)
 
     def iter_rows(
         self,
@@ -273,12 +291,14 @@ class XlrdReader(WorkbookReader):
         max_row: int,
         max_col: int,
     ) -> Iterator[tuple[CellValue, ...]]:
-        index = _sheet_index(sheet_id, self._workbook.nsheets)
-        row_count = max(0, max_row - min_row + 1)
-        if row_count * max_col > MAX_VISITED_CELLS:
-            raise WorkbookSafetyError("visited_cell_limit_exceeded")
-        sheet = self._workbook.sheet_by_index(index)
+        sheet = None
+        index = None
         try:
+            index = _sheet_index(sheet_id, self._workbook.nsheets)
+            row_count = max(0, max_row - min_row + 1)
+            if row_count * max_col > MAX_VISITED_CELLS:
+                raise WorkbookSafetyError("visited_cell_limit_exceeded")
+            sheet = self._workbook.sheet_by_index(index)
             for row_number in range(min_row, max_row + 1):
                 values = []
                 for column_number in range(1, max_col + 1):
@@ -316,14 +336,22 @@ class XlrdReader(WorkbookReader):
                         )
                     )
                 yield tuple(values)
+        except WorkbookError:
+            raise
+        except Exception as error:
+            _raise_xlrd_error(error)
         finally:
-            with suppress(Exception):
-                self._workbook.unload_sheet(index)
+            if sheet is not None and index is not None:
+                with suppress(Exception):
+                    self._workbook.unload_sheet(index)
 
     def close(self) -> None:
         if not self._closed:
             self._closed = True
-            self._workbook.release_resources()
+            try:
+                self._workbook.release_resources()
+            except Exception:
+                raise WorkbookError("workbook_io_error") from None
 
 
 def _sheet_index(sheet_id: str, sheet_count: int) -> int:

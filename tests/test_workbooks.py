@@ -505,10 +505,12 @@ class WorkbookReaderTests(unittest.TestCase):
 
         self.assertNotIn(sensitive_detail, str(raised.exception))
 
-    def test_close_attempts_both_ooxml_handles_if_first_close_fails(self):
-        close_error = OSError("sensitive close detail")
+    def test_ooxml_close_has_stable_diagnostic_and_attempts_all_resources(
+        self,
+    ):
+        sensitive_detail = "PRIVATE-OOXML-CLOSE-DETAIL"
         formula_workbook = types.SimpleNamespace(
-            close=mock.Mock(side_effect=close_error)
+            close=mock.Mock(side_effect=OSError(sensitive_detail))
         )
         cached_workbook = types.SimpleNamespace(close=mock.Mock())
         formula_stream = types.SimpleNamespace(
@@ -522,8 +524,36 @@ class WorkbookReaderTests(unittest.TestCase):
             cached_stream,
         )
 
-        with self.assertRaises(OSError):
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^workbook_io_error$",
+        ) as raised:
             reader.close()
+
+        formula_workbook.close.assert_called_once_with()
+        cached_workbook.close.assert_called_once_with()
+        formula_stream.close.assert_called_once_with()
+        cached_stream.close.assert_called_once_with()
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+
+    def test_ooxml_context_body_error_has_priority_over_close_error(self):
+        sensitive_detail = "PRIVATE-OOXML-CLOSE-DETAIL"
+        formula_workbook = types.SimpleNamespace(
+            close=mock.Mock(side_effect=OSError(sensitive_detail))
+        )
+        cached_workbook = types.SimpleNamespace(close=mock.Mock())
+        formula_stream = types.SimpleNamespace(close=mock.Mock())
+        cached_stream = types.SimpleNamespace(close=mock.Mock())
+        reader = OpenPyxlReader(
+            formula_workbook,
+            cached_workbook,
+            formula_stream,
+            cached_stream,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "^BODY-ERROR$"):
+            with reader:
+                raise RuntimeError("BODY-ERROR")
 
         formula_workbook.close.assert_called_once_with()
         cached_workbook.close.assert_called_once_with()
@@ -836,6 +866,123 @@ class WorkbookReaderTests(unittest.TestCase):
                 "^worksheet_limit_exceeded$",
             ):
                 open_workbook(Path("many.xls"))
+
+        workbook.release_resources.assert_called_once_with()
+
+    def test_xls_sheets_lazy_parse_error_has_stable_safe_diagnostic(self):
+        sensitive_detail = "PRIVATE-LAZY-XLS-DETAIL"
+        xlrd_error = type("XLRDError", (Exception,), {})
+        workbook = types.SimpleNamespace(
+            nsheets=1,
+            sheet_visibility=(0,),
+            sheet_by_index=mock.Mock(
+                side_effect=xlrd_error(sensitive_detail)
+            ),
+            release_resources=mock.Mock(),
+        )
+        reader = workbooks.XlrdReader(workbook)
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^corrupt_workbook$",
+        ) as raised:
+            reader.sheets()
+
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+
+    def test_xls_generator_lazy_io_error_has_stable_safe_diagnostic(self):
+        sensitive_detail = "PRIVATE-LAZY-XLS-DETAIL"
+        sheet = types.SimpleNamespace(
+            nrows=1,
+            ncols=1,
+            cell=mock.Mock(side_effect=OSError(sensitive_detail)),
+        )
+        workbook = types.SimpleNamespace(
+            nsheets=1,
+            sheet_by_index=mock.Mock(return_value=sheet),
+            unload_sheet=mock.Mock(),
+            release_resources=mock.Mock(),
+        )
+        reader = workbooks.XlrdReader(workbook)
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^workbook_io_error$",
+        ) as raised:
+            tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
+
+        workbook.unload_sheet.assert_called_once_with(0)
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+
+    def test_xls_generator_lazy_parse_error_has_stable_safe_diagnostic(self):
+        sensitive_detail = "PRIVATE-LAZY-XLS-DETAIL"
+        xlrd_error = type("XLRDError", (Exception,), {})
+        workbook = types.SimpleNamespace(
+            nsheets=1,
+            sheet_by_index=mock.Mock(
+                side_effect=xlrd_error(sensitive_detail)
+            ),
+            unload_sheet=mock.Mock(),
+            release_resources=mock.Mock(),
+        )
+        reader = workbooks.XlrdReader(workbook)
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^corrupt_workbook$",
+        ) as raised:
+            tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
+
+        workbook.unload_sheet.assert_not_called()
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+
+    def test_xls_generator_preserves_workbook_safety_error(self):
+        workbook = types.SimpleNamespace(
+            nsheets=1,
+            sheet_by_index=mock.Mock(),
+            unload_sheet=mock.Mock(),
+            release_resources=mock.Mock(),
+        )
+        reader = workbooks.XlrdReader(workbook)
+
+        with mock.patch.object(workbooks, "MAX_VISITED_CELLS", 0):
+            with self.assertRaisesRegex(
+                WorkbookSafetyError,
+                "^visited_cell_limit_exceeded$",
+            ):
+                tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
+
+        workbook.sheet_by_index.assert_not_called()
+
+    def test_xls_close_has_stable_diagnostic(self):
+        sensitive_detail = "PRIVATE-XLS-CLOSE-DETAIL"
+        workbook = types.SimpleNamespace(
+            release_resources=mock.Mock(
+                side_effect=OSError(sensitive_detail)
+            )
+        )
+        reader = workbooks.XlrdReader(workbook)
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^workbook_io_error$",
+        ) as raised:
+            reader.close()
+
+        workbook.release_resources.assert_called_once_with()
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+
+    def test_xls_context_body_error_has_priority_over_close_error(self):
+        workbook = types.SimpleNamespace(
+            release_resources=mock.Mock(
+                side_effect=OSError("PRIVATE-XLS-CLOSE-DETAIL")
+            )
+        )
+        reader = workbooks.XlrdReader(workbook)
+
+        with self.assertRaisesRegex(RuntimeError, "^BODY-ERROR$"):
+            with reader:
+                raise RuntimeError("BODY-ERROR")
 
         workbook.release_resources.assert_called_once_with()
 
