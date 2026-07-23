@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -75,6 +76,30 @@ FORBIDDEN_BINARY_SUFFIXES = {
     ".xz",
     ".zip",
 }
+ALLOWED_BINARY_FIXTURES = {
+    "tests/fixtures/fictional-journal.xls": (
+        "5a9bfece99db9cbae5442add9e206973a20d3226534664d747a205433f546195",
+        5632,
+    ),
+}
+
+
+def allowed_binary_fixture(relative_path: Path, path: Path) -> bool:
+    expected = ALLOWED_BINARY_FIXTURES.get(relative_path.as_posix())
+    if expected is None:
+        return False
+    expected_hash, expected_size = expected
+    try:
+        if path.stat().st_size != expected_size:
+            return False
+        with path.open("rb") as source:
+            content = source.read(expected_size + 1)
+    except OSError:
+        return False
+    return (
+        len(content) == expected_size
+        and hashlib.sha256(content).hexdigest() == expected_hash
+    )
 
 
 def public_paths(root: Path) -> tuple[Path, ...] | None:
@@ -160,6 +185,8 @@ def main() -> int:
         if not path.is_file():
             continue
         if path.suffix.lower() in FORBIDDEN_BINARY_SUFFIXES:
+            if allowed_binary_fixture(relative_path, path):
+                continue
             print(
                 "forbidden public binary content in "
                 f"{relative_path}: binary_public_content"

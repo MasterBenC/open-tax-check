@@ -60,6 +60,76 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("release validation passed", proc.stdout.lower())
 
+    def test_only_exact_fictional_xls_fixture_is_allowed(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(fixture.read_bytes())
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 0, message)
+        self.assertIn("release validation passed", message.lower())
+
+    def test_tampered_fictional_xls_fixture_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tampered = bytearray(fixture.read_bytes())
+            tampered[-1] ^= 1
+            target.write_bytes(tampered)
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_wrong_sized_fictional_xls_fixture_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(fixture.read_bytes() + b"x")
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_exact_fictional_xls_bytes_at_other_path_are_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/copy.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(fixture.read_bytes())
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
     def test_missing_required_files_are_listed(self):
         missing = {"SECURITY.md", "skills/open-tax-check/agents/openai.yaml"}
         with tempfile.TemporaryDirectory() as directory:
