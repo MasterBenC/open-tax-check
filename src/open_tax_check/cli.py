@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from .case import init_case, set_case_scope
-from .pipeline import run_case
+from .pipeline import inspect_case, run_case
 
 
 def _configure_utf8_output() -> None:
@@ -31,6 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     set_scope_parser.add_argument("--case", required=True, type=Path)
     set_scope_parser.add_argument("--period-start", required=True)
     set_scope_parser.add_argument("--period-end", required=True)
+    inspect_parser = subparsers.add_parser(
+        "inspect",
+        help="Inventory workbook sheets and evidence coverage",
+    )
+    inspect_parser.add_argument("--case", required=True, type=Path)
     run_parser = subparsers.add_parser("run", help="Run deterministic ingestion and screening")
     run_parser.add_argument("--case", required=True, type=Path)
     run_parser.add_argument("--ai-mode", choices=["off", "assist", "deep"], default="assist")
@@ -51,6 +56,10 @@ def main() -> int:
     if args.command == "set-scope":
         print(json.dumps(set_case_scope(args.case, args.period_start, args.period_end), ensure_ascii=False))
         return 0
+    if args.command == "inspect":
+        code, result = inspect_case(args.case)
+        print(json.dumps(result, ensure_ascii=False))
+        return code
     if args.command == "run":
         code, result = run_case(args.case, args.ai_mode)
         print(json.dumps(result, ensure_ascii=False))

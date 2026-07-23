@@ -8,21 +8,44 @@ import json
 import os
 import shutil
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from .intake import (
+    IntakeResult,
+    build_coverage_matrix,
+    detect_filename_roles,
+    inventory_inputs,
+)
 from .mapping import map_headers
 from .numeric import exact_add, exact_subtract, format_money, parse_decimal
 from .quality import validate_journal_quality
 from .rules import business_entertainment_adjustment
+from .schemas import SCHEMA_VERSION, SourceRecord, to_dict
 from .semantic import detect_semantic_candidates
+from .sheet_detection import confidence_band, detect_sheet
+from .workbooks import WorkbookError, open_workbook
 
 
 _CURRENT_VIEW_DIRS = ("work", "output")
 _STAGING_PREFIX = ".opentaxcheck-current-stage-"
 _BACKUP_PREFIX = ".opentaxcheck-current-backup-"
 _STATE_BACKUP_PREFIX = ".opentaxcheck-state-backup-"
+_EXCEL_EXTENSIONS = frozenset({".xlsx", ".xlsm", ".xls"})
+_INSPECTION_ROLES = ("journal", "trial_balance")
+STATUS_PRIORITY = (
+    "needs_intake_review",
+    "needs_sheet_selection",
+    "partial_scope_ready",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkbookInspection:
+    workbooks: tuple[dict, ...]
+    issues: tuple[dict, ...]
 
 
 def _utc_now() -> str:
@@ -293,6 +316,7 @@ def _finalize_run(
     artifacts: list[str],
     completed_steps: list[str],
     error_type: str | None = None,
+    publish_current_view: bool = True,
 ) -> dict:
     completed_at = _utc_now()
     manifest_path = run_dir / "manifest.json"
@@ -314,6 +338,21 @@ def _finalize_run(
     state_path = case_dir / "state.json"
     original_state = state_path.read_bytes()
     state = json.loads(original_state.decode("utf-8"))
+    if not publish_current_view:
+        result = dict(state)
+        result.update(
+            {
+                "status": status,
+                "next_action": next_action,
+                "artifacts": artifacts,
+                "failed_run": run_id,
+                "failed_run_manifest": f"runs/{run_id}/manifest.json",
+            }
+        )
+        if error_type is not None:
+            result["error_type"] = error_type
+        return result
+
     history = list(state.get("run_history", []))
     history.append(
         {
@@ -575,6 +614,340 @@ def _render_markdown(entity_name: str, row_count: int, findings: list[dict], ai_
             ]
         )
     return "\n".join(lines)
+
+
+def load_case_state(case_dir: Path) -> dict:
+    return json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+
+
+def _used_range(max_row: int, max_column: int) -> str | None:
+    if max_row <= 0 or max_column <= 0:
+        return None
+    column = ""
+    value = max_column
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        column = chr(ord("A") + remainder) + column
+    return f"A1:{column}{max_row}"
+
+
+def inspect_workbooks(
+    case_dir: Path,
+    sources: tuple[SourceRecord, ...],
+) -> _WorkbookInspection:
+    workbooks = []
+    issues = []
+    for source in sources:
+        if source.status != "accepted" or source.extension not in _EXCEL_EXTENSIONS:
+            continue
+        path = case_dir / "input" / source.filename
+        try:
+            with open_workbook(path) as reader:
+                sheets = []
+                for sheet in reader.sheets():
+                    detection = detect_sheet(reader, sheet)
+                    sheets.append(
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "source_id": source.source_id,
+                            "sheet_id": sheet.sheet_id,
+                            "index": sheet.index,
+                            "name": sheet.name,
+                            "visibility": sheet.visibility,
+                            "used_range": _used_range(
+                                sheet.max_row,
+                                sheet.max_column,
+                            ),
+                            "visited_cell_estimate": (
+                                max(sheet.max_row, 0)
+                                * min(max(sheet.max_column, 0), 256)
+                            ),
+                            "header_rows": list(detection.header_rows),
+                            "candidate_header_rows": [
+                                list(rows)
+                                for rows in detection.candidate_header_rows
+                            ],
+                            "role_scores": to_dict(detection.role_scores),
+                            "has_formulas": False,
+                            "has_merged_ranges": False,
+                            "has_hidden_data": (
+                                sheet.visibility != "visible"
+                            ),
+                        }
+                    )
+        except WorkbookError as error:
+            issues.append(
+                {
+                    "source_id": source.source_id,
+                    "filename": source.filename,
+                    "code": str(error),
+                }
+            )
+            continue
+        workbooks.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "source_id": source.source_id,
+                "filename": source.filename,
+                "sheets": sheets,
+            }
+        )
+    return _WorkbookInspection(tuple(workbooks), tuple(issues))
+
+
+def _score_for(sheet: dict, role: str) -> int:
+    for item in sheet["role_scores"]:
+        if item["role"] == role:
+            return item["score"]
+    return 0
+
+
+def build_sheet_selection(inventory: _WorkbookInspection) -> dict:
+    candidates_by_role: dict[str, list[dict]] = {
+        role: [] for role in _INSPECTION_ROLES
+    }
+    for workbook in inventory.workbooks:
+        for sheet in workbook["sheets"]:
+            for role in _INSPECTION_ROLES:
+                score = _score_for(sheet, role)
+                if score < 60:
+                    continue
+                candidates_by_role[role].append(
+                    {
+                        "source_id": workbook["source_id"],
+                        "filename": workbook["filename"],
+                        "sheet_id": sheet["sheet_id"],
+                        "sheet_name": sheet["name"],
+                        "visibility": sheet["visibility"],
+                        "header_rows": sheet["header_rows"],
+                        "score": score,
+                        "confidence": confidence_band(score),
+                    }
+                )
+
+    selection = {"schema_version": SCHEMA_VERSION}
+    for role, candidates in candidates_by_role.items():
+        candidates.sort(
+            key=lambda item: (
+                item["filename"].casefold(),
+                item["source_id"],
+                item["sheet_id"],
+            )
+        )
+        automatic = (
+            len(candidates) == 1
+            and candidates[0]["visibility"] == "visible"
+            and candidates[0]["score"] >= 85
+        )
+        selection[role] = [
+            {
+                **candidate,
+                "decision_source": "automatic" if automatic else "manual",
+            }
+            for candidate in candidates
+        ]
+    return selection
+
+
+def inspection_state(
+    intake: IntakeResult,
+    inventory: _WorkbookInspection,
+    selection: dict,
+) -> tuple[str, str]:
+    outcomes = {}
+    if intake.issues:
+        outcomes["needs_intake_review"] = "resolve_intake_issues"
+    elif inventory.issues:
+        outcomes["needs_intake_review"] = "resolve_workbook_issues"
+    for role in _INSPECTION_ROLES:
+        candidates = selection[role]
+        if candidates and not (
+            len(candidates) == 1
+            and candidates[0]["decision_source"] == "automatic"
+        ):
+            outcomes.setdefault(
+                "needs_sheet_selection",
+                f"select_{role}_sheet",
+            )
+    outcomes["partial_scope_ready"] = "run_available_checks"
+    for status in STATUS_PRIORITY:
+        if status in outcomes:
+            return status, outcomes[status]
+    raise RuntimeError("invalid_inspection_state")
+
+
+def _coverage_from_inspection(
+    intake: IntakeResult,
+    inventory: _WorkbookInspection,
+) -> tuple:
+    detected = {
+        role: set(source_ids)
+        for role, source_ids in detect_filename_roles(intake.sources).items()
+    }
+    for workbook in inventory.workbooks:
+        for sheet in workbook["sheets"]:
+            for item in sheet["role_scores"]:
+                if item["score"] >= 60:
+                    detected.setdefault(item["role"], set()).add(
+                        workbook["source_id"]
+                    )
+    return build_coverage_matrix(detected)
+
+
+def write_inspection_artifacts(
+    *,
+    run_work_dir: Path,
+    intake: IntakeResult,
+    inventory: _WorkbookInspection,
+    selection: dict,
+) -> list[str]:
+    _write_json(
+        run_work_dir / "input_manifest.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "sources": to_dict(intake.sources),
+            "issues": to_dict(intake.issues),
+        },
+    )
+    _write_json(
+        run_work_dir / "workbook_inventory.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "workbooks": list(inventory.workbooks),
+            "issues": list(inventory.issues),
+        },
+    )
+    _write_json(run_work_dir / "sheet_selection.json", selection)
+    _write_json(
+        run_work_dir / "coverage_matrix.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "items": to_dict(_coverage_from_inspection(intake, inventory)),
+        },
+    )
+    return _run_artifacts(run_work_dir.parent)
+
+
+def finalize_inspection(
+    *,
+    case_dir: Path,
+    run_id: str,
+    run_dir: Path,
+    started_at: str,
+    status: str,
+    next_action: str,
+    artifacts: list[str],
+    input_files: list[dict],
+    input_entries: list[dict],
+    error_type: str | None = None,
+) -> tuple[int, dict]:
+    state = _finalize_run(
+        case_dir=case_dir,
+        run_id=run_id,
+        run_dir=run_dir,
+        started_at=started_at,
+        ai_mode="off",
+        input_files=input_files,
+        input_entries=input_entries,
+        status=status,
+        next_action=next_action,
+        artifacts=artifacts,
+        completed_steps=(
+            ["init"]
+            if not artifacts
+            else [
+                "init",
+                "intake",
+                "workbook_inventory",
+                "sheet_selection",
+                "coverage_matrix",
+            ]
+        ),
+        error_type=error_type,
+        publish_current_view=error_type is None,
+    )
+    return (0 if status == "partial_scope_ready" else 4), state
+
+
+def inspect_case(case_dir: Path) -> tuple[int, dict]:
+    run_id, run_dir, started_at = _start_run(case_dir)
+    state = load_case_state(case_dir)
+    if not state.get("review_period"):
+        return finalize_inspection(
+            case_dir=case_dir,
+            run_id=run_id,
+            run_dir=run_dir,
+            started_at=started_at,
+            status="needs_intake_review",
+            next_action="set_case_period",
+            artifacts=[],
+            input_files=[],
+            input_entries=[],
+        )
+
+    intake: IntakeResult | None = None
+    try:
+        intake = inventory_inputs(
+            case_dir,
+            review_period=state["review_period"],
+        )
+        inventory = inspect_workbooks(case_dir, intake.sources)
+        selection = build_sheet_selection(inventory)
+        status, next_action = inspection_state(
+            intake,
+            inventory,
+            selection,
+        )
+        artifacts = write_inspection_artifacts(
+            run_work_dir=run_dir / "work",
+            intake=intake,
+            inventory=inventory,
+            selection=selection,
+        )
+        return finalize_inspection(
+            case_dir=case_dir,
+            run_id=run_id,
+            run_dir=run_dir,
+            started_at=started_at,
+            status=status,
+            next_action=next_action,
+            artifacts=artifacts,
+            input_files=[
+                to_dict(source)
+                for source in intake.sources
+                if source.status == "accepted"
+            ],
+            input_entries=to_dict(intake.sources),
+        )
+    except Exception:
+        _write_json(
+            run_dir / "work" / "processing_error.json",
+            {"error_type": "inspect_processing_error"},
+        )
+        return finalize_inspection(
+            case_dir=case_dir,
+            run_id=run_id,
+            run_dir=run_dir,
+            started_at=started_at,
+            status="needs_intake_review",
+            next_action="retry_inspect",
+            artifacts=_run_artifacts(run_dir),
+            input_files=(
+                [
+                    to_dict(source)
+                    for source in intake.sources
+                    if source.status == "accepted"
+                ]
+                if intake is not None
+                else []
+            ),
+            input_entries=(
+                to_dict(intake.sources)
+                if intake is not None
+                else []
+            ),
+            error_type="inspect_processing_error",
+        )
 
 
 def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
