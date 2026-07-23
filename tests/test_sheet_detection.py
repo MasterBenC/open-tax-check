@@ -43,6 +43,10 @@ class HeaderNormalizationTests(unittest.TestCase):
             "abc本期借方金额",
         )
 
+    def test_normalize_header_preserves_falsy_non_none_values(self):
+        self.assertEqual(normalize_header(0), "0")
+        self.assertEqual(normalize_header(False), "false")
+
     def test_confidence_band_uses_documented_boundaries(self):
         self.assertEqual(confidence_band(59), "none")
         self.assertEqual(confidence_band(60), "review")
@@ -77,7 +81,7 @@ class HeaderCandidateTests(unittest.TestCase):
 
         result = detect_rows(rows, visibility="visible")
 
-        self.assertGreaterEqual(result.score_for("trial_balance"), 85)
+        self.assertEqual(result.score_for("trial_balance"), 90)
         self.assertEqual(result.header_rows, (1, 2))
         self.assertIn("本期发生额|借方", result.combined_headers)
 
@@ -136,6 +140,23 @@ class HeaderCandidateTests(unittest.TestCase):
             "conflicting_header_signal",
             role_score(result, "journal").signals,
         )
+        self.assertFalse(result.auto_selectable)
+        self.assertFalse(result.auto_selectable_for_normalization("journal"))
+
+    def test_journal_required_targets_sharing_source_columns_conflict(self):
+        rows = [
+            ["凭证号", "科目名称"],
+            ["日期", "借方"],
+            [None, "贷方"],
+        ]
+
+        result = detect_rows(rows)
+
+        self.assertLess(result.score_for("journal"), 85)
+        self.assertIn(
+            "conflicting_header_signal",
+            role_score(result, "journal").signals,
+        )
         self.assertFalse(result.auto_selectable_for_normalization("journal"))
 
     def test_duplicate_trial_balance_target_caps_score(self):
@@ -156,6 +177,27 @@ class HeaderCandidateTests(unittest.TestCase):
         self.assertIn(
             "conflicting_header_signal",
             role_score(result, "trial_balance").signals,
+        )
+
+    def test_trial_balance_required_targets_sharing_source_columns_conflict(
+        self,
+    ):
+        rows = [
+            ["科目名称", "期初余额", "本期发生额", "期末余额"],
+            [None, "借方", "借方", "借方"],
+            [None, "贷方", "贷方", "贷方"],
+        ]
+
+        result = detect_rows(rows)
+
+        self.assertLess(result.score_for("trial_balance"), 85)
+        self.assertIn(
+            "conflicting_header_signal",
+            role_score(result, "trial_balance").signals,
+        )
+        self.assertFalse(result.auto_selectable)
+        self.assertFalse(
+            result.auto_selectable_for_normalization("trial_balance")
         )
 
     def test_hidden_high_confidence_sheet_is_never_auto_selectable(self):
@@ -181,6 +223,40 @@ class HeaderCandidateTests(unittest.TestCase):
         self.assertIn("本期发生额|借方", result.combined_headers)
         self.assertIn("本期发生额|贷方", result.combined_headers)
         self.assertEqual(rows, original_rows)
+
+    def test_fallback_header_inheritance_stops_at_ordinary_child_label(self):
+        rows = [
+            [
+                "科目名称",
+                "期初余额",
+                None,
+                None,
+                "本期发生额",
+                None,
+                None,
+                "期末余额",
+                None,
+            ],
+            [
+                None,
+                "借方",
+                "说明",
+                "贷方",
+                "借方",
+                "说明",
+                "贷方",
+                "借方",
+                "贷方",
+            ],
+        ]
+
+        result = detect_rows(rows)
+
+        self.assertLess(result.score_for("trial_balance"), 85)
+        self.assertFalse(result.auto_selectable)
+        self.assertFalse(
+            result.auto_selectable_for_normalization("trial_balance")
+        )
 
     def test_vertical_merge_does_not_repeat_the_same_header_component(self):
         rows = [
@@ -212,6 +288,15 @@ class HeaderCandidateTests(unittest.TestCase):
 
     def test_scan_stops_after_first_one_hundred_nonempty_rows(self):
         rows = [["noise"] for _ in range(100)]
+        rows.append(JOURNAL_HEADERS[0])
+
+        result = detect_rows(rows)
+
+        self.assertEqual(result.score_for("journal"), 0)
+        self.assertNotIn((101,), result.candidate_header_rows)
+
+    def test_zero_rows_count_toward_one_hundred_nonempty_row_limit(self):
+        rows = [[0] for _ in range(100)]
         rows.append(JOURNAL_HEADERS[0])
 
         result = detect_rows(rows)

@@ -37,7 +37,8 @@ _A1_RANGE = re.compile(
 def normalize_header(value: object) -> str:
     """Return the stable comparison form used by header detection."""
 
-    text = unicodedata.normalize("NFKC", str(value or "")).strip().casefold()
+    source = "" if value is None else str(value)
+    text = unicodedata.normalize("NFKC", source).strip().casefold()
     return _HEADER_PUNCTUATION.sub("", text)
 
 
@@ -139,6 +140,26 @@ _DEBIT_MARKERS = ("借方", "debit")
 _CREDIT_MARKERS = ("贷方", "credit")
 _DIRECTION_MARKERS = ("方向", "direction", "drcr", "借贷")
 _AMOUNT_MARKERS = ("金额", "余额", "amount", "balance")
+_TB_FALLBACK_CHILD_HEADERS = frozenset(
+    normalize_header(item)
+    for item in (
+        "借方",
+        "贷方",
+        "金额",
+        "方向",
+        "借贷方向",
+        "余额方向",
+        "借方金额",
+        "贷方金额",
+        "debit",
+        "credit",
+        "amount",
+        "direction",
+        "drcr",
+        "debit amount",
+        "credit amount",
+    )
+)
 
 
 _INVENTORY_RULES = {
@@ -393,6 +414,7 @@ def _combine_headers(
         if selected_numbers.intersection(range(min_row, max_row + 1)):
             width = max(width, min(max_col, MAX_HEADER_COLUMNS))
     headers = []
+    fallback_parents: list[object | None] = [None] * len(selected)
     for column in range(1, min(width, MAX_HEADER_COLUMNS) + 1):
         components = []
         normalized_components = set()
@@ -403,23 +425,32 @@ def _combine_headers(
                 source_rows,
                 merged_ranges,
             )
-            if (
-                not normalize_header(value)
-                and row_index < len(selected) - 1
-                and _has_lower_header(
+            normalized = normalize_header(value)
+            if normalized:
+                fallback_parents[row_index] = (
+                    value
+                    if row_index < len(selected) - 1
+                    and _balance_scope(normalized) is not None
+                    else None
+                )
+            elif row_index < len(selected) - 1:
+                lower_headers = _lower_header_components(
                     selected,
                     row_index,
                     column,
                     source_rows,
                     merged_ranges,
                 )
-            ):
-                value = _nearest_left_header(
-                    row.number,
-                    column,
-                    source_rows,
-                    merged_ranges,
-                )
+                if (
+                    lower_headers
+                    and all(
+                        item in _TB_FALLBACK_CHILD_HEADERS
+                        for item in lower_headers
+                    )
+                ):
+                    value = fallback_parents[row_index]
+                else:
+                    fallback_parents[row_index] = None
             normalized = normalize_header(value)
             if not normalized or normalized in normalized_components:
                 continue
@@ -430,42 +461,27 @@ def _combine_headers(
     return tuple(headers)
 
 
-def _has_lower_header(
+def _lower_header_components(
     selected: Sequence[_ObservedRow],
     row_index: int,
     column: int,
     source_rows: dict[int, tuple[object, ...]],
     merged_ranges: Sequence[tuple[int, int, int, int]],
-) -> bool:
-    return any(
-        normalize_header(
-            _header_cell_value(
-                lower.number,
-                column,
-                source_rows,
-                merged_ranges,
+) -> tuple[str, ...]:
+    return tuple(
+        normalized
+        for lower in selected[row_index + 1 :]
+        if (
+            normalized := normalize_header(
+                _header_cell_value(
+                    lower.number,
+                    column,
+                    source_rows,
+                    merged_ranges,
+                )
             )
         )
-        for lower in selected[row_index + 1 :]
     )
-
-
-def _nearest_left_header(
-    row: int,
-    column: int,
-    source_rows: dict[int, tuple[object, ...]],
-    merged_ranges: Sequence[tuple[int, int, int, int]],
-) -> object:
-    for previous_column in range(column - 1, 0, -1):
-        value = _header_cell_value(
-            row,
-            previous_column,
-            source_rows,
-            merged_ranges,
-        )
-        if normalize_header(value):
-            return value
-    return None
 
 
 def _header_cell_value(
@@ -551,7 +567,10 @@ def _score_journal(headers: Sequence[str]) -> RoleScore:
     optional = ("account_code", "summary", "counterparty")
     required_present = sum(bool(hits[field]) for field in required)
     optional_unique = sum(len(hits[field]) == 1 for field in optional)
-    conflicts = any(len(indexes) > 1 for indexes in hits.values())
+    conflicts = (
+        any(len(indexes) > 1 for indexes in hits.values())
+        or _has_source_target_conflict(hits, required)
+    )
     complete = all(len(hits[field]) == 1 for field in required)
     score = min(100, required_present * 18 + optional_unique * 2)
     signals = [
@@ -621,7 +640,12 @@ def _score_trial_balance(headers: Sequence[str]) -> RoleScore:
     duplicate_conflict = any(
         len(indexes) > 1 for indexes in target_hits.values()
     )
-    conflicts = alternative_conflict or duplicate_conflict
+    source_target_conflict = _has_source_target_conflict(target_hits)
+    conflicts = (
+        alternative_conflict
+        or duplicate_conflict
+        or source_target_conflict
+    )
 
     score = 10 if target_hits["account_name"] else 0
     score += 15 if target_hits["period_debit"] else 0
@@ -656,6 +680,17 @@ def _score_trial_balance(headers: Sequence[str]) -> RoleScore:
         score = min(score, 84)
         signals.append("conflicting_header_signal")
     return RoleScore("trial_balance", score, tuple(signals))
+
+
+def _has_source_target_conflict(
+    hits: dict[str, list[int]],
+    targets: Sequence[str] | None = None,
+) -> bool:
+    source_targets: dict[int, set[str]] = {}
+    for target in targets or hits:
+        for source_index in hits[target]:
+            source_targets.setdefault(source_index, set()).add(target)
+    return any(len(mapped_targets) > 1 for mapped_targets in source_targets.values())
 
 
 def _balance_scope(normalized: str) -> str | None:
