@@ -33,16 +33,22 @@ class VersionedSchemaTests(unittest.TestCase):
             visibility="visible",
             used_range="A1:G10",
             visited_cell_estimate=70,
+            header_rows=(1, 2),
             candidate_header_rows=((1,), (1, 2)),
             role_scores=(RoleScore("journal", 95, ("required_headers",)),),
-            has_formulas=False,
-            has_merged_ranges=False,
-            has_hidden_data=False,
+            has_formulas=None,
+            has_merged_ranges=True,
+            has_hidden_data=None,
+            merged_ranges=("A1:B1",),
         )
 
         serialized = to_dict(record)
+        self.assertEqual(serialized["header_rows"], [1, 2])
         self.assertEqual(serialized["candidate_header_rows"], [[1], [1, 2]])
         self.assertEqual(serialized["role_scores"][0]["signals"], ["required_headers"])
+        self.assertIsNone(serialized["has_formulas"])
+        self.assertIsNone(serialized["has_hidden_data"])
+        self.assertEqual(serialized["merged_ranges"], ["A1:B1"])
         self.assertNotIn("cell_values", serialized)
 
     def test_coverage_item_serializes_tuple_source_ids_as_a_list(self):

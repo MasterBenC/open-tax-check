@@ -17,6 +17,12 @@ MAX_ZIP_MEMBERS = 10_000
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_VISITED_CELLS = 5_000_000
 MAX_WORKSHEETS = 200
+MAX_METADATA_MEMBER_BYTES = 64 * 1024 * 1024
+MAX_METADATA_NODES = 5_500_000
+MAX_MERGED_RANGES = 100_000
+MAX_MERGE_RANGE_LENGTH = 128
+MAX_WORKBOOK_RELATIONSHIPS = 10_000
+MAX_RELATIONSHIP_TARGET_LENGTH = 1024
 WORKBOOK_ADAPTER_VERSION = "0.2.0"
 OLE_COMPOUND_HEADER = bytes.fromhex("D0CF11E0A1B11AE1")
 _MISSING = object()
@@ -457,6 +463,10 @@ def _xml_local_name(tag: object) -> str:
 
 
 def _relationship_member(target: str) -> str:
+    if len(target) > MAX_RELATIONSHIP_TARGET_LENGTH:
+        raise WorkbookSafetyError(
+            "ooxml_relationship_target_limit_exceeded"
+        )
     normalised = target.replace("\\", "/")
     parts = PurePosixPath(normalised).parts
     if ".." in parts or bool(PureWindowsPath(target).drive):
@@ -470,47 +480,139 @@ def _relationship_member(target: str) -> str:
     return member
 
 
+def _iter_xml_elements(
+    package: ZipFile,
+    member: str,
+    element_tree: Any,
+    *,
+    bounded_index_member: bool,
+) -> Iterator[tuple[str, Any]]:
+    metadata = package.getinfo(member)
+    if (
+        bounded_index_member
+        and metadata.file_size > MAX_METADATA_MEMBER_BYTES
+    ):
+        raise WorkbookSafetyError("ooxml_metadata_member_too_large")
+    with package.open(metadata) as source:
+        yield from element_tree.iterparse(
+            source,
+            events=("start", "end"),
+        )
+
+
+def _ooxml_relationships(
+    package: ZipFile,
+    element_tree: Any,
+) -> dict[str, tuple[str, str]]:
+    relationships = {}
+    relationship_count = 0
+    worksheet_relationships = 0
+    nodes = 0
+    for event, element in _iter_xml_elements(
+        package,
+        "xl/_rels/workbook.xml.rels",
+        element_tree,
+        bounded_index_member=True,
+    ):
+        if event == "start":
+            nodes += 1
+            if nodes > MAX_METADATA_NODES:
+                raise WorkbookSafetyError(
+                    "ooxml_metadata_node_limit_exceeded"
+                )
+            if _xml_local_name(element.tag) != "Relationship":
+                continue
+            relationship_count += 1
+            if relationship_count > MAX_WORKBOOK_RELATIONSHIPS:
+                raise WorkbookSafetyError(
+                    "ooxml_relationship_limit_exceeded"
+                )
+            relationship_id = element.attrib.get("Id")
+            relationship_type = str(element.attrib.get("Type", ""))
+            target = element.attrib.get("Target")
+            if (
+                not relationship_id
+                or target is None
+                or relationship_id in relationships
+            ):
+                raise WorkbookError("corrupt_workbook")
+            if len(str(target)) > MAX_RELATIONSHIP_TARGET_LENGTH:
+                raise WorkbookSafetyError(
+                    "ooxml_relationship_target_limit_exceeded"
+                )
+            relationships[str(relationship_id)] = (
+                relationship_type,
+                str(target),
+            )
+            if relationship_type.endswith("/worksheet"):
+                worksheet_relationships += 1
+                if worksheet_relationships > MAX_WORKSHEETS:
+                    raise WorkbookSafetyError(
+                        "worksheet_limit_exceeded"
+                    )
+        else:
+            element.clear()
+    return relationships
+
+
+def _ooxml_worksheet_members(
+    package: ZipFile,
+    element_tree: Any,
+    relationships: dict[str, tuple[str, str]],
+) -> tuple[str, ...]:
+    members = []
+    nodes = 0
+    for event, element in _iter_xml_elements(
+        package,
+        "xl/workbook.xml",
+        element_tree,
+        bounded_index_member=True,
+    ):
+        if event == "start":
+            nodes += 1
+            if nodes > MAX_METADATA_NODES:
+                raise WorkbookSafetyError(
+                    "ooxml_metadata_node_limit_exceeded"
+                )
+            if _xml_local_name(element.tag) != "sheet":
+                continue
+            relationship_id = next(
+                (
+                    value
+                    for key, value in element.attrib.items()
+                    if _xml_local_name(key) == "id"
+                ),
+                None,
+            )
+            relationship = relationships.get(str(relationship_id))
+            if relationship is None:
+                raise WorkbookError("corrupt_workbook")
+            relationship_type, target = relationship
+            if not relationship_type.endswith("/worksheet"):
+                continue
+            members.append(_relationship_member(target))
+            if len(members) > MAX_WORKSHEETS:
+                raise WorkbookSafetyError("worksheet_limit_exceeded")
+        else:
+            element.clear()
+    return tuple(members)
+
+
 def _ooxml_sheet_features(
     path: Path,
     element_tree: Any,
 ) -> tuple[_SheetFeatures, ...]:
     try:
         with ZipFile(path) as package:
-            workbook_root = element_tree.fromstring(
-                package.read("xl/workbook.xml")
+            relationships = _ooxml_relationships(
+                package,
+                element_tree,
             )
-            relationships_root = element_tree.fromstring(
-                package.read("xl/_rels/workbook.xml.rels")
+            members = _ooxml_worksheet_members(
+                package,
+                element_tree,
+                relationships,
             )
-            targets = {
-                item.attrib["Id"]: item.attrib["Target"]
-                for item in relationships_root.iter()
-                if (
-                    _xml_local_name(item.tag) == "Relationship"
-                    and "Id" in item.attrib
-                    and "Target" in item.attrib
-                    and str(item.attrib.get("Type", "")).endswith(
-                        "/worksheet"
-                    )
-                )
-            }
-            members = []
-            for item in workbook_root.iter():
-                if _xml_local_name(item.tag) != "sheet":
-                    continue
-                relationship_id = next(
-                    (
-                        value
-                        for key, value in item.attrib.items()
-                        if _xml_local_name(key) == "id"
-                    ),
-                    None,
-                )
-                if relationship_id not in targets:
-                    raise WorkbookError("corrupt_workbook")
-                members.append(
-                    _relationship_member(targets[relationship_id])
-                )
             return tuple(
                 _ooxml_single_sheet_features(
                     package,
@@ -538,33 +640,56 @@ def _ooxml_single_sheet_features(
     has_hidden_data = False
     merged_ranges = []
     visited_cells = 0
-    with package.open(member) as source:
-        for event, element in element_tree.iterparse(
-            source,
-            events=("start", "end"),
-        ):
-            if event == "start":
-                local_name = _xml_local_name(element.tag)
-                if local_name == "c":
-                    visited_cells += 1
-                    if visited_cells > MAX_VISITED_CELLS:
-                        raise WorkbookSafetyError(
-                            "visited_cell_limit_exceeded"
-                        )
-                elif local_name == "f":
-                    has_formulas = True
-                elif local_name == "mergeCell":
-                    reference = element.attrib.get("ref")
-                    if reference:
-                        merged_ranges.append(str(reference))
-                elif (
-                    local_name in {"row", "col"}
-                    and str(element.attrib.get("hidden", "")).casefold()
-                    in {"1", "true"}
-                ):
-                    has_hidden_data = True
-            else:
-                element.clear()
+    metadata_nodes = 0
+    cell_depth = 0
+    merge_count = 0
+    for event, element in _iter_xml_elements(
+        package,
+        member,
+        element_tree,
+        bounded_index_member=False,
+    ):
+        local_name = _xml_local_name(element.tag)
+        if event == "start":
+            if local_name == "c":
+                visited_cells += 1
+                cell_depth += 1
+                if visited_cells > MAX_VISITED_CELLS:
+                    raise WorkbookSafetyError(
+                        "visited_cell_limit_exceeded"
+                    )
+            elif cell_depth == 0:
+                metadata_nodes += 1
+                if metadata_nodes > MAX_METADATA_NODES:
+                    raise WorkbookSafetyError(
+                        "ooxml_metadata_node_limit_exceeded"
+                    )
+            if local_name == "f":
+                has_formulas = True
+            elif local_name == "mergeCell":
+                merge_count += 1
+                if merge_count > MAX_MERGED_RANGES:
+                    raise WorkbookSafetyError(
+                        "ooxml_merge_range_limit_exceeded"
+                    )
+                reference = element.attrib.get("ref")
+                if not reference:
+                    raise WorkbookError("corrupt_workbook")
+                if len(str(reference)) > MAX_MERGE_RANGE_LENGTH:
+                    raise WorkbookSafetyError(
+                        "ooxml_merge_range_limit_exceeded"
+                    )
+                merged_ranges.append(str(reference))
+            elif (
+                local_name in {"row", "col"}
+                and str(element.attrib.get("hidden", "")).casefold()
+                in {"1", "true"}
+            ):
+                has_hidden_data = True
+        else:
+            if local_name == "c" and cell_depth:
+                cell_depth -= 1
+            element.clear()
     return _SheetFeatures(
         has_formulas=has_formulas,
         merged_ranges=tuple(sorted(set(merged_ranges))),
@@ -582,10 +707,7 @@ def _required_module(name: str) -> Any:
 def _defused_element_tree() -> Any:
     _required_module("defusedxml")
     candidate = _required_module("defusedxml.ElementTree")
-    if all(
-        hasattr(candidate, attribute)
-        for attribute in ("fromstring", "iterparse")
-    ):
+    if hasattr(candidate, "iterparse"):
         return candidate
     try:
         return __import__(

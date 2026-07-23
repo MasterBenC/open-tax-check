@@ -23,7 +23,7 @@ from .mapping import map_headers
 from .numeric import exact_add, exact_subtract, format_money, parse_decimal
 from .quality import validate_journal_quality
 from .rules import business_entertainment_adjustment
-from .schemas import SCHEMA_VERSION, SourceRecord, to_dict
+from .schemas import SCHEMA_VERSION, SheetRecord, SourceRecord, to_dict
 from .semantic import detect_semantic_candidates
 from .sheet_detection import confidence_band, detect_sheet
 from .workbooks import (
@@ -664,32 +664,34 @@ def inspect_workbooks(
                         merged_ranges=sheet.merged_ranges,
                     )
                     sheets.append(
-                        {
-                            "schema_version": SCHEMA_VERSION,
-                            "source_id": source.source_id,
-                            "sheet_id": sheet.sheet_id,
-                            "index": sheet.index,
-                            "name": sheet.name,
-                            "visibility": sheet.visibility,
-                            "used_range": _used_range(
-                                sheet.max_row,
-                                sheet.max_column,
-                            ),
-                            "visited_cell_estimate": (
-                                max(sheet.max_row, 0)
-                                * min(max(sheet.max_column, 0), 256)
-                            ),
-                            "header_rows": list(detection.header_rows),
-                            "candidate_header_rows": [
-                                list(rows)
-                                for rows in detection.candidate_header_rows
-                            ],
-                            "role_scores": to_dict(detection.role_scores),
-                            "has_formulas": sheet.has_formulas,
-                            "has_merged_ranges": sheet.has_merged_ranges,
-                            "has_hidden_data": sheet.has_hidden_data,
-                            "merged_ranges": list(sheet.merged_ranges),
-                        }
+                        to_dict(
+                            SheetRecord(
+                                source_id=source.source_id,
+                                sheet_id=sheet.sheet_id,
+                                index=sheet.index,
+                                name=sheet.name,
+                                visibility=sheet.visibility,
+                                used_range=_used_range(
+                                    sheet.max_row,
+                                    sheet.max_column,
+                                ),
+                                visited_cell_estimate=(
+                                    max(sheet.max_row, 0)
+                                    * min(max(sheet.max_column, 0), 256)
+                                ),
+                                header_rows=detection.header_rows,
+                                candidate_header_rows=(
+                                    detection.candidate_header_rows
+                                ),
+                                role_scores=detection.role_scores,
+                                has_formulas=sheet.has_formulas,
+                                has_merged_ranges=(
+                                    sheet.has_merged_ranges
+                                ),
+                                has_hidden_data=sheet.has_hidden_data,
+                                merged_ranges=sheet.merged_ranges,
+                            )
+                        )
                     )
         except WorkbookError as error:
             diagnostic_code = str(error)

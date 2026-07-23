@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,7 @@ from open_tax_check.case import init_case
 from open_tax_check.cli import build_parser
 from open_tax_check import pipeline
 from open_tax_check.pipeline import inspect_case
-from open_tax_check.schemas import SCHEMA_VERSION
+from open_tax_check.schemas import SCHEMA_VERSION, SheetRecord
 from open_tax_check.workbooks import WorkbookError
 
 
@@ -32,6 +33,7 @@ TRIAL_BALANCE_ROWS = (
     ),
     ("银行存款", 100, 0, 50, 20, 130, 0),
 )
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def make_xlsx(path: Path, *, sheets: tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]) -> Path:
@@ -346,6 +348,46 @@ class InspectPipelineTests(unittest.TestCase):
         self.assertEqual(workbook["status"], "inspected")
         self.assertIsNone(workbook["diagnostic_code"])
         self.assertEqual(len(workbook["sheets"]), 1)
+
+    def test_pipeline_sheet_artifact_is_built_from_versioned_sheet_record(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = self.init_case(Path(temp_dir), period=True)
+            make_xlsx(
+                case / "input" / "journal.xlsx",
+                sheets=(("Journal", JOURNAL_ROWS),),
+            )
+
+            with patch(
+                "open_tax_check.pipeline.SheetRecord",
+                wraps=SheetRecord,
+            ) as record_type:
+                code, _ = inspect_case(case)
+
+        self.assertEqual(code, 0)
+        record_type.assert_called_once()
+
+    def test_xls_inventory_serializes_unknown_formula_metadata_as_null(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = self.init_case(Path(temp_dir), period=True)
+            shutil.copyfile(
+                FIXTURES / "fictional-journal.xls",
+                case / "input" / "journal.xls",
+            )
+
+            code, _ = inspect_case(case)
+
+            inventory = json.loads(
+                (
+                    case / "work" / "workbook_inventory.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(code, 0)
+        sheet = inventory["workbooks"][0]["sheets"][0]
+        self.assertEqual(sheet["schema_version"], SCHEMA_VERSION)
+        self.assertIsNone(sheet["has_formulas"])
+        self.assertIsInstance(sheet["has_merged_ranges"], bool)
+        self.assertIsInstance(sheet["has_hidden_data"], bool)
 
     def test_visible_journal_with_hidden_row_is_not_automatically_selected_and_metadata_is_real(self):
         from openpyxl import load_workbook

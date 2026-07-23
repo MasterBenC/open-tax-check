@@ -64,20 +64,28 @@ class SheetRecord:
     visibility: str
     used_range: str | None
     visited_cell_estimate: int
+    header_rows: tuple[int, ...]
     candidate_header_rows: tuple[tuple[int, ...], ...]
     role_scores: tuple[RoleScore, ...]
-    has_formulas: bool
-    has_merged_ranges: bool
-    has_hidden_data: bool
+    has_formulas: bool | None
+    has_merged_ranges: bool | None
+    has_hidden_data: bool | None
+    merged_ranges: tuple[str, ...]
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "header_rows", tuple(self.header_rows))
         object.__setattr__(
             self,
             "candidate_header_rows",
             tuple(tuple(rows) for rows in self.candidate_header_rows),
         )
         object.__setattr__(self, "role_scores", tuple(self.role_scores))
+        object.__setattr__(
+            self,
+            "merged_ranges",
+            tuple(self.merged_ranges),
+        )
 
 
 @dataclass(frozen=True, slots=True)

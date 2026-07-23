@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 from xml.etree.ElementTree import ParseError
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from open_tax_check import workbooks
 from open_tax_check.workbooks import (
@@ -32,6 +33,18 @@ from tests.workbook_factory import (
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+def rewrite_zip_member(path: Path, member_name: str, transform) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with ZipFile(path, "r") as source:
+        with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                content = source.read(item)
+                if item.filename == member_name:
+                    content = transform(content)
+                target.writestr(item, content)
+    temporary.replace(path)
+
+
 class WorkbookReaderTests(unittest.TestCase):
     def test_ooxml_limits_match_security_contract(self):
         self.assertEqual(workbooks.MAX_ZIP_MEMBERS, 10_000)
@@ -42,6 +55,12 @@ class WorkbookReaderTests(unittest.TestCase):
         self.assertEqual(workbooks.MAX_COMPRESSION_RATIO, 100)
         self.assertEqual(workbooks.MAX_WORKSHEETS, 200)
         self.assertEqual(workbooks.MAX_VISITED_CELLS, 5_000_000)
+        self.assertEqual(
+            workbooks.MAX_METADATA_MEMBER_BYTES,
+            64 * 1024 * 1024,
+        )
+        self.assertEqual(workbooks.MAX_METADATA_NODES, 5_500_000)
+        self.assertEqual(workbooks.MAX_MERGED_RANGES, 100_000)
 
     def test_xlsx_reader_exposes_formula_metadata_without_recalculation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -112,6 +131,143 @@ class WorkbookReaderTests(unittest.TestCase):
             finally:
                 if reader is not None:
                     reader.close()
+
+    def test_ooxml_metadata_rejects_many_merges_without_cell_nodes(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "many-merges.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.merge_cells("A1:B1")
+            sheet.merge_cells("C1:D1")
+            workbook.save(path)
+            workbook.close()
+
+            with mock.patch.object(
+                workbooks,
+                "MAX_MERGED_RANGES",
+                1,
+            ):
+                with self.assertRaisesRegex(
+                    WorkbookSafetyError,
+                    "^ooxml_merge_range_limit_exceeded$",
+                ):
+                    open_workbook(path)
+
+    def test_ooxml_metadata_rejects_excessive_non_cell_nodes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "many-nodes.xlsx")
+
+            with mock.patch.object(
+                workbooks,
+                "MAX_METADATA_NODES",
+                1,
+            ):
+                with self.assertRaisesRegex(
+                    WorkbookSafetyError,
+                    "^ooxml_metadata_node_limit_exceeded$",
+                ):
+                    open_workbook(path)
+
+    def test_ooxml_metadata_rejects_oversized_key_xml_member(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "large-metadata.xlsx")
+
+            with mock.patch.object(
+                workbooks,
+                "MAX_METADATA_MEMBER_BYTES",
+                1,
+            ):
+                with self.assertRaisesRegex(
+                    WorkbookSafetyError,
+                    "^ooxml_metadata_member_too_large$",
+                ):
+                    open_workbook(path)
+
+    def test_unreferenced_worksheet_relationships_count_toward_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "extra-rel.xlsx")
+
+            def add_unreferenced_worksheet(content: bytes) -> bytes:
+                relationship = (
+                    b'<Relationship Id="rId-unreferenced" '
+                    b'Type="http://schemas.openxmlformats.org/'
+                    b'officeDocument/2006/relationships/worksheet" '
+                    b'Target="worksheets/unused.xml"/>'
+                )
+                return content.replace(
+                    b"</Relationships>",
+                    relationship + b"</Relationships>",
+                )
+
+            rewrite_zip_member(
+                path,
+                "xl/_rels/workbook.xml.rels",
+                add_unreferenced_worksheet,
+            )
+
+            reader = None
+            try:
+                with mock.patch.object(workbooks, "MAX_WORKSHEETS", 1):
+                    with self.assertRaisesRegex(
+                        WorkbookSafetyError,
+                        "^worksheet_limit_exceeded$",
+                    ):
+                        reader = open_workbook(path)
+            finally:
+                if reader is not None:
+                    reader.close()
+
+    def test_worksheet_limit_is_checked_before_openpyxl_load(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx_with_sheet_count(
+                Path(temp_dir) / "many-before-load.xlsx",
+                sheet_count=201,
+            )
+
+            with mock.patch(
+                "open_tax_check.workbooks._open_binary_stream",
+                side_effect=AssertionError(
+                    "openpyxl streams must not open"
+                ),
+            ) as stream_opener:
+                with self.assertRaisesRegex(
+                    WorkbookSafetyError,
+                    "^worksheet_limit_exceeded$",
+                ):
+                    open_workbook(path)
+
+        stream_opener.assert_not_called()
+
+    def test_chartsheet_relationship_is_ignored_and_worksheet_order_stays_aligned(self):
+        from openpyxl import Workbook
+        from openpyxl.chart import PieChart, Reference
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "chart.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Data"
+            sheet.append(("value",))
+            sheet.append((1,))
+            sheet["B1"] = "=1+1"
+            chart = PieChart()
+            chart.add_data(
+                Reference(sheet, min_col=1, min_row=1, max_row=2),
+                titles_from_data=True,
+            )
+            chartsheet = workbook.create_chartsheet("Chart")
+            chartsheet.add_chart(chart)
+            workbook.save(path)
+            workbook.close()
+
+            with open_workbook(path) as reader:
+                sheets = reader.sheets()
+
+        self.assertEqual(len(sheets), 1)
+        self.assertEqual(sheets[0].name, "Data")
+        self.assertIs(sheets[0].has_formulas, True)
 
     def test_xls_sheet_metadata_uses_unknown_for_unavailable_formula_detection(self):
         row_info = types.SimpleNamespace(hidden=1)
