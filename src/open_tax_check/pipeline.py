@@ -26,7 +26,11 @@ from .rules import business_entertainment_adjustment
 from .schemas import SCHEMA_VERSION, SourceRecord, to_dict
 from .semantic import detect_semantic_candidates
 from .sheet_detection import confidence_band, detect_sheet
-from .workbooks import WorkbookError, open_workbook
+from .workbooks import (
+    WORKBOOK_ADAPTER_VERSION,
+    WorkbookError,
+    open_workbook,
+)
 
 
 _CURRENT_VIEW_DIRS = ("work", "output")
@@ -335,24 +339,21 @@ def _finalize_run(
         manifest["error_type"] = error_type
     _write_json(manifest_path, manifest)
 
-    state_path = case_dir / "state.json"
-    original_state = state_path.read_bytes()
-    state = json.loads(original_state.decode("utf-8"))
     if not publish_current_view:
-        result = dict(state)
-        result.update(
-            {
-                "status": status,
-                "next_action": next_action,
-                "artifacts": artifacts,
-                "failed_run": run_id,
-                "failed_run_manifest": f"runs/{run_id}/manifest.json",
-            }
-        )
+        result = {
+            "status": status,
+            "next_action": next_action,
+            "artifacts": artifacts,
+            "failed_run": run_id,
+            "failed_run_manifest": f"runs/{run_id}/manifest.json",
+        }
         if error_type is not None:
             result["error_type"] = error_type
         return result
 
+    state_path = case_dir / "state.json"
+    original_state = state_path.read_bytes()
+    state = json.loads(original_state.decode("utf-8"))
     history = list(state.get("run_history", []))
     history.append(
         {
@@ -641,11 +642,27 @@ def inspect_workbooks(
         if source.status != "accepted" or source.extension not in _EXCEL_EXTENSIONS:
             continue
         path = case_dir / "input" / source.filename
+        workbook_record = {
+            "schema_version": SCHEMA_VERSION,
+            "source_id": source.source_id,
+            "filename": source.filename,
+            "sha256": source.sha256,
+            "size_bytes": source.size_bytes,
+            "extension": source.extension,
+            "adapter_version": WORKBOOK_ADAPTER_VERSION,
+            "status": "inspected",
+            "diagnostic_code": None,
+            "sheets": [],
+        }
         try:
             with open_workbook(path) as reader:
                 sheets = []
                 for sheet in reader.sheets():
-                    detection = detect_sheet(reader, sheet)
+                    detection = detect_sheet(
+                        reader,
+                        sheet,
+                        merged_ranges=sheet.merged_ranges,
+                    )
                     sheets.append(
                         {
                             "schema_version": SCHEMA_VERSION,
@@ -668,30 +685,31 @@ def inspect_workbooks(
                                 for rows in detection.candidate_header_rows
                             ],
                             "role_scores": to_dict(detection.role_scores),
-                            "has_formulas": False,
-                            "has_merged_ranges": False,
-                            "has_hidden_data": (
-                                sheet.visibility != "visible"
-                            ),
+                            "has_formulas": sheet.has_formulas,
+                            "has_merged_ranges": sheet.has_merged_ranges,
+                            "has_hidden_data": sheet.has_hidden_data,
+                            "merged_ranges": list(sheet.merged_ranges),
                         }
                     )
         except WorkbookError as error:
+            diagnostic_code = str(error)
+            workbook_record.update(
+                {
+                    "status": "error",
+                    "diagnostic_code": diagnostic_code,
+                }
+            )
+            workbooks.append(workbook_record)
             issues.append(
                 {
                     "source_id": source.source_id,
                     "filename": source.filename,
-                    "code": str(error),
+                    "code": diagnostic_code,
                 }
             )
             continue
-        workbooks.append(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "source_id": source.source_id,
-                "filename": source.filename,
-                "sheets": sheets,
-            }
-        )
+        workbook_record["sheets"] = sheets
+        workbooks.append(workbook_record)
     return _WorkbookInspection(tuple(workbooks), tuple(issues))
 
 
@@ -722,6 +740,7 @@ def build_sheet_selection(inventory: _WorkbookInspection) -> dict:
                         "header_rows": sheet["header_rows"],
                         "score": score,
                         "confidence": confidence_band(score),
+                        "has_hidden_data": sheet["has_hidden_data"],
                     }
                 )
 
@@ -738,6 +757,7 @@ def build_sheet_selection(inventory: _WorkbookInspection) -> dict:
             len(candidates) == 1
             and candidates[0]["visibility"] == "visible"
             and candidates[0]["score"] >= 85
+            and candidates[0]["has_hidden_data"] is False
         )
         selection[role] = [
             {
@@ -869,26 +889,64 @@ def finalize_inspection(
     return (0 if status == "partial_scope_ready" else 4), state
 
 
+def _failed_inspection(
+    *,
+    case_dir: Path,
+    run_id: str,
+    run_dir: Path,
+    started_at: str,
+    intake: IntakeResult | None,
+) -> tuple[int, dict]:
+    _write_json(
+        run_dir / "work" / "processing_error.json",
+        {"error_type": "inspect_processing_error"},
+    )
+    return finalize_inspection(
+        case_dir=case_dir,
+        run_id=run_id,
+        run_dir=run_dir,
+        started_at=started_at,
+        status="needs_intake_review",
+        next_action="inspect_processing_error",
+        artifacts=_run_artifacts(run_dir),
+        input_files=(
+            [
+                to_dict(source)
+                for source in intake.sources
+                if source.status == "accepted"
+            ]
+            if intake is not None
+            else []
+        ),
+        input_entries=(
+            to_dict(intake.sources)
+            if intake is not None
+            else []
+        ),
+        error_type="inspect_processing_error",
+    )
+
+
 def inspect_case(case_dir: Path) -> tuple[int, dict]:
     run_id, run_dir, started_at = _start_run(case_dir)
-    state = load_case_state(case_dir)
-    if not state.get("review_period"):
-        return finalize_inspection(
-            case_dir=case_dir,
-            run_id=run_id,
-            run_dir=run_dir,
-            started_at=started_at,
-            status="needs_intake_review",
-            next_action="set_case_period",
-            artifacts=[],
-            input_files=[],
-            input_entries=[],
-        )
-
     intake: IntakeResult | None = None
     try:
+        state = load_case_state(case_dir)
+        if not state.get("review_period"):
+            return finalize_inspection(
+                case_dir=case_dir,
+                run_id=run_id,
+                run_dir=run_dir,
+                started_at=started_at,
+                status="needs_intake_review",
+                next_action="set_case_period",
+                artifacts=[],
+                input_files=[],
+                input_entries=[],
+            )
+
         intake = inventory_inputs(
-            case_dir,
+            case_dir=case_dir,
             review_period=state["review_period"],
         )
         inventory = inspect_workbooks(case_dir, intake.sources)
@@ -920,33 +978,12 @@ def inspect_case(case_dir: Path) -> tuple[int, dict]:
             input_entries=to_dict(intake.sources),
         )
     except Exception:
-        _write_json(
-            run_dir / "work" / "processing_error.json",
-            {"error_type": "inspect_processing_error"},
-        )
-        return finalize_inspection(
+        return _failed_inspection(
             case_dir=case_dir,
             run_id=run_id,
             run_dir=run_dir,
             started_at=started_at,
-            status="needs_intake_review",
-            next_action="retry_inspect",
-            artifacts=_run_artifacts(run_dir),
-            input_files=(
-                [
-                    to_dict(source)
-                    for source in intake.sources
-                    if source.status == "accepted"
-                ]
-                if intake is not None
-                else []
-            ),
-            input_entries=(
-                to_dict(intake.sources)
-                if intake is not None
-                else []
-            ),
-            error_type="inspect_processing_error",
+            intake=intake,
         )
 
 

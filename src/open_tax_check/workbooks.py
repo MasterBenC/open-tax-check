@@ -17,6 +17,7 @@ MAX_ZIP_MEMBERS = 10_000
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_VISITED_CELLS = 5_000_000
 MAX_WORKSHEETS = 200
+WORKBOOK_ADAPTER_VERSION = "0.2.0"
 OLE_COMPOUND_HEADER = bytes.fromhex("D0CF11E0A1B11AE1")
 _MISSING = object()
 
@@ -57,6 +58,21 @@ class SheetMeta:
     visibility: str
     max_row: int
     max_column: int
+    has_formulas: bool | None = None
+    has_merged_ranges: bool | None = None
+    has_hidden_data: bool | None = None
+    merged_ranges: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _SheetFeatures:
+    has_formulas: bool | None
+    merged_ranges: tuple[str, ...]
+    has_hidden_data: bool | None
+
+    @property
+    def has_merged_ranges(self) -> bool:
+        return bool(self.merged_ranges)
 
 
 class WorkbookReader:
@@ -103,24 +119,45 @@ class OpenPyxlReader(WorkbookReader):
         cached_workbook: Any,
         formula_stream: Any = None,
         cached_stream: Any = None,
+        sheet_features: tuple[_SheetFeatures, ...] = (),
     ) -> None:
         self._formula_workbook = formula_workbook
         self._cached_workbook = cached_workbook
         self._formula_stream = formula_stream
         self._cached_stream = cached_stream
+        self._sheet_features = sheet_features
 
     def sheets(self) -> tuple[SheetMeta, ...]:
-        return tuple(
-            SheetMeta(
+        metadata = []
+        for index, sheet in enumerate(
+            self._formula_workbook.worksheets,
+            start=1,
+        ):
+            features = (
+                self._sheet_features[index - 1]
+                if index <= len(self._sheet_features)
+                else _SheetFeatures(None, (), None)
+            )
+            metadata.append(
+                SheetMeta(
                 sheet_id=f"sheet-{index:04d}",
                 index=index,
                 name=sheet.title,
                 visibility=sheet.sheet_state,
                 max_row=sheet.max_row,
                 max_column=sheet.max_column,
+                has_formulas=features.has_formulas,
+                has_merged_ranges=features.has_merged_ranges,
+                has_hidden_data=(
+                    features.has_hidden_data
+                    or sheet.sheet_state != "visible"
+                    if features.has_hidden_data is not None
+                    else None
+                ),
+                merged_ranges=features.merged_ranges,
             )
-            for index, sheet in enumerate(self._formula_workbook.worksheets, start=1)
-        )
+            )
+        return tuple(metadata)
 
     def _worksheet(self, sheet_id: str, *, cached: bool = False) -> Any:
         workbook = self._cached_workbook if cached else self._formula_workbook
@@ -276,6 +313,37 @@ class XlrdReader(WorkbookReader):
                         ),
                         max_row=sheet.nrows,
                         max_column=sheet.ncols,
+                        has_formulas=None,
+                        has_merged_ranges=bool(
+                            getattr(sheet, "merged_cells", ())
+                        ),
+                        has_hidden_data=(
+                            visibility_code != 0
+                            or any(
+                                bool(getattr(item, "hidden", False))
+                                for item in getattr(
+                                    sheet,
+                                    "rowinfo_map",
+                                    {},
+                                ).values()
+                            )
+                            or any(
+                                bool(getattr(item, "hidden", False))
+                                for item in getattr(
+                                    sheet,
+                                    "colinfo_map",
+                                    {},
+                                ).values()
+                            )
+                        ),
+                        merged_ranges=tuple(
+                            _xlrd_merged_range(item)
+                            for item in getattr(
+                                sheet,
+                                "merged_cells",
+                                (),
+                            )
+                        ),
                     )
                 )
             return tuple(metadata)
@@ -376,9 +444,154 @@ def _coordinate(row: int, column: int) -> str:
     return f"{letters}{row}"
 
 
+def _xlrd_merged_range(bounds: tuple[int, int, int, int]) -> str:
+    row_start, row_end, column_start, column_end = bounds
+    return (
+        f"{_coordinate(row_start + 1, column_start + 1)}:"
+        f"{_coordinate(row_end, column_end)}"
+    )
+
+
+def _xml_local_name(tag: object) -> str:
+    return str(tag).rsplit("}", 1)[-1]
+
+
+def _relationship_member(target: str) -> str:
+    normalised = target.replace("\\", "/")
+    parts = PurePosixPath(normalised).parts
+    if ".." in parts or bool(PureWindowsPath(target).drive):
+        raise WorkbookSafetyError("ooxml_unsafe_relationship_target")
+    if normalised.startswith("/"):
+        member = normalised.lstrip("/")
+    else:
+        member = (PurePosixPath("xl") / normalised).as_posix()
+    if not member.startswith("xl/"):
+        raise WorkbookSafetyError("ooxml_unsafe_relationship_target")
+    return member
+
+
+def _ooxml_sheet_features(
+    path: Path,
+    element_tree: Any,
+) -> tuple[_SheetFeatures, ...]:
+    try:
+        with ZipFile(path) as package:
+            workbook_root = element_tree.fromstring(
+                package.read("xl/workbook.xml")
+            )
+            relationships_root = element_tree.fromstring(
+                package.read("xl/_rels/workbook.xml.rels")
+            )
+            targets = {
+                item.attrib["Id"]: item.attrib["Target"]
+                for item in relationships_root.iter()
+                if (
+                    _xml_local_name(item.tag) == "Relationship"
+                    and "Id" in item.attrib
+                    and "Target" in item.attrib
+                    and str(item.attrib.get("Type", "")).endswith(
+                        "/worksheet"
+                    )
+                )
+            }
+            members = []
+            for item in workbook_root.iter():
+                if _xml_local_name(item.tag) != "sheet":
+                    continue
+                relationship_id = next(
+                    (
+                        value
+                        for key, value in item.attrib.items()
+                        if _xml_local_name(key) == "id"
+                    ),
+                    None,
+                )
+                if relationship_id not in targets:
+                    raise WorkbookError("corrupt_workbook")
+                members.append(
+                    _relationship_member(targets[relationship_id])
+                )
+            return tuple(
+                _ooxml_single_sheet_features(
+                    package,
+                    member,
+                    element_tree,
+                )
+                for member in members
+            )
+    except WorkbookError:
+        raise
+    except (BadZipFile, KeyError, ParseError, UnicodeDecodeError):
+        raise WorkbookError("corrupt_workbook") from None
+    except OSError:
+        raise WorkbookError("workbook_io_error") from None
+    except Exception:
+        raise WorkbookError("corrupt_workbook") from None
+
+
+def _ooxml_single_sheet_features(
+    package: ZipFile,
+    member: str,
+    element_tree: Any,
+) -> _SheetFeatures:
+    has_formulas = False
+    has_hidden_data = False
+    merged_ranges = []
+    visited_cells = 0
+    with package.open(member) as source:
+        for event, element in element_tree.iterparse(
+            source,
+            events=("start", "end"),
+        ):
+            if event == "start":
+                local_name = _xml_local_name(element.tag)
+                if local_name == "c":
+                    visited_cells += 1
+                    if visited_cells > MAX_VISITED_CELLS:
+                        raise WorkbookSafetyError(
+                            "visited_cell_limit_exceeded"
+                        )
+                elif local_name == "f":
+                    has_formulas = True
+                elif local_name == "mergeCell":
+                    reference = element.attrib.get("ref")
+                    if reference:
+                        merged_ranges.append(str(reference))
+                elif (
+                    local_name in {"row", "col"}
+                    and str(element.attrib.get("hidden", "")).casefold()
+                    in {"1", "true"}
+                ):
+                    has_hidden_data = True
+            else:
+                element.clear()
+    return _SheetFeatures(
+        has_formulas=has_formulas,
+        merged_ranges=tuple(sorted(set(merged_ranges))),
+        has_hidden_data=has_hidden_data,
+    )
+
+
 def _required_module(name: str) -> Any:
     try:
         return import_module(name)
+    except (ImportError, ModuleNotFoundError):
+        raise ExcelExtraRequired("install_excel_extra") from None
+
+
+def _defused_element_tree() -> Any:
+    _required_module("defusedxml")
+    candidate = _required_module("defusedxml.ElementTree")
+    if all(
+        hasattr(candidate, attribute)
+        for attribute in ("fromstring", "iterparse")
+    ):
+        return candidate
+    try:
+        return __import__(
+            "defusedxml.ElementTree",
+            fromlist=("ElementTree",),
+        )
     except (ImportError, ModuleNotFoundError):
         raise ExcelExtraRequired("install_excel_extra") from None
 
@@ -464,7 +677,11 @@ def open_workbook(path: Path) -> WorkbookReader:
     if suffix == ".xls":
         xlrd = _required_module("xlrd")
         try:
-            workbook = xlrd.open_workbook(path, on_demand=True)
+            workbook = xlrd.open_workbook(
+                path,
+                on_demand=True,
+                formatting_info=True,
+            )
         except Exception as error:
             _raise_xlrd_error(error)
         if workbook.nsheets > MAX_WORKSHEETS:
@@ -476,7 +693,8 @@ def open_workbook(path: Path) -> WorkbookReader:
         raise UnsupportedWorkbook("unsupported_workbook_format")
 
     preflight_ooxml(path)
-    _required_module("defusedxml")
+    element_tree = _defused_element_tree()
+    sheet_features = _ooxml_sheet_features(path, element_tree)
     openpyxl = _required_module("openpyxl")
     formula_stream = _open_binary_stream(path)
     try:
@@ -521,4 +739,5 @@ def open_workbook(path: Path) -> WorkbookReader:
         cached_workbook,
         formula_stream,
         cached_stream,
+        sheet_features,
     )

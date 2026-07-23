@@ -72,6 +72,73 @@ class WorkbookReaderTests(unittest.TestCase):
         self.assertEqual(cell.data_type, "f")
         self.assertEqual(cell.value_origin, "formula")
 
+    def test_xlsx_sheet_metadata_reports_formula_merge_and_hidden_row_or_column(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "metadata.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet["A1"] = "=1+1"
+            sheet.merge_cells("A2:B2")
+            sheet.row_dimensions[3].hidden = True
+            sheet.column_dimensions["C"].hidden = True
+            workbook.save(path)
+            workbook.close()
+
+            with open_workbook(path) as book:
+                metadata = book.sheets()[0]
+
+        self.assertIs(metadata.has_formulas, True)
+        self.assertIs(metadata.has_merged_ranges, True)
+        self.assertIs(metadata.has_hidden_data, True)
+        self.assertEqual(metadata.merged_ranges, ("A2:B2",))
+
+    def test_xlsx_metadata_scan_respects_visited_cell_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "metadata-limit.xlsx")
+            reader = None
+            try:
+                with mock.patch.object(
+                    workbooks,
+                    "MAX_VISITED_CELLS",
+                    0,
+                ):
+                    with self.assertRaisesRegex(
+                        WorkbookSafetyError,
+                        "^visited_cell_limit_exceeded$",
+                    ):
+                        reader = open_workbook(path)
+            finally:
+                if reader is not None:
+                    reader.close()
+
+    def test_xls_sheet_metadata_uses_unknown_for_unavailable_formula_detection(self):
+        row_info = types.SimpleNamespace(hidden=1)
+        column_info = types.SimpleNamespace(hidden=0)
+        sheet = types.SimpleNamespace(
+            name="Journal",
+            nrows=3,
+            ncols=3,
+            merged_cells=[(0, 1, 0, 2)],
+            rowinfo_map={2: row_info},
+            colinfo_map={0: column_info},
+        )
+        workbook = types.SimpleNamespace(
+            nsheets=1,
+            sheet_visibility=(0,),
+            sheet_by_index=mock.Mock(return_value=sheet),
+            release_resources=mock.Mock(),
+        )
+        reader = workbooks.XlrdReader(workbook)
+
+        metadata = reader.sheets()[0]
+
+        self.assertIsNone(metadata.has_formulas)
+        self.assertIs(metadata.has_merged_ranges, True)
+        self.assertIs(metadata.has_hidden_data, True)
+        self.assertEqual(metadata.merged_ranges, ("A1:B1",))
+
     def test_ooxml_formula_and_cached_rows_are_traversed_once_in_lockstep(
         self,
     ):
@@ -214,6 +281,9 @@ class WorkbookReaderTests(unittest.TestCase):
                     visibility="visible",
                     max_row=2,
                     max_column=2,
+                    has_formulas=False,
+                    has_merged_ranges=False,
+                    has_hidden_data=False,
                 ),
                 workbooks.SheetMeta(
                     sheet_id="sheet-0002",
@@ -222,6 +292,9 @@ class WorkbookReaderTests(unittest.TestCase):
                     visibility="hidden",
                     max_row=3,
                     max_column=3,
+                    has_formulas=False,
+                    has_merged_ranges=False,
+                    has_hidden_data=True,
                 ),
             ),
         )
@@ -807,6 +880,7 @@ class WorkbookReaderTests(unittest.TestCase):
         fake_xlrd.open_workbook.assert_called_once_with(
             path,
             on_demand=True,
+            formatting_info=True,
         )
         workbook.release_resources.assert_called_once_with()
 
