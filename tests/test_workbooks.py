@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import importlib
+import io
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
+from xml.etree.ElementTree import ParseError
 
 from open_tax_check import workbooks
 from open_tax_check.workbooks import (
@@ -19,6 +22,7 @@ from tests.workbook_factory import (
     make_xlsx,
     make_xlsx_with_hidden_sheet,
     make_xlsx_with_sheet_count,
+    make_bad_zip_metadata_fixture,
     make_zip_member_count_fixture,
     make_zip_member_name_fixture,
     make_zip_ratio_fixture,
@@ -67,6 +71,129 @@ class WorkbookReaderTests(unittest.TestCase):
         self.assertEqual(cell.cached_value, 2)
         self.assertEqual(cell.data_type, "f")
         self.assertEqual(cell.value_origin, "formula")
+
+    def test_ooxml_formula_and_cached_rows_are_traversed_once_in_lockstep(
+        self,
+    ):
+        formula_cell = types.SimpleNamespace(
+            row=1,
+            column=1,
+            coordinate="A1",
+            value="=1+1",
+            data_type="f",
+        )
+        cached_cell = types.SimpleNamespace(
+            row=1,
+            column=1,
+            coordinate="A1",
+            value=2,
+            data_type="n",
+        )
+        formula_sheet = types.SimpleNamespace(
+            iter_rows=mock.Mock(return_value=iter(((formula_cell,),))),
+            cell=mock.Mock(
+                side_effect=AssertionError("cell() must not be used")
+            ),
+        )
+        cached_sheet = types.SimpleNamespace(
+            iter_rows=mock.Mock(return_value=iter(((cached_cell,),))),
+            cell=mock.Mock(
+                side_effect=AssertionError("cell() must not be used")
+            ),
+        )
+        reader = OpenPyxlReader(
+            types.SimpleNamespace(worksheets=[formula_sheet]),
+            types.SimpleNamespace(worksheets=[cached_sheet]),
+        )
+
+        rows = tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
+
+        self.assertEqual(rows[0][0].formula, "=1+1")
+        self.assertEqual(rows[0][0].cached_value, 2)
+        formula_sheet.iter_rows.assert_called_once_with(
+            min_row=1,
+            max_row=1,
+            min_col=1,
+            max_col=1,
+        )
+        cached_sheet.iter_rows.assert_called_once_with(
+            min_row=1,
+            max_row=1,
+            min_col=1,
+            max_col=1,
+        )
+        formula_sheet.cell.assert_not_called()
+        cached_sheet.cell.assert_not_called()
+
+    def test_ooxml_lockstep_length_mismatch_maps_to_corrupt_workbook(self):
+        formula_cell = types.SimpleNamespace(
+            coordinate="A1",
+            value="=1+1",
+            data_type="f",
+        )
+        formula_sheet = types.SimpleNamespace(
+            iter_rows=mock.Mock(return_value=iter(((formula_cell,),)))
+        )
+        cached_sheet = types.SimpleNamespace(
+            iter_rows=mock.Mock(return_value=iter(((),)))
+        )
+        reader = OpenPyxlReader(
+            types.SimpleNamespace(worksheets=[formula_sheet]),
+            types.SimpleNamespace(worksheets=[cached_sheet]),
+        )
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^corrupt_workbook$",
+        ):
+            tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
+
+    def test_ooxml_lockstep_coordinate_mismatch_is_safe_corruption(self):
+        sensitive_coordinate = "PRIVATE-CELL"
+        formula_cell = types.SimpleNamespace(
+            coordinate="A1",
+            value="=1+1",
+            data_type="f",
+        )
+        cached_cell = types.SimpleNamespace(
+            coordinate=sensitive_coordinate,
+            value=2,
+            data_type="n",
+        )
+        formula_sheet = types.SimpleNamespace(
+            iter_rows=mock.Mock(return_value=iter(((formula_cell,),)))
+        )
+        cached_sheet = types.SimpleNamespace(
+            iter_rows=mock.Mock(return_value=iter(((cached_cell,),)))
+        )
+        reader = OpenPyxlReader(
+            types.SimpleNamespace(worksheets=[formula_sheet]),
+            types.SimpleNamespace(worksheets=[cached_sheet]),
+        )
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^corrupt_workbook$",
+        ) as raised:
+            tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
+
+        self.assertNotIn(sensitive_coordinate, str(raised.exception))
+
+    def test_delayed_workbook_safety_error_keeps_original_code(self):
+        class SafetyWorksheet:
+            def iter_rows(self, **_kwargs):
+                raise WorkbookSafetyError("visited_cell_limit_exceeded")
+
+        reader = OpenPyxlReader(
+            types.SimpleNamespace(worksheets=[SafetyWorksheet()]),
+            types.SimpleNamespace(worksheets=[types.SimpleNamespace()]),
+        )
+
+        with self.assertRaisesRegex(
+            WorkbookSafetyError,
+            "^visited_cell_limit_exceeded$",
+        ):
+            tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
 
     def test_xlsx_sheet_metadata_uses_stable_one_based_ids(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -125,6 +252,27 @@ class WorkbookReaderTests(unittest.TestCase):
             ):
                 open_workbook(path)
 
+    def test_ooxml_preflight_rejects_danger_before_dependency_import(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_zip_ratio_fixture(
+                Path(temp_dir) / "bomb.xlsx",
+                ratio=101,
+            )
+
+            with mock.patch(
+                "open_tax_check.workbooks.import_module",
+                side_effect=AssertionError(
+                    "dependency import must follow preflight"
+                ),
+            ) as importer:
+                with self.assertRaisesRegex(
+                    WorkbookSafetyError,
+                    "^ooxml_compression_ratio_exceeded$",
+                ):
+                    open_workbook(path)
+
+        importer.assert_not_called()
+
     def test_ooxml_preflight_rejects_more_than_ten_thousand_members(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = make_zip_member_count_fixture(
@@ -177,6 +325,19 @@ class WorkbookReaderTests(unittest.TestCase):
                     ):
                         open_workbook(path)
 
+    def test_ooxml_preflight_rejects_windows_drive_relative_member(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_zip_member_name_fixture(
+                Path(temp_dir) / "drive-relative.xlsx",
+                member_name="C:relative.xml",
+            )
+
+            with self.assertRaisesRegex(
+                WorkbookSafetyError,
+                "^ooxml_unsafe_member_name$",
+            ):
+                open_workbook(path)
+
     def test_corrupt_ooxml_has_stable_safe_diagnostic(self):
         sensitive_detail = "private-cell-value"
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -190,6 +351,20 @@ class WorkbookReaderTests(unittest.TestCase):
                 open_workbook(path)
 
         self.assertNotIn(sensitive_detail, str(raised.exception))
+        self.assertNotIn(str(path), str(raised.exception))
+
+    def test_invalid_zip_metadata_encoding_maps_to_corrupt_workbook(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_bad_zip_metadata_fixture(
+                Path(temp_dir) / "bad-metadata.xlsx"
+            )
+
+            with self.assertRaisesRegex(
+                WorkbookError,
+                "^corrupt_workbook$",
+            ) as raised:
+                open_workbook(path)
+
         self.assertNotIn(str(path), str(raised.exception))
 
     def test_ooxml_io_error_has_distinct_stable_safe_diagnostic(self):
@@ -305,19 +480,55 @@ class WorkbookReaderTests(unittest.TestCase):
         ):
             tuple(reader.iter_rows("sheet-0001", 1, 20_000, 256))
 
+    def test_delayed_ooxml_parse_error_has_stable_safe_diagnostic(self):
+        sensitive_detail = "private-cell-value"
+
+        class FailingWorksheet:
+            def iter_rows(self, **_kwargs):
+                raise ParseError(sensitive_detail)
+
+        formula_workbook = types.SimpleNamespace(
+            worksheets=[FailingWorksheet()],
+            close=mock.Mock(),
+        )
+        cached_workbook = types.SimpleNamespace(
+            worksheets=[types.SimpleNamespace()],
+            close=mock.Mock(),
+        )
+        reader = OpenPyxlReader(formula_workbook, cached_workbook)
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "^corrupt_workbook$",
+        ) as raised:
+            tuple(reader.iter_rows("sheet-0001", 1, 1, 1))
+
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+
     def test_close_attempts_both_ooxml_handles_if_first_close_fails(self):
         close_error = OSError("sensitive close detail")
         formula_workbook = types.SimpleNamespace(
             close=mock.Mock(side_effect=close_error)
         )
         cached_workbook = types.SimpleNamespace(close=mock.Mock())
-        reader = OpenPyxlReader(formula_workbook, cached_workbook)
+        formula_stream = types.SimpleNamespace(
+            close=mock.Mock(side_effect=OSError("stream close detail"))
+        )
+        cached_stream = types.SimpleNamespace(close=mock.Mock())
+        reader = OpenPyxlReader(
+            formula_workbook,
+            cached_workbook,
+            formula_stream,
+            cached_stream,
+        )
 
         with self.assertRaises(OSError):
             reader.close()
 
         formula_workbook.close.assert_called_once_with()
         cached_workbook.close.assert_called_once_with()
+        formula_stream.close.assert_called_once_with()
+        cached_stream.close.assert_called_once_with()
 
     def test_second_ooxml_open_failure_closes_first_without_leaking_close_error(
         self,
@@ -338,6 +549,8 @@ class WorkbookReaderTests(unittest.TestCase):
                 )
             )
         )
+        formula_stream = io.BytesIO(b"formula stream")
+        cached_stream = io.BytesIO(b"cached stream")
         with tempfile.TemporaryDirectory() as temp_dir:
             path = make_xlsx(Path(temp_dir) / "book.xlsx")
 
@@ -345,15 +558,47 @@ class WorkbookReaderTests(unittest.TestCase):
                 "open_tax_check.workbooks.import_module",
                 return_value=fake_openpyxl,
             ):
-                with self.assertRaisesRegex(
-                    WorkbookError,
-                    "^corrupt_workbook$",
-                ) as raised:
-                    open_workbook(path)
+                with mock.patch(
+                    "open_tax_check.workbooks._open_binary_stream",
+                    side_effect=(formula_stream, cached_stream),
+                ):
+                    with self.assertRaisesRegex(
+                        WorkbookError,
+                        "^corrupt_workbook$",
+                    ) as raised:
+                        open_workbook(path)
 
         formula_workbook.close.assert_called_once_with()
+        self.assertTrue(formula_stream.closed)
+        self.assertTrue(cached_stream.closed)
         self.assertNotIn(sensitive_detail, str(raised.exception))
         self.assertNotIn(sensitive_close_detail, str(raised.exception))
+
+    def test_first_ooxml_load_failure_closes_owned_binary_stream(self):
+        stream = io.BytesIO(b"formula stream")
+        fake_openpyxl = types.SimpleNamespace(
+            load_workbook=mock.Mock(
+                side_effect=ValueError("private parser detail")
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "book.xlsx")
+
+            with mock.patch(
+                "open_tax_check.workbooks.import_module",
+                return_value=fake_openpyxl,
+            ):
+                with mock.patch(
+                    "open_tax_check.workbooks._open_binary_stream",
+                    return_value=stream,
+                ):
+                    with self.assertRaisesRegex(
+                        WorkbookError,
+                        "^corrupt_workbook$",
+                    ):
+                        open_workbook(path)
+
+        self.assertTrue(stream.closed)
 
     def test_xlsm_uses_two_hardened_read_only_handles(self):
         formula_workbook = types.SimpleNamespace(
@@ -379,25 +624,31 @@ class WorkbookReaderTests(unittest.TestCase):
                 with open_workbook(path):
                     pass
 
+        calls = fake_openpyxl.load_workbook.call_args_list
+        self.assertEqual(len(calls), 2)
+        formula_source = calls[0].args[0]
+        cached_source = calls[1].args[0]
+        self.assertIsNot(formula_source, cached_source)
         self.assertEqual(
-            fake_openpyxl.load_workbook.call_args_list,
-            [
-                mock.call(
-                    path,
-                    read_only=True,
-                    data_only=False,
-                    keep_links=False,
-                    keep_vba=False,
-                ),
-                mock.call(
-                    path,
-                    read_only=True,
-                    data_only=True,
-                    keep_links=False,
-                    keep_vba=False,
-                ),
-            ],
+            calls[0].kwargs,
+            {
+                "read_only": True,
+                "data_only": False,
+                "keep_links": False,
+                "keep_vba": False,
+            },
         )
+        self.assertEqual(
+            calls[1].kwargs,
+            {
+                "read_only": True,
+                "data_only": True,
+                "keep_links": False,
+                "keep_vba": False,
+            },
+        )
+        self.assertTrue(formula_source.closed)
+        self.assertTrue(cached_source.closed)
         formula_workbook.close.assert_called_once_with()
         cached_workbook.close.assert_called_once_with()
 
@@ -430,17 +681,42 @@ class WorkbookReaderTests(unittest.TestCase):
         cached_workbook.close.assert_called_once_with()
 
     def test_missing_excel_extra_has_stable_action(self):
-        with mock.patch(
-            "open_tax_check.workbooks.import_module",
-            side_effect=ModuleNotFoundError("sensitive import detail"),
-        ):
-            with self.assertRaisesRegex(
-                ExcelExtraRequired,
-                "^install_excel_extra$",
-            ) as raised:
-                open_workbook(Path("book.xlsx"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "book.xlsx")
+            with mock.patch(
+                "open_tax_check.workbooks.import_module",
+                side_effect=ModuleNotFoundError("sensitive import detail"),
+            ):
+                with self.assertRaisesRegex(
+                    ExcelExtraRequired,
+                    "^install_excel_extra$",
+                ) as raised:
+                    open_workbook(path)
 
         self.assertNotIn("sensitive import detail", str(raised.exception))
+
+    def test_missing_defusedxml_has_stable_excel_extra_action(self):
+        def import_excel_dependency(name):
+            if name == "defusedxml":
+                raise ModuleNotFoundError("sensitive defusedxml detail")
+            return importlib.import_module(name)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "book.xlsx")
+            with mock.patch(
+                "open_tax_check.workbooks.import_module",
+                side_effect=import_excel_dependency,
+            ):
+                with self.assertRaisesRegex(
+                    ExcelExtraRequired,
+                    "^install_excel_extra$",
+                ) as raised:
+                    open_workbook(path)
+
+        self.assertNotIn(
+            "sensitive defusedxml detail",
+            str(raised.exception),
+        )
 
     def test_unsupported_workbook_suffix_has_stable_diagnostic(self):
         with self.assertRaisesRegex(

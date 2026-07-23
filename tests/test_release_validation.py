@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -120,6 +121,144 @@ class ReleaseValidationTests(unittest.TestCase):
             target = root / relative_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(fixture.read_bytes())
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows junctions are only available on Windows",
+    )
+    def test_allowed_fixture_under_parent_junction_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            target = temp_path / "fixture-target"
+            target.mkdir()
+            (target / "fictional-journal.xls").write_bytes(
+                fixture.read_bytes()
+            )
+            link = root / "tests/fixtures"
+            link.parent.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(
+                    f"junctions are unavailable: {result.stderr.strip()}"
+                )
+            try:
+                subprocess.run(
+                    ["git", "add", str(relative_path)],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
+                validation_result, message = self.run_validator(root)
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(link)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+        self.assertEqual(validation_result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_allowed_fixture_symlink_to_exact_bytes_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(Path(directory) / "repository")
+            link = root / relative_path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                link.symlink_to(fixture)
+            except OSError as error:
+                self.skipTest(f"file symlinks are unavailable: {error}")
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_dangling_excel_symlink_is_rejected(self):
+        relative_path = Path("tests/fixtures/dangling.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            link = root / relative_path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                link.symlink_to(temp_path / "missing.xls")
+            except OSError as error:
+                self.skipTest(f"file symlinks are unavailable: {error}")
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    @unittest.skipIf(
+        os.name == "nt",
+        "POSIX parent symlink test",
+    )
+    def test_allowed_fixture_under_parent_symlink_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            target = temp_path / "fixture-target"
+            target.mkdir()
+            (target / "fictional-journal.xls").write_bytes(
+                fixture.read_bytes()
+            )
+            link = root / "tests/fixtures"
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target, target_is_directory=True)
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
 
             result, message = self.run_validator(root)
 

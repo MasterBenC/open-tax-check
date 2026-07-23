@@ -5,8 +5,10 @@ from __future__ import annotations
 from contextlib import suppress
 from dataclasses import dataclass
 from importlib import import_module
-from pathlib import Path, PurePosixPath
+from itertools import zip_longest
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterator
+from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile
 
 
@@ -16,6 +18,7 @@ MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_VISITED_CELLS = 5_000_000
 MAX_WORKSHEETS = 200
 OLE_COMPOUND_HEADER = bytes.fromhex("D0CF11E0A1B11AE1")
+_MISSING = object()
 
 
 class WorkbookError(Exception):
@@ -82,9 +85,17 @@ class WorkbookReader:
 
 
 class OpenPyxlReader(WorkbookReader):
-    def __init__(self, formula_workbook: Any, cached_workbook: Any) -> None:
+    def __init__(
+        self,
+        formula_workbook: Any,
+        cached_workbook: Any,
+        formula_stream: Any = None,
+        cached_stream: Any = None,
+    ) -> None:
         self._formula_workbook = formula_workbook
         self._cached_workbook = cached_workbook
+        self._formula_stream = formula_stream
+        self._cached_stream = cached_stream
 
     def sheets(self) -> tuple[SheetMeta, ...]:
         return tuple(
@@ -116,44 +127,102 @@ class OpenPyxlReader(WorkbookReader):
         row_count = max(0, max_row - min_row + 1)
         if row_count * max_col > MAX_VISITED_CELLS:
             raise WorkbookSafetyError("visited_cell_limit_exceeded")
-        for row_index, row in enumerate(
-            worksheet.iter_rows(
-                min_row=min_row,
-                max_row=max_row,
-                min_col=1,
-                max_col=max_col,
-            ),
-            start=min_row,
-        ):
-            values = []
-            for column_index, cell in enumerate(row, start=1):
-                value = getattr(cell, "value", None)
-                data_type = getattr(cell, "data_type", "n")
-                formula = value if data_type == "f" else None
-                cached_value = (
-                    cached_worksheet.cell(row_index, column_index).value
-                    if formula is not None
-                    else None
-                )
-                values.append(
-                    CellValue(
-                        row=row_index,
-                        column=column_index,
-                        coordinate=_coordinate(row_index, column_index),
-                        value=value,
-                        formula=formula,
-                        cached_value=cached_value,
-                        data_type=data_type,
-                        value_origin="formula" if formula is not None else "literal",
+        try:
+            iteration_options = {
+                "min_row": min_row,
+                "max_row": max_row,
+                "min_col": 1,
+                "max_col": max_col,
+            }
+            formula_rows = worksheet.iter_rows(**iteration_options)
+            cached_rows = cached_worksheet.iter_rows(**iteration_options)
+            visited_rows = 0
+            for row_index, (formula_row, cached_row) in enumerate(
+                zip_longest(
+                    formula_rows,
+                    cached_rows,
+                    fillvalue=_MISSING,
+                ),
+                start=min_row,
+            ):
+                if formula_row is _MISSING or cached_row is _MISSING:
+                    raise WorkbookError("corrupt_workbook")
+                formula_cells = tuple(formula_row)
+                cached_cells = tuple(cached_row)
+                if (
+                    len(formula_cells) != max_col
+                    or len(cached_cells) != max_col
+                ):
+                    raise WorkbookError("corrupt_workbook")
+                values = []
+                for column_index, (cell, cached_cell) in enumerate(
+                    zip(formula_cells, cached_cells),
+                    start=1,
+                ):
+                    coordinate = _coordinate(row_index, column_index)
+                    formula_coordinate = getattr(
+                        cell,
+                        "coordinate",
+                        coordinate,
                     )
-                )
-            yield tuple(values)
+                    cached_coordinate = getattr(
+                        cached_cell,
+                        "coordinate",
+                        coordinate,
+                    )
+                    if (
+                        formula_coordinate != coordinate
+                        or cached_coordinate != coordinate
+                    ):
+                        raise WorkbookError("corrupt_workbook")
+                    value = getattr(cell, "value", None)
+                    data_type = getattr(cell, "data_type", "n")
+                    formula = value if data_type == "f" else None
+                    cached_value = (
+                        getattr(cached_cell, "value", None)
+                        if formula is not None
+                        else None
+                    )
+                    values.append(
+                        CellValue(
+                            row=row_index,
+                            column=column_index,
+                            coordinate=coordinate,
+                            value=value,
+                            formula=formula,
+                            cached_value=cached_value,
+                            data_type=data_type,
+                            value_origin=(
+                                "formula"
+                                if formula is not None
+                                else "literal"
+                            ),
+                        )
+                    )
+                yield tuple(values)
+                visited_rows += 1
+            if visited_rows != row_count:
+                raise WorkbookError("corrupt_workbook")
+        except (ParseError, UnicodeDecodeError):
+            raise WorkbookError("corrupt_workbook") from None
 
     def close(self) -> None:
-        try:
-            self._formula_workbook.close()
-        finally:
-            self._cached_workbook.close()
+        first_error = None
+        for resource in (
+            self._formula_workbook,
+            self._cached_workbook,
+            self._formula_stream,
+            self._cached_stream,
+        ):
+            if resource is None:
+                continue
+            try:
+                resource.close()
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
 
 class XlrdReader(WorkbookReader):
@@ -286,6 +355,19 @@ def _required_module(name: str) -> Any:
         raise ExcelExtraRequired("install_excel_extra") from None
 
 
+def _open_binary_stream(path: Path) -> Any:
+    try:
+        return path.open("rb")
+    except OSError:
+        raise WorkbookError("workbook_io_error") from None
+
+
+def _close_suppressing_errors(*resources: Any) -> None:
+    for resource in resources:
+        with suppress(Exception):
+            resource.close()
+
+
 def _raise_openpyxl_error(error: Exception) -> None:
     message = str(error).casefold()
     explicit_encryption_error = isinstance(
@@ -331,12 +413,7 @@ def preflight_ooxml(path: Path) -> None:
             for item in members:
                 normalised_name = item.filename.replace("\\", "/")
                 parts = PurePosixPath(normalised_name).parts
-                has_drive = bool(
-                    parts
-                    and len(parts[0]) == 2
-                    and parts[0][0].isalpha()
-                    and parts[0][1] == ":"
-                )
+                has_drive = bool(PureWindowsPath(item.filename).drive)
                 if (
                     normalised_name.startswith("/")
                     or ".." in parts
@@ -348,7 +425,7 @@ def preflight_ooxml(path: Path) -> None:
                     raise WorkbookSafetyError(
                         "ooxml_compression_ratio_exceeded"
                     )
-    except BadZipFile:
+    except (BadZipFile, UnicodeDecodeError):
         raise WorkbookError("corrupt_workbook") from None
     except OSError:
         raise WorkbookError("workbook_io_error") from None
@@ -370,26 +447,33 @@ def open_workbook(path: Path) -> WorkbookReader:
     if suffix not in {".xlsx", ".xlsm"}:
         raise UnsupportedWorkbook("unsupported_workbook_format")
 
-    openpyxl = _required_module("openpyxl")
     preflight_ooxml(path)
+    _required_module("defusedxml")
+    openpyxl = _required_module("openpyxl")
+    formula_stream = _open_binary_stream(path)
     try:
         formula_workbook = openpyxl.load_workbook(
-            path,
+            formula_stream,
             read_only=True,
             data_only=False,
             keep_links=False,
             keep_vba=False,
         )
     except Exception as error:
+        _close_suppressing_errors(formula_stream)
         _raise_openpyxl_error(error)
     if len(formula_workbook.worksheets) > MAX_WORKSHEETS:
-        with suppress(Exception):
-            formula_workbook.close()
+        _close_suppressing_errors(formula_workbook, formula_stream)
         raise WorkbookSafetyError("worksheet_limit_exceeded")
+    try:
+        cached_stream = _open_binary_stream(path)
+    except WorkbookError:
+        _close_suppressing_errors(formula_workbook, formula_stream)
+        raise
     try:
         try:
             cached_workbook = openpyxl.load_workbook(
-                path,
+                cached_stream,
                 read_only=True,
                 data_only=True,
                 keep_links=False,
@@ -398,7 +482,15 @@ def open_workbook(path: Path) -> WorkbookReader:
         except Exception as error:
             _raise_openpyxl_error(error)
     except Exception:
-        with suppress(Exception):
-            formula_workbook.close()
+        _close_suppressing_errors(
+            cached_stream,
+            formula_workbook,
+            formula_stream,
+        )
         raise
-    return OpenPyxlReader(formula_workbook, cached_workbook)
+    return OpenPyxlReader(
+        formula_workbook,
+        cached_workbook,
+        formula_stream,
+        cached_stream,
+    )

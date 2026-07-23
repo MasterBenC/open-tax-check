@@ -106,3 +106,25 @@ def make_zip_member_name_fixture(path: Path, *, member_name: str) -> Path:
     with ZipFile(path, "w", compression=ZIP_STORED) as package:
         package.writestr(member_name, b"x")
     return path
+
+
+def make_bad_zip_metadata_fixture(path: Path) -> Path:
+    with ZipFile(path, "w", compression=ZIP_STORED) as package:
+        package.writestr("x.xml", b"x")
+
+    content = bytearray(path.read_bytes())
+    for signature, flag_offset, name_offset in (
+        (b"PK\x03\x04", 6, 30),
+        (b"PK\x01\x02", 8, 46),
+    ):
+        header = content.index(signature)
+        flags = int.from_bytes(
+            content[header + flag_offset : header + flag_offset + 2],
+            "little",
+        )
+        content[header + flag_offset : header + flag_offset + 2] = (
+            flags | 0x800
+        ).to_bytes(2, "little")
+        content[header + name_offset] = 0xFF
+    path.write_bytes(content)
+    return path

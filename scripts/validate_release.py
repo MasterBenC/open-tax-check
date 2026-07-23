@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 
@@ -102,6 +104,41 @@ def allowed_binary_fixture(relative_path: Path, path: Path) -> bool:
     )
 
 
+def _is_link_or_reparse(metadata: os.stat_result) -> bool:
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(attributes & reparse_flag)
+
+
+def safe_binary_candidate(
+    root: Path,
+    relative_path: Path,
+    path: Path,
+) -> bool:
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        return False
+    parent = root
+    for part in relative_path.parts[:-1]:
+        parent /= part
+        try:
+            metadata = os.lstat(parent)
+        except OSError:
+            return False
+        if _is_link_or_reparse(metadata) or not stat.S_ISDIR(
+            metadata.st_mode
+        ):
+            return False
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(metadata.st_mode) and not _is_link_or_reparse(
+        metadata
+    )
+
+
 def public_paths(root: Path) -> tuple[Path, ...] | None:
     try:
         proc = subprocess.run(
@@ -182,9 +219,13 @@ def main() -> int:
         return 1
     for relative_path in candidates:
         path = ROOT / relative_path
-        if not path.is_file():
-            continue
         if path.suffix.lower() in FORBIDDEN_BINARY_SUFFIXES:
+            if not safe_binary_candidate(ROOT, relative_path, path):
+                print(
+                    "forbidden public binary content in "
+                    f"{relative_path}: binary_public_content"
+                )
+                return 1
             if allowed_binary_fixture(relative_path, path):
                 continue
             print(
@@ -192,6 +233,8 @@ def main() -> int:
                 f"{relative_path}: binary_public_content"
             )
             return 1
+        if not path.is_file():
+            continue
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
