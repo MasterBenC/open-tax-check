@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import os
 import re
@@ -128,12 +129,19 @@ def _is_link_or_reparse(metadata: os.stat_result) -> bool:
     return bool(attributes & reparse_flag)
 
 
-def safe_binary_candidate(
+def safe_public_candidate(
     root: Path,
     relative_path: Path,
-    path: Path,
 ) -> bool:
     if relative_path.is_absolute() or ".." in relative_path.parts:
+        return False
+    try:
+        root_metadata = os.lstat(root)
+    except OSError:
+        return False
+    if _is_link_or_reparse(root_metadata) or not stat.S_ISDIR(
+        root_metadata.st_mode
+    ):
         return False
     parent = root
     for part in relative_path.parts[:-1]:
@@ -146,6 +154,7 @@ def safe_binary_candidate(
             metadata.st_mode
         ):
             return False
+    path = root / relative_path
     try:
         metadata = os.lstat(path)
     except OSError:
@@ -182,12 +191,13 @@ def public_paths(root: Path) -> tuple[Path, ...] | None:
 def public_content_size(root: Path, paths: tuple[Path, ...]) -> int | None:
     total = 0
     for relative_path in paths:
+        if not safe_public_candidate(root, relative_path):
+            return None
         try:
             metadata = os.lstat(root / relative_path)
         except OSError:
             return None
-        if stat.S_ISREG(metadata.st_mode) or _is_link_or_reparse(metadata):
-            total += metadata.st_size
+        total += metadata.st_size
     return total
 
 
@@ -270,13 +280,36 @@ def sensitive_category(content: str) -> str | None:
 
 
 def main() -> int:
-    missing = [name for name in REQUIRED if not (ROOT / name).is_file()]
-    if missing:
-        print("missing required files:", ", ".join(missing))
-        return 1
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--require-distributions",
+        action="store_true",
+        help="require exactly one wheel and one source distribution",
+    )
+    args = parser.parse_args()
+
     candidates = public_paths(ROOT)
     if candidates is None:
         print("unable to enumerate public release content")
+        return 1
+    for relative_path in candidates:
+        if safe_public_candidate(ROOT, relative_path):
+            continue
+        if relative_path.suffix.lower() in FORBIDDEN_BINARY_SUFFIXES:
+            print(
+                "forbidden public binary content in "
+                f"{relative_path}: binary_public_content"
+            )
+        else:
+            print(
+                "unsafe public release path: "
+                f"{relative_path} (unsafe_public_path)"
+            )
+        return 1
+    candidate_set = set(candidates)
+    missing = [name for name in REQUIRED if Path(name) not in candidate_set]
+    if missing:
+        print("missing required files:", ", ".join(missing))
         return 1
     skill_size = skill_public_content_size(ROOT, candidates)
     public_size = public_content_size(ROOT, candidates)
@@ -295,8 +328,27 @@ def main() -> int:
             f"实际 {public_size} 字节"
         )
         return 1
+    artifacts = distribution_artifacts(ROOT)
+    if args.require_distributions:
+        wheels = tuple(
+            artifact
+            for artifact in artifacts
+            if artifact.name.casefold().endswith(".whl")
+        )
+        sdists = tuple(
+            artifact
+            for artifact in artifacts
+            if artifact.name.casefold().endswith(".tar.gz")
+        )
+        if len(wheels) != 1 or len(sdists) != 1:
+            print(
+                "invalid distribution artifacts: expected exactly one wheel "
+                f"and one sdist (found wheels={len(wheels)}, "
+                f"sdists={len(sdists)})"
+            )
+            return 1
     measured_artifacts = []
-    for artifact in distribution_artifacts(ROOT):
+    for artifact in artifacts:
         try:
             size = artifact.stat().st_size
         except OSError:
@@ -312,12 +364,6 @@ def main() -> int:
     for relative_path in candidates:
         path = ROOT / relative_path
         if path.suffix.lower() in FORBIDDEN_BINARY_SUFFIXES:
-            if not safe_binary_candidate(ROOT, relative_path, path):
-                print(
-                    "forbidden public binary content in "
-                    f"{relative_path}: binary_public_content"
-                )
-                return 1
             if allowed_binary_fixture(relative_path, path):
                 continue
             print(

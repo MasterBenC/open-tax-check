@@ -123,6 +123,21 @@ class SkillContractTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("不得继续标准化、勾稽、跑规则或生成正式报告", text)
 
+    def test_skill_treats_excel_next_action_as_phase_2b_wait_not_rule_execution(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        excel = text.split("## 2. Excel / 工作簿走 Phase 2A", 1)[1].split(
+            "## 3. CSV 走兼容流程",
+            1,
+        )[0]
+
+        self.assertIn(
+            "| `partial_scope_ready`"
+            "（`next_action=await_phase_2b_excel_normalization`） |",
+            excel,
+        )
+        self.assertIn("CSV `run` 是独立流程", excel)
+        self.assertNotIn("run_available_checks", excel)
+
     def test_skill_gives_low_capability_agent_a_fixed_pressure_response_shape(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 

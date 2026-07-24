@@ -888,7 +888,7 @@ def inspection_state(
                 "needs_sheet_selection",
                 f"select_{role}_sheet",
             )
-    outcomes["partial_scope_ready"] = "run_available_checks"
+    outcomes["partial_scope_ready"] = "await_phase_2b_excel_normalization"
     for status in STATUS_PRIORITY:
         if status in outcomes:
             return status, outcomes[status]

@@ -115,6 +115,10 @@ class InspectPipelineTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "partial_scope_ready")
         self.assertEqual(
+            result["next_action"],
+            "await_phase_2b_excel_normalization",
+        )
+        self.assertEqual(
             artifact_names,
             {
                 "input_manifest.json",

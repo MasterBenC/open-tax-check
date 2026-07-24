@@ -28,11 +28,16 @@ class ReleaseValidationTests(unittest.TestCase):
         )
         return root
 
-    def run_validator(self, root):
+    def run_validator(self, root, *arguments):
         output = io.StringIO()
         with mock.patch.object(validate_release, "ROOT", root):
-            with contextlib.redirect_stdout(output):
-                result = validate_release.main()
+            with mock.patch.object(
+                sys,
+                "argv",
+                ["validate_release.py", *arguments],
+            ):
+                with contextlib.redirect_stdout(output):
+                    result = validate_release.main()
         return result, output.getvalue()
 
     def write_api_key_assignment(
@@ -72,6 +77,99 @@ class ReleaseValidationTests(unittest.TestCase):
             1 * 1024 * 1024,
         )
 
+    def test_ci_builds_before_strict_release_validation(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        build_step = "      - run: python -m build"
+        strict_validation_step = (
+            "      - run: python scripts/validate_release.py "
+            "--require-distributions"
+        )
+
+        self.assertIn(strict_validation_step, workflow)
+        self.assertLess(
+            workflow.index(build_step),
+            workflow.index(strict_validation_step),
+        )
+        self.assertNotIn(
+            "      - run: python scripts/validate_release.py\n",
+            workflow,
+        )
+
+    def test_require_distributions_rejects_missing_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+
+            result, message = self.run_validator(
+                root,
+                "--require-distributions",
+            )
+
+        self.assertEqual(result, 1, message)
+        self.assertIn(
+            "expected exactly one wheel and one sdist",
+            message,
+        )
+
+    def test_require_distributions_rejects_incomplete_or_ambiguous_sets(self):
+        cases = (
+            ("wheel_only", ("open_tax_check-0.1.0-py3-none-any.whl",)),
+            ("sdist_only", ("open_tax_check-0.1.0.tar.gz",)),
+            (
+                "duplicate_wheel",
+                (
+                    "open_tax_check-0.1.0-py3-none-any.whl",
+                    "open_tax_check-0.1.0-2-py3-none-any.whl",
+                    "open_tax_check-0.1.0.tar.gz",
+                ),
+            ),
+        )
+        for case, names in cases:
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / ".gitignore").write_text(
+                        "dist/\n",
+                        encoding="utf-8",
+                    )
+                    distribution = root / "dist"
+                    distribution.mkdir()
+                    for name in names:
+                        (distribution / name).write_bytes(b"safe")
+
+                    result, message = self.run_validator(
+                        root,
+                        "--require-distributions",
+                    )
+
+                self.assertEqual(result, 1, message)
+                self.assertIn(
+                    "expected exactly one wheel and one sdist",
+                    message,
+                )
+
+    def test_require_distributions_accepts_exact_wheel_and_sdist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+            distribution = root / "dist"
+            distribution.mkdir()
+            (distribution / "open_tax_check-0.1.0-py3-none-any.whl").write_bytes(
+                b"safe wheel"
+            )
+            (distribution / "open_tax_check-0.1.0.tar.gz").write_bytes(
+                b"safe sdist"
+            )
+
+            result, message = self.run_validator(
+                root,
+                "--require-distributions",
+            )
+
+        self.assertEqual(result, 0, message)
+        self.assertIn("release validation passed", message.lower())
+
     def test_release_validator_reports_actual_byte_sizes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.create_repository(directory)
@@ -109,6 +207,114 @@ class ReleaseValidationTests(unittest.TestCase):
 
         self.assertEqual(result, 1, message)
         self.assertIn("Git 公开发布内容超过 5242880 字节", message)
+
+    def test_direct_text_symlink_to_oversized_external_file_is_rejected(self):
+        relative_path = Path("large-public.txt")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            external = temp_path / "external.txt"
+            external.write_bytes(
+                b"x" * (validate_release.PUBLIC_RELEASE_LIMIT_BYTES + 1)
+            )
+            link = root / relative_path
+            try:
+                link.symlink_to(external)
+            except OSError as error:
+                self.skipTest(f"file symlinks are unavailable: {error}")
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "unsafe public release path: "
+            f"{relative_path} (unsafe_public_path)\n",
+        )
+
+    @unittest.skipIf(os.name == "nt", "POSIX parent symlink test")
+    def test_text_file_under_parent_symlink_is_rejected(self):
+        relative_path = Path("public/large-public.txt")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            external = temp_path / "external"
+            external.mkdir()
+            (external / "large-public.txt").write_bytes(
+                b"x" * (validate_release.PUBLIC_RELEASE_LIMIT_BYTES + 1)
+            )
+            link = root / "public"
+            link.symlink_to(external, target_is_directory=True)
+            candidates = tuple(
+                Path(name) for name in validate_release.REQUIRED
+            ) + (relative_path,)
+            with mock.patch.object(
+                validate_release,
+                "public_paths",
+                return_value=candidates,
+            ):
+                result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "unsafe public release path: "
+            f"{relative_path} (unsafe_public_path)\n",
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows junctions are only available on Windows",
+    )
+    def test_text_file_under_parent_junction_is_rejected(self):
+        relative_path = Path("public/large-public.txt")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            external = temp_path / "external"
+            external.mkdir()
+            (external / "large-public.txt").write_bytes(
+                b"x" * (validate_release.PUBLIC_RELEASE_LIMIT_BYTES + 1)
+            )
+            link = root / "public"
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(external)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(
+                    f"junctions are unavailable: {result.stderr.strip()}"
+                )
+            try:
+                subprocess.run(
+                    ["git", "add", str(relative_path)],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
+                validation_result, message = self.run_validator(root)
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(link)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+        self.assertEqual(validation_result, 1, message)
+        self.assertEqual(
+            message,
+            "unsafe public release path: "
+            f"{relative_path} (unsafe_public_path)\n",
+        )
 
     def test_oversized_distribution_artifacts_are_rejected(self):
         for name in ("open_tax_check-0.1.0-py3-none-any.whl", "open-tax-check.tar.gz"):
@@ -322,14 +528,15 @@ class ReleaseValidationTests(unittest.TestCase):
             link = root / "tests/fixtures"
             link.parent.mkdir(parents=True, exist_ok=True)
             link.symlink_to(target, target_is_directory=True)
-            subprocess.run(
-                ["git", "add", str(relative_path)],
-                cwd=root,
-                check=True,
-                capture_output=True,
-            )
-
-            result, message = self.run_validator(root)
+            candidates = tuple(
+                Path(name) for name in validate_release.REQUIRED
+            ) + (relative_path,)
+            with mock.patch.object(
+                validate_release,
+                "public_paths",
+                return_value=candidates,
+            ):
+                result, message = self.run_validator(root)
 
         self.assertEqual(result, 1, message)
         self.assertEqual(
