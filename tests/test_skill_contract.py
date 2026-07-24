@@ -56,6 +56,33 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("退出码 `0`", text)
         self.assertIn("`5` 表示已安全记录处理错误", text)
 
+    def test_skill_distinguishes_excel_inspect_from_csv_run_processing_errors(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        excel = text.split("## 2. Excel / 工作簿走 Phase 2A", 1)[1].split(
+            "## 压力请求的固定输出",
+            1,
+        )[0]
+        csv = text.split("## 3. CSV 走兼容流程", 1)[1].split(
+            "## 4. 专业复核与交付边界",
+            1,
+        )[0]
+
+        self.assertIn(
+            "| `needs_intake_review`（`next_action=inspect_processing_error`） | "
+            "检查本次 `inspect` 失败；退出码为 `4`，不复用旧输出。 |",
+            excel,
+        )
+        self.assertNotIn("| `blocked_processing_error` |", excel)
+        self.assertIn(
+            "`blocked_processing_error` 与退出码 `5` 只属于下文 CSV `run_case`",
+            excel,
+        )
+        self.assertIn(
+            "- `blocked_processing_error` / `inspect_processing_error`",
+            csv,
+        )
+        self.assertIn("`5` 表示已安全记录处理错误", csv)
+
     def test_skill_requires_explicit_excel_sheet_and_hidden_row_review(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         schema = (SKILL / "references" / "canonical-schema.md").read_text(

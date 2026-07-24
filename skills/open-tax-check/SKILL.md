@@ -41,7 +41,9 @@ python <skill-dir>/scripts/opentaxcheck.py inspect --case <case-dir>
 | `needs_intake_review` | 按 `next_action` 补期间、移除不安全入口或处理输入问题。 |
 | `needs_sheet_selection` | 由复核人执行 `select-sheet`。 |
 | `partial_scope_ready` | Phase 2A 到此停止；披露未执行的 2B 程序。 |
-| `blocked_processing_error` | 按 `inspect_processing_error` 检查失败运行，不复用旧输出。 |
+| `needs_intake_review`（`next_action=inspect_processing_error`） | 检查本次 `inspect` 失败；退出码为 `4`，不复用旧输出。 |
+
+Excel `inspect_case` 的处理异常使用上述契约；`blocked_processing_error` 与退出码 `5` 只属于下文 CSV `run_case`。
 
 只有唯一、可见、高置信且 `has_hidden_data` 为 `false` 的候选才可自动选择。其他情况都按以下正向顺序处理：
 
