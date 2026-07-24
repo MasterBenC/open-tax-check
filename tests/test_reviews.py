@@ -532,7 +532,7 @@ class SheetSelectionReviewTests(unittest.TestCase):
                 )
                 external.rename(original_work)
 
-    def test_same_role_partial_invalidation_keeps_other_sheet_confirmed(self):
+    def test_shifted_invalid_sheet_stays_manual_beside_valid_confirmed_sheets(self):
         from openpyxl import Workbook, load_workbook
 
         def make_journal(path: Path, voucher: str) -> None:
@@ -568,8 +568,10 @@ class SheetSelectionReviewTests(unittest.TestCase):
             )
             first_path = case / "input" / "journal-a.xlsx"
             second_path = case / "input" / "journal-b.xlsx"
+            third_path = case / "input" / "journal-c.xlsx"
             make_journal(first_path, "记-001")
             make_journal(second_path, "记-101")
+            make_journal(third_path, "记-201")
             inspect_case(case)
             inventory = json.loads(
                 (case / "work" / "workbook_inventory.json").read_text(
@@ -587,9 +589,12 @@ class SheetSelectionReviewTests(unittest.TestCase):
                     reviewer="host:user",
                 )
             workbook = load_workbook(first_path)
-            workbook.active.append(
+            workbook["Journal"].append(
                 ("记-002", "2026-01-03", "库存现金", 50, 0)
             )
+            for index in range(8):
+                notes = workbook.create_sheet(f"Notes {index + 1}", 0)
+                notes["A1"] = f"fictional note {index + 1}"
             workbook.save(first_path)
             workbook.close()
 
@@ -604,14 +609,36 @@ class SheetSelectionReviewTests(unittest.TestCase):
             }
 
         self.assertEqual(code, 4)
-        self.assertEqual(result["status"], "needs_sheet_selection")
+        self.assertEqual(
+            result["status"],
+            "needs_sheet_selection",
+            result,
+        )
         self.assertEqual(
             by_filename["journal-a.xlsx"]["decision_source"],
             "manual",
         )
         self.assertEqual(
+            by_filename["journal-a.xlsx"]["sheet_id"],
+            "sheet-0009",
+        )
+        self.assertEqual(
             by_filename["journal-b.xlsx"]["decision_source"],
             "confirmed",
+        )
+        self.assertEqual(
+            by_filename["journal-c.xlsx"]["decision_source"],
+            "confirmed",
+        )
+        self.assertEqual(len(selection["journal"]), 3)
+        self.assertEqual(
+            len(
+                {
+                    (item["source_id"], item["sheet_id"])
+                    for item in selection["journal"]
+                }
+            ),
+            3,
         )
 
     def test_inspect_reuses_valid_decisions_and_invalidates_only_changed_source(self):

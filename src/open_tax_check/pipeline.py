@@ -832,32 +832,26 @@ def apply_sheet_selection_reviews(
         if item.get("role") in _INSPECTION_ROLES
     }
     for role in _INSPECTION_ROLES:
-        confirmed = confirmed_by_role.get(role, [])
+        confirmed = []
+        current_keys = set()
+        for candidate in confirmed_by_role.get(role, []):
+            key = (candidate["source_id"], candidate["sheet_id"])
+            if key not in current_keys:
+                confirmed.append(candidate)
+                current_keys.add(key)
         if role not in invalid_roles:
             if role in valid:
                 selection[role] = confirmed
             continue
 
-        invalid_bindings = [
-            item["binding"]
-            for item in invalid
-            if item.get("role") == role
-        ]
         affected_candidates = []
         for candidate in selection[role]:
-            if any(
-                candidate["sheet_id"] == binding["sheet_id"]
-                and (
-                    candidate["source_id"]
-                    == binding["source_sha256"][:16]
-                    or candidate["filename"]
-                    == binding["source_filename"]
-                )
-                for binding in invalid_bindings
-            ):
+            key = (candidate["source_id"], candidate["sheet_id"])
+            if key not in current_keys:
                 affected_candidates.append(
                     {**candidate, "decision_source": "manual"}
                 )
+                current_keys.add(key)
         selection[role] = [*confirmed, *affected_candidates]
     return invalid_roles
 
