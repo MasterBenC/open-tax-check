@@ -7,6 +7,7 @@ import sys
 
 from .case import init_case, set_case_scope
 from .pipeline import inspect_case, run_case
+from .reviews import ReviewError, confirm_sheet_selection
 
 
 def _configure_utf8_output() -> None:
@@ -36,6 +37,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inventory workbook sheets and evidence coverage",
     )
     inspect_parser.add_argument("--case", required=True, type=Path)
+    select_parser = subparsers.add_parser(
+        "select-sheet",
+        help="Confirm a source-bound worksheet selection",
+    )
+    select_parser.add_argument("--case", required=True, type=Path)
+    select_parser.add_argument("--role", required=True)
+    select_parser.add_argument("--source", required=True)
+    select_parser.add_argument("--sheet", required=True)
+    select_parser.add_argument(
+        "--header-row",
+        required=True,
+        action="append",
+        type=int,
+    )
+    select_parser.add_argument("--hidden-rows", required=True)
+    select_parser.add_argument("--reviewer", required=True)
     run_parser = subparsers.add_parser("run", help="Run deterministic ingestion and screening")
     run_parser.add_argument("--case", required=True, type=Path)
     run_parser.add_argument("--ai-mode", choices=["off", "assist", "deep"], default="assist")
@@ -60,6 +77,49 @@ def main() -> int:
         code, result = inspect_case(args.case)
         print(json.dumps(result, ensure_ascii=False))
         return code
+    if args.command == "select-sheet":
+        try:
+            decision = confirm_sheet_selection(
+                args.case,
+                role=args.role,
+                source_id=args.source,
+                sheet_id=args.sheet,
+                header_rows=tuple(args.header_row),
+                hidden_rows=args.hidden_rows,
+                reviewer=args.reviewer,
+            )
+        except ReviewError as error:
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_sheet_selection",
+                        "error_type": str(error),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 4
+        except Exception:
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_sheet_selection",
+                        "error_type": "select_sheet_failed",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 4
+        print(
+            json.dumps(
+                {
+                    "status": "sheet_selection_confirmed",
+                    "selection": decision,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
     if args.command == "run":
         code, result = run_case(args.case, args.ai_mode)
         print(json.dumps(result, ensure_ascii=False))

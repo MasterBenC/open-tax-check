@@ -22,6 +22,7 @@ from .intake import (
 from .mapping import map_headers
 from .numeric import exact_add, exact_subtract, format_money, parse_decimal
 from .quality import validate_journal_quality
+from .reviews import load_valid_sheet_selections
 from .rules import business_entertainment_adjustment
 from .schemas import SCHEMA_VERSION, SheetRecord, SourceRecord, to_dict
 from .semantic import detect_semantic_candidates
@@ -771,10 +772,77 @@ def build_sheet_selection(inventory: _WorkbookInspection) -> dict:
     return selection
 
 
+def _confirmed_sheet_candidate(
+    decision: dict,
+    inventory: _WorkbookInspection,
+) -> dict:
+    binding = decision["binding"]
+    workbook = next(
+        item
+        for item in inventory.workbooks
+        if item["sha256"] == binding["source_sha256"]
+    )
+    sheet = next(
+        item
+        for item in workbook["sheets"]
+        if item["sheet_id"] == binding["sheet_id"]
+    )
+    score = _score_for(sheet, decision["role"])
+    return {
+        "source_id": workbook["source_id"],
+        "filename": workbook["filename"],
+        "sheet_id": sheet["sheet_id"],
+        "sheet_name": sheet["name"],
+        "visibility": sheet["visibility"],
+        "header_rows": decision["header_rows"],
+        "score": score,
+        "confidence": confidence_band(score),
+        "has_hidden_data": sheet["has_hidden_data"],
+        "decision_source": "confirmed",
+        "hidden_rows": decision["hidden_rows"],
+        "reviewer": decision["reviewer"],
+        "selection_fingerprint": binding["fingerprint"],
+    }
+
+
+def apply_sheet_selection_reviews(
+    case_dir: Path,
+    inventory: _WorkbookInspection,
+    selection: dict,
+) -> set[str]:
+    inventory_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "workbooks": list(inventory.workbooks),
+        "issues": list(inventory.issues),
+    }
+    valid, invalid = load_valid_sheet_selections(
+        case_dir,
+        inventory_payload,
+    )
+    for role, decisions in valid.items():
+        selection[role] = [
+            _confirmed_sheet_candidate(decision, inventory)
+            for decision in decisions
+        ]
+
+    invalid_roles = {
+        item["role"]
+        for item in invalid
+        if item.get("role") in _INSPECTION_ROLES
+    }
+    for role in invalid_roles:
+        selection[role] = [
+            {**candidate, "decision_source": "manual"}
+            for candidate in selection[role]
+        ]
+    return invalid_roles
+
+
 def inspection_state(
     intake: IntakeResult,
     inventory: _WorkbookInspection,
     selection: dict,
+    invalid_review_roles: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[str, str]:
     outcomes = {}
     if intake.issues:
@@ -783,10 +851,21 @@ def inspection_state(
         outcomes["needs_intake_review"] = "resolve_workbook_issues"
     for role in _INSPECTION_ROLES:
         candidates = selection[role]
-        if candidates and not (
-            len(candidates) == 1
-            and candidates[0]["decision_source"] == "automatic"
-        ):
+        resolved = (
+            role not in invalid_review_roles
+            and candidates
+            and (
+                (
+                    len(candidates) == 1
+                    and candidates[0]["decision_source"] == "automatic"
+                )
+                or all(
+                    candidate["decision_source"] == "confirmed"
+                    for candidate in candidates
+                )
+            )
+        )
+        if (candidates or role in invalid_review_roles) and not resolved:
             outcomes.setdefault(
                 "needs_sheet_selection",
                 f"select_{role}_sheet",
@@ -953,10 +1032,16 @@ def inspect_case(case_dir: Path) -> tuple[int, dict]:
         )
         inventory = inspect_workbooks(case_dir, intake.sources)
         selection = build_sheet_selection(inventory)
+        invalid_review_roles = apply_sheet_selection_reviews(
+            case_dir,
+            inventory,
+            selection,
+        )
         status, next_action = inspection_state(
             intake,
             inventory,
             selection,
+            invalid_review_roles,
         )
         artifacts = write_inspection_artifacts(
             run_work_dir=run_dir / "work",
