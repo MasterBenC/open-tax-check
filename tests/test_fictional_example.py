@@ -40,7 +40,7 @@ class FictionalExampleTests(unittest.TestCase):
         self.assertIn("随本仓库按 Apache License 2.0 许可", text)
         self.assertIn("`--output` 必须指向不存在或空目录", text)
 
-    def test_example_generates_expected_findings(self):
+    def test_example_generates_and_inspects_fictional_xlsx_without_running_rules(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source_before = JOURNAL.read_bytes()
             proc = subprocess.run(
@@ -50,22 +50,30 @@ class FictionalExampleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            findings = json.loads(
-                (Path(temp_dir) / "output/findings.json").read_text(encoding="utf-8")
+            generated = Path(temp_dir) / "input/journal.xlsx"
+            self.assertTrue(generated.is_file())
+            state = json.loads(
+                (Path(temp_dir) / "state.json").read_text(encoding="utf-8")
             )
-            by_rule = {item["rule_id"]: item for item in findings}
-            self.assertEqual(by_rule["CIT-BE-001"]["tax_adjustment"], "15000.00")
-            self.assertIn("SEM-EXP-001", by_rule)
-            state = json.loads((Path(temp_dir) / "state.json").read_text(encoding="utf-8"))
-            self.assertEqual(state["status"], "needs_professional_review")
-            self.assertTrue((Path(temp_dir) / "output/report.md").is_file())
+            self.assertEqual(state["status"], "partial_scope_ready")
+            self.assertTrue(
+                (Path(temp_dir) / "work/workbook_inventory.json").is_file()
+            )
+            self.assertTrue(
+                (Path(temp_dir) / "work/sheet_selection.json").is_file()
+            )
+            self.assertTrue(
+                (Path(temp_dir) / "work/coverage_matrix.json").is_file()
+            )
+            self.assertFalse((Path(temp_dir) / "output/findings.json").exists())
+            self.assertFalse((Path(temp_dir) / "output/report.md").exists())
             self.assertEqual(JOURNAL.read_bytes(), source_before)
 
     def test_example_refuses_nonempty_output_without_changing_existing_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             state = output_dir / "state.json"
-            journal = output_dir / "input/journal.csv"
+            journal = output_dir / "input/journal.xlsx"
             marker = output_dir / "keep.me"
             journal.parent.mkdir()
             state.write_text("sentinel state", encoding="utf-8")
@@ -88,13 +96,13 @@ class FictionalExampleTests(unittest.TestCase):
 
     def test_root_readme_runs_the_example_without_claiming_it_is_missing(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
-        section = text.split("## Run the fictional example", 1)[1].split("## Outputs", 1)[0]
+        section = text.split("## 运行虚构示例", 1)[1].split("## 输出", 1)[0]
 
         self.assertIn(r".\.venv\Scripts\python.exe scripts\run_fictional_example.py", section)
         self.assertIn("python scripts/run_fictional_example.py", section)
-        self.assertIn("output/findings.json", section)
-        self.assertIn("output/report.md", section)
-        self.assertIn("needs_professional_review", section)
+        self.assertIn("workbook_inventory.json", section)
+        self.assertIn("coverage_matrix.json", section)
+        self.assertIn("partial_scope_ready", section)
         self.assertIn("`--output` 必须指向不存在或空目录", section)
         self.assertNotIn("尚未提供", section)
 

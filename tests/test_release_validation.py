@@ -61,6 +61,75 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("release validation passed", proc.stdout.lower())
 
+    def test_volume_limits_are_explicit_binary_byte_limits(self):
+        self.assertEqual(validate_release.SKILL_PUBLIC_LIMIT_BYTES, 250 * 1024)
+        self.assertEqual(
+            validate_release.PUBLIC_RELEASE_LIMIT_BYTES,
+            5 * 1024 * 1024,
+        )
+        self.assertEqual(
+            validate_release.DISTRIBUTION_FILE_LIMIT_BYTES,
+            1 * 1024 * 1024,
+        )
+
+    def test_release_validator_reports_actual_byte_sizes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 0, message)
+        self.assertRegex(
+            message,
+            r"Skill 公开文件：\d+ 字节（上限 256000 字节）",
+        )
+        self.assertRegex(
+            message,
+            r"Git 公开发布内容：\d+ 字节（上限 5242880 字节）",
+        )
+
+    def test_oversized_skill_public_content_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / "skills/open-tax-check/SKILL.md").write_bytes(
+                b"x" * (250 * 1024 + 1)
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertIn("Skill 公开文件超过 256000 字节", message)
+
+    def test_oversized_git_public_release_content_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / "large-public.txt").write_bytes(b"x" * (5 * 1024 * 1024))
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertIn("Git 公开发布内容超过 5242880 字节", message)
+
+    def test_oversized_distribution_artifacts_are_rejected(self):
+        for name in ("open_tax_check-0.1.0-py3-none-any.whl", "open-tax-check.tar.gz"):
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / ".gitignore").write_text(
+                        "dist/\n", encoding="utf-8"
+                    )
+                    artifact = root / "dist" / name
+                    artifact.parent.mkdir()
+                    artifact.write_bytes(b"x" * (1024 * 1024 + 1))
+
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 1, message)
+                self.assertIn(
+                    f"构建产物 {name} 超过 1048576 字节",
+                    message,
+                )
+
     def test_only_exact_fictional_xls_fixture_is_allowed(self):
         fixture = ROOT / "tests/fixtures/fictional-journal.xls"
         relative_path = Path("tests/fixtures/fictional-journal.xls")
@@ -402,7 +471,10 @@ class ReleaseValidationTests(unittest.TestCase):
                     result, message = self.run_validator(root)
 
                 self.assertEqual(result, 0, message)
-                self.assertEqual(message, "release validation passed\n")
+                self.assertTrue(
+                    message.endswith("release validation passed\n"),
+                    message,
+                )
 
     def test_extended_api_key_config_syntaxes_fail_without_echoing_values(self):
         secret = "synthetic" + "_config_value"
@@ -625,7 +697,10 @@ class ReleaseValidationTests(unittest.TestCase):
                         result, message = self.run_validator(root)
 
                     self.assertEqual(result, 0, message)
-                    self.assertEqual(message, "release validation passed\n")
+                    self.assertTrue(
+                        message.endswith("release validation passed\n"),
+                        message,
+                    )
                     self.assertNotIn(secret, message)
 
     def test_empty_and_regex_like_api_key_forms_remain_allowed(self):
@@ -667,7 +742,10 @@ class ReleaseValidationTests(unittest.TestCase):
                     result, message = self.run_validator(root)
 
                 self.assertEqual(result, 0, message)
-                self.assertEqual(message, "release validation passed\n")
+                self.assertTrue(
+                    message.endswith("release validation passed\n"),
+                    message,
+                )
 
     def test_existing_sensitive_patterns_keep_safe_fixed_categories(self):
         cases = (
@@ -758,6 +836,19 @@ class ReleaseValidationTests(unittest.TestCase):
             ".tgz",
             ".xz",
             ".zip",
+            ".bin",
+            ".ckpt",
+            ".gguf",
+            ".h5",
+            ".hdf5",
+            ".keras",
+            ".model",
+            ".onnx",
+            ".ot",
+            ".pt",
+            ".pth",
+            ".safetensors",
+            ".tflite",
         )
         private_bytes = b"safe-looking-utf8-private-client-binary-contents"
 

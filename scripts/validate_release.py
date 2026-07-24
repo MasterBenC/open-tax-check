@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SKILL_PUBLIC_LIMIT_BYTES = 250 * 1024
+PUBLIC_RELEASE_LIMIT_BYTES = 5 * 1024 * 1024
+DISTRIBUTION_FILE_LIMIT_BYTES = 1 * 1024 * 1024
 REQUIRED = (
     "README.md",
     "LICENSE",
@@ -77,6 +80,19 @@ FORBIDDEN_BINARY_SUFFIXES = {
     ".tgz",
     ".xz",
     ".zip",
+    ".bin",
+    ".ckpt",
+    ".gguf",
+    ".h5",
+    ".hdf5",
+    ".keras",
+    ".model",
+    ".onnx",
+    ".ot",
+    ".pt",
+    ".pth",
+    ".safetensors",
+    ".tflite",
 }
 ALLOWED_BINARY_FIXTURES = {
     "tests/fixtures/fictional-journal.xls": (
@@ -163,6 +179,51 @@ def public_paths(root: Path) -> tuple[Path, ...] | None:
     return tuple(Path(name.decode("utf-8", errors="surrogateescape")) for name in names)
 
 
+def public_content_size(root: Path, paths: tuple[Path, ...]) -> int | None:
+    total = 0
+    for relative_path in paths:
+        try:
+            metadata = os.lstat(root / relative_path)
+        except OSError:
+            return None
+        if stat.S_ISREG(metadata.st_mode) or _is_link_or_reparse(metadata):
+            total += metadata.st_size
+    return total
+
+
+def skill_public_content_size(
+    root: Path,
+    paths: tuple[Path, ...],
+) -> int | None:
+    skill_root = Path("skills/open-tax-check")
+    skill_paths = tuple(
+        relative_path
+        for relative_path in paths
+        if relative_path == skill_root or skill_root in relative_path.parents
+    )
+    return public_content_size(root, skill_paths)
+
+
+def distribution_artifacts(root: Path) -> tuple[Path, ...]:
+    distribution = root / "dist"
+    if not distribution.is_dir():
+        return ()
+    return tuple(
+        sorted(
+            (
+                path
+                for path in distribution.iterdir()
+                if path.is_file()
+                and (
+                    path.name.casefold().endswith(".whl")
+                    or path.name.casefold().endswith(".tar.gz")
+                )
+            ),
+            key=lambda path: path.name.casefold(),
+        )
+    )
+
+
 def _indent_width(prefix: str) -> int:
     return len(prefix.expandtabs(8))
 
@@ -217,6 +278,37 @@ def main() -> int:
     if candidates is None:
         print("unable to enumerate public release content")
         return 1
+    skill_size = skill_public_content_size(ROOT, candidates)
+    public_size = public_content_size(ROOT, candidates)
+    if skill_size is None or public_size is None:
+        print("unable to measure public release content")
+        return 1
+    if skill_size >= SKILL_PUBLIC_LIMIT_BYTES:
+        print(
+            f"Skill 公开文件超过 {SKILL_PUBLIC_LIMIT_BYTES} 字节："
+            f"实际 {skill_size} 字节"
+        )
+        return 1
+    if public_size >= PUBLIC_RELEASE_LIMIT_BYTES:
+        print(
+            f"Git 公开发布内容超过 {PUBLIC_RELEASE_LIMIT_BYTES} 字节："
+            f"实际 {public_size} 字节"
+        )
+        return 1
+    measured_artifacts = []
+    for artifact in distribution_artifacts(ROOT):
+        try:
+            size = artifact.stat().st_size
+        except OSError:
+            print(f"unable to measure distribution artifact: {artifact.name}")
+            return 1
+        if size >= DISTRIBUTION_FILE_LIMIT_BYTES:
+            print(
+                f"构建产物 {artifact.name} 超过 "
+                f"{DISTRIBUTION_FILE_LIMIT_BYTES} 字节：实际 {size} 字节"
+            )
+            return 1
+        measured_artifacts.append((artifact.name, size))
     for relative_path in candidates:
         path = ROOT / relative_path
         if path.suffix.lower() in FORBIDDEN_BINARY_SUFFIXES:
@@ -250,6 +342,19 @@ def main() -> int:
         if category:
             print(f"forbidden public content in {relative_path}: {category}")
             return 1
+    print(
+        f"Skill 公开文件：{skill_size} 字节"
+        f"（上限 {SKILL_PUBLIC_LIMIT_BYTES} 字节）"
+    )
+    print(
+        f"Git 公开发布内容：{public_size} 字节"
+        f"（上限 {PUBLIC_RELEASE_LIMIT_BYTES} 字节）"
+    )
+    for name, size in measured_artifacts:
+        print(
+            f"构建产物 {name}：{size} 字节"
+            f"（上限 {DISTRIBUTION_FILE_LIMIT_BYTES} 字节）"
+        )
     print("release validation passed")
     return 0
 

@@ -1,23 +1,31 @@
-# Changelog
+# 更新日志
 
-All notable changes to this project will be documented in this file.
+本文件记录项目的重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [未发布]
 
-## [Unreleased]
+下一计划版本为 `0.1.0`（未发布）。除非明确授权创建 GitHub tag，否则本仓库保持未发布状态（remains unpublished until creation of a GitHub tag is explicitly authorized.）。
 
-The next planned version is `0.1.0`（未发布）. This repository-foundation release
-remains unpublished until creation of a GitHub tag is explicitly authorized.
+### 新增
 
-### Added
+- `.xlsx`、`.xlsm`、`.xls` 的安全盘点、工作表候选识别、资料覆盖矩阵和人工 `select-sheet` 流程。
+- 工作簿限制、加密/损坏诊断、公式缓存、隐藏工作表、隐藏行和合并区域的确定性检查。
+- 选表决定与来源哈希、sheet、表头行、隐藏行处理、检查期间和 schema 版本绑定，并在来源变化时选择性失效。
+- 运行时生成虚构 `.xlsx` 的 Phase 2A 示例；仓库不提交示例 Excel 二进制。
+- Skill、Git 公开发布内容和构建包的确定性体积门禁。
 
-- Repository governance, contribution, security, privacy, and professional-review boundaries.
-- Deterministic CSV intake, mapping, data-quality gates, initial rule evaluation, and traceable JSON/JSONL and Markdown outputs.
-- A fully fictional, balanced CSV example and local runner for the deterministic core.
-- A public roadmap that separates completed repository-foundation work from planned public-v1 capabilities.
+### 变更
 
-### Changed
+- 公开文档和 Agent Skill 明确区分 Phase 2A 的安全盘点/选表与 Phase 2B 的业务行标准化、勾稽、规则和正式报告。
+- 资料覆盖矩阵对缺失、未解析和未执行程序保持显式状态，不把它们描述为“无风险”。
+- 业务招待费规则 `CIT-BE-001` 升至 `2026.2`：账内收入基数识别主营业务和其他业务收入，并继续要求与年度企业所得税申报表及视同销售收入核对。
+- CSV 输入继续对目录、符号链接和其他不支持的顶层入口失败关闭，且不跟随或哈希其内容。
 
-- Business-entertainment rule `CIT-BE-001` advances to `2026.2`: the ledger revenue basis recognizes main-business and other-business revenue accounts and explicitly remains incomplete until reconciled to the annual CIT return and deemed-sales revenue.
-- CSV intake now fails closed on directories, symbolic links, and other unsupported top-level entries without following or hashing their contents.
+### 保持兼容
+
+- 现有 CSV `run` 流程、字段映射、数据质量门槛、确定性规则、语义候选和内部 Markdown 草稿保持兼容。
+
+### 尚未实现
+
+- Excel 业务行标准化、Excel 勾稽、Excel 税务规则执行和正式客户报告属于 Phase 2B。
+- PDF、图片 OCR、联网企业数据、专业工作底稿、DOCX/PDF 报告和完整证据包尚未实现。

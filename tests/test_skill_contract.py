@@ -8,16 +8,30 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_skill_frontmatter_is_trigger_only_and_chinese_body_is_concise(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        frontmatter = text.split("---", 2)[1]
+        description = next(
+            line.removeprefix("description: ").strip()
+            for line in frontmatter.splitlines()
+            if line.startswith("description: ")
+        )
+
+        self.assertTrue(description.startswith("Use when "))
+        self.assertNotIn("including field normalization", description)
+        self.assertIn("# OpenTaxCheck 税务健康检查", text)
+        self.assertLessEqual(len(text.splitlines()), 160)
+
     def test_skill_declares_required_boundaries(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("name: open-tax-check", text)
         self.assertIn("needs_mapping_review", text)
         self.assertIn("blocked_data_quality", text)
         self.assertIn("professional review", text.lower())
-        self.assertIn("Never turn a keyword or semantic match into a tax conclusion", text)
-        self.assertIn("Its status remains `candidate`", text)
-        self.assertIn("Preserve source lineage", text)
-        self.assertIn("Never call code output “100% accurate.”", text)
+        self.assertIn("不得把关键词或语义命中变成税务结论", text)
+        self.assertIn("状态保持 `candidate`", text)
+        self.assertIn("来源血缘", text)
+        self.assertIn("永远不要称代码输出“100% 准确”", text)
 
     def test_skill_declares_complete_professional_review_gate(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -25,36 +39,84 @@ class SkillContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("needs_professional_review", text)
-        self.assertIn(
-            "Never put an unreviewed finding into a client-facing conclusion.", text
-        )
-        self.assertIn(
-            "Only reviewed findings with an approved report status may enter a "
-            "client-facing report.",
-            text,
-        )
+        self.assertIn("不得把未复核结果放入客户结论", text)
+        self.assertIn("才具备进入客户报告的资格", text)
         self.assertIn("`report_status`", methodology)
-        self.assertIn("exactly `approved`", methodology)
-        self.assertIn("does not generate a formal client report", methodology)
+        self.assertIn("恰为 `approved`", methodology)
+        self.assertIn("不生成正式客户报告", methodology)
 
     def test_skill_requires_unambiguous_csv_selection_and_explains_run_history(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("Put exactly one journal CSV", text)
+        self.assertIn("只能放一份普通、非符号链接的 CSV 序时账", text)
         self.assertIn("provide_exactly_one_csv_journal", text)
         self.assertIn("`runs/run-XXXX/manifest.json`", text)
         self.assertIn("`blocked_processing_error`", text)
         self.assertIn("`inspect_processing_error`", text)
-        self.assertIn("Exit code `5`", text)
+        self.assertIn("退出码 `0`", text)
+        self.assertIn("`5` 表示已安全记录处理错误", text)
+
+    def test_skill_requires_explicit_excel_sheet_and_hidden_row_review(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        schema = (SKILL / "references" / "canonical-schema.md").read_text(
+            encoding="utf-8"
+        )
+        methodology = (SKILL / "references" / "methodology.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("needs_sheet_selection", text)
+        self.assertIn("select-sheet", text)
+        self.assertIn("不得自动选择隐藏工作表", text)
+        self.assertIn("必须是 `include` 或 `exclude`", text)
+        self.assertIn("`.xlsx`、`.xlsm`、`.xls`", text)
+        self.assertIn("资料覆盖矩阵", methodology)
+        self.assertIn("尚未标准化 Excel 业务行", schema)
+        self.assertIn("2B", schema)
+        self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", text)
+
+    def test_skill_application_contract_stops_at_phase_2a_boundary(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+        expected_sequence = (
+            "读取 `state.json`",
+            "`needs_sheet_selection`",
+            "`select-sheet`",
+            "`--hidden-rows include` 或 `--hidden-rows exclude`",
+            "再次运行 `inspect`",
+            "`partial_scope_ready`",
+        )
+        cursor = text.index("## 2. Excel / 工作簿走 Phase 2A")
+        positions = []
+        for item in expected_sequence:
+            position = text.find(item, cursor)
+            positions.append(position)
+            cursor = position + len(item)
+        self.assertNotIn(-1, positions)
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("不得继续标准化、勾稽、跑规则或生成正式报告", text)
+
+    def test_skill_gives_low_capability_agent_a_fixed_pressure_response_shape(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("## 压力请求的固定输出", text)
+        self.assertIn("回答采用以下固定形状", text)
+        pressure = text.split("## 压力请求的固定输出", 1)[1].split(
+            "## 3. CSV 走兼容流程",
+            1,
+        )[0]
+        self.assertIn("opentaxcheck.py inspect --case <case-dir>", pressure)
+        self.assertIn("opentaxcheck.py select-sheet", pressure)
+        self.assertIn("# STOP：`partial_scope_ready`", pressure)
+        self.assertIn("不进入 2B", pressure)
 
     def test_skill_uses_only_portable_commands_and_ai_modes(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         expected_mode_declaration = (
-            "- Supported AI modes are exactly `off`, `assist`, and `deep`; use "
-            "`off` when AI is unavailable."
+            "- AI 模式只允许 `off`、`assist`、`deep`；无可用 AI 时使用 `off`。"
         )
         mode_declarations = [
-            line for line in text.splitlines() if "ai mode" in line.casefold()
+            line for line in text.splitlines() if line.startswith("- AI 模式")
         ]
         self.assertEqual(mode_declarations, [expected_mode_declaration])
 
@@ -62,14 +124,12 @@ class SkillContractTests(unittest.TestCase):
             r"python <skill-dir>/scripts/([^\s]+)", text
         )
         self.assertEqual(set(command_targets), {"opentaxcheck.py"})
-        self.assertEqual(len(command_targets), 2)
+        self.assertEqual(len(command_targets), 7)
 
         cli_modes = set(re.findall(r"--ai-mode ([a-z][a-z0-9-]*)", text))
-        prose_modes = re.search(
-            r"Use `([a-z][a-z0-9-]*)` or `([a-z][a-z0-9-]*)` only if", text
+        documented_modes = cli_modes | set(
+            re.findall(r"`(off|assist|deep)`", expected_mode_declaration)
         )
-        self.assertIsNotNone(prose_modes)
-        documented_modes = cli_modes | set(prose_modes.groups())
         self.assertEqual(documented_modes, {"off", "assist", "deep"})
 
         self.assertNotIn("enhanced", text)
@@ -88,8 +148,8 @@ class SkillContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("recorded in `conflicts`", text)
-        self.assertIn("block automatic calculation", text)
+        self.assertIn("记录到 `conflicts`", text)
+        self.assertIn("阻止自动计算", text)
 
     def test_skill_documents_deterministic_date_and_period_quality_contract(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -105,11 +165,11 @@ class SkillContractTests(unittest.TestCase):
 
         for date_form in ("`YYYY-MM-DD`", "`YYYY/M/D`", "`YYYY.M.D`"):
             self.assertIn(date_form, schema)
-        self.assertIn("`period` (`YYYY-MM`)", schema)
-        self.assertIn("`tax_year` (`YYYY`)", schema)
-        self.assertIn("voucher number within each accounting period", methodology)
-        self.assertIn("Missing or invalid dates block hard rules", methodology)
-        self.assertIn("calculated separately for each tax year", catalog)
+        self.assertIn("`period`（`YYYY-MM`）", schema)
+        self.assertIn("`tax_year`（`YYYY`）", schema)
+        self.assertIn("按每个会计期间内的凭证号核对借贷", methodology)
+        self.assertIn("缺失或无效日期会阻止硬规则", methodology)
+        self.assertIn("按税年分别计算", catalog)
         self.assertIn("resolve_data_quality_findings", skill)
 
     def test_skill_documents_csv_input_and_numeric_integrity_gates(self):
@@ -118,18 +178,18 @@ class SkillContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("case-insensitive `.csv` suffix", skill)
-        self.assertIn("remove_unsupported_input_files", skill)
-        self.assertIn("extra or missing cells", skill)
-        self.assertIn("ASCII digits", schema)
-        self.assertIn("three-digit thousands grouping", schema)
-        self.assertIn("scientific notation", schema)
-        self.assertIn("18 integer digits", schema)
-        self.assertIn("2 fractional digits", schema)
-        self.assertIn("20 integer digits", schema)
-        self.assertIn("aggregate absolute amount", skill)
+        self.assertIn("`.csv` 后缀不区分大小写", skill)
+        self.assertIn("不支持文件会阻断处理", skill)
+        self.assertIn("多余/缺失单元格", skill)
+        self.assertIn("ASCII 数字", schema)
+        self.assertIn("合法三位千分位", schema)
+        self.assertIn("科学计数法", schema)
+        self.assertIn("18 位整数", schema)
+        self.assertIn("2 位小数", schema)
+        self.assertIn("20 位整数", schema)
+        self.assertIn("绝对值之和", schema)
         self.assertIn("ROUND_HALF_UP", schema)
-        self.assertIn("filing convention", schema)
+        self.assertIn("申报和法定列示规则", schema)
 
     def test_skill_documents_input_entry_and_entertainment_basis_boundaries(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -137,24 +197,36 @@ class SkillContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("regular, non-symlink CSV", skill)
-        self.assertIn("directories and symbolic links", skill)
-        self.assertIn("rule version `2026.2`", catalog)
-        self.assertIn("main-business and other-business revenue", catalog)
-        self.assertIn("deemed-sales revenue", catalog)
-        self.assertIn("basis completeness remains unconfirmed", catalog)
+        self.assertIn("普通、非符号链接的 CSV", skill)
+        self.assertIn("目录、符号链接", skill)
+        self.assertIn("当前规则版本：`2026.2`", catalog)
+        self.assertIn("主营业务和其他业务收入", catalog)
+        self.assertIn("视同销售收入", catalog)
+        self.assertIn("基数完整性仍未确认", catalog)
 
     def test_openai_metadata_matches_interface_contract(self):
         expected = (
             'interface:\n'
             '  display_name: "OpenTaxCheck｜开源税务健康检查"\n'
-            '  short_description: "用确定性规则、AI税务助理和专业复核执行企业税务健康检查"\n'
-            '  default_prompt: "Use $open-tax-check to run a resumable Chinese '
-            'enterprise tax health check and stop at every mapping, data-quality, '
-            'cloud-authorization, and professional-review gate."\n'
+            '  short_description: "安全盘点Excel与CSV资料并守住企业税务检查专业复核边界"\n'
+            '  default_prompt: "请使用 $open-tax-check 安全盘点中国企业税务检查案件，'
+            '并严格停在选表、数据质量与专业复核门槛。"\n'
         )
         actual = (SKILL / "agents" / "openai.yaml").read_text(encoding="utf-8")
         self.assertEqual(actual, expected)
+        short_description = re.search(
+            r'(?m)^  short_description: "([^"]+)"$', actual
+        ).group(1)
+        self.assertGreaterEqual(len(short_description), 25)
+        self.assertLessEqual(len(short_description), 64)
+        for line in actual.splitlines()[1:]:
+            self.assertRegex(line, r'^  [a-z_]+: ".+"$')
+
+    def test_skill_public_files_remain_below_250_kib(self):
+        total = sum(
+            path.stat().st_size for path in SKILL.rglob("*") if path.is_file()
+        )
+        self.assertLess(total, 250 * 1024, total)
 
     def test_skill_contains_only_required_files(self):
         expected = {

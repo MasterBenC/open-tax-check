@@ -5,29 +5,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ROADMAP_MILESTONES = (
-    "1. Repository foundation and deterministic CSV core - complete",
-    "2. Excel/PDF/image intake and OCR adapters - planned",
-    "3. Versioned 2024-2026 core tax-rule packs - planned",
-    "4. AI assist/deep orchestration and evidence validation - planned",
-    "5. Excel/DOCX/PDF/evidence-pack professional deliverables - planned",
-    "6. Fengniao adapter, privacy hardening, fictional full case, and public v1 release - planned",
+    "1. 阶段 1：仓库基础与确定性 CSV 核心 — 已完成",
+    "2. 阶段 2A：Excel 安全盘点与人工选表 — 已完成",
+    "3. 阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 计划中",
+    "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 计划中",
+    "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 计划中",
+    "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例与公开 v1 — 计划中",
 )
-UNSUPPORTED_SCOPE_SENTENCE = "Excel、OCR、DOCX、PDF、扩展税务规则和云端适配器尚未支持。"
+UNSUPPORTED_SCOPE_SENTENCE = "PDF、图片 OCR 和联网企业数据尚未实现。"
 
 
 def current_release_scope(text):
-    return text.split("## Current release scope", 1)[1].split("## How it works", 1)[0]
+    return text.split("## 当前版本范围", 1)[1].split("## 工作方式", 1)[0]
 
 
 def assert_roadmap_milestones(test_case, text):
     lines = [line for line in text.splitlines() if line.strip()]
-    test_case.assertEqual(lines[0], "# Roadmap")
+    test_case.assertEqual(lines[0], "# 路线图")
     test_case.assertEqual(tuple(lines[1:]), ROADMAP_MILESTONES)
 
 
 def assert_changelog_is_unreleased(test_case, text):
     test_case.assertIn("https://keepachangelog.com/en/1.1.0/", text)
-    test_case.assertIn("## [Unreleased]", text)
+    test_case.assertIn("## [未发布]", text)
     test_case.assertIn("0.1.0", text)
     test_case.assertIn("未发布", text)
     test_case.assertIn(
@@ -42,12 +42,11 @@ def assert_changelog_is_unreleased(test_case, text):
 
 def assert_readme_phase_scope(test_case, text):
     scope = current_release_scope(text)
-    test_case.assertIn(
-        "当前仓库处于 **v0.1 基础版本**，仅支持单一法律实体的 "
-        "UTF-8/UTF-8-BOM **CSV 序时账**",
-        scope,
-    )
-    test_case.assertIn("当前版本尚不支持", scope)
+    test_case.assertIn("当前仓库处于未发布的 **v0.1 / Phase 2A**", scope)
+    test_case.assertIn("`.xlsx`、`.xlsm`、`.xls`", scope)
+    test_case.assertIn("现有 CSV `run` 流程保持兼容", scope)
+    test_case.assertIn("尚未标准化 Excel 业务行", scope)
+    test_case.assertIn("属于 Phase 2B", scope)
     test_case.assertIn("公开路线不代表已经交付的能力", scope)
     test_case.assertIn("[docs/roadmap.md](docs/roadmap.md)", scope)
     test_case.assertIn(UNSUPPORTED_SCOPE_SENTENCE, scope)
@@ -86,18 +85,18 @@ class PublicRepositoryContractTests(unittest.TestCase):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
         sections = (
             "# OpenTaxCheck｜开源税务健康检查",
-            "## Current release scope",
-            "## How it works",
-            "## Quick start",
-            "## Run the fictional example",
-            "## Outputs",
-            "## AI modes",
-            "## Privacy and cloud authorization",
-            "## Rule coverage and limitations",
-            "## Contributing tax rules",
-            "## Community and tax-dispute collaboration",
-            "## Disclaimer",
-            "## License",
+            "## 当前版本范围",
+            "## 工作方式",
+            "## 快速开始",
+            "## 运行虚构示例",
+            "## 输出",
+            "## AI 模式",
+            "## 隐私与云端授权",
+            "## 规则覆盖与限制",
+            "## 贡献税务规则",
+            "## 社区与税争协作",
+            "## 免责声明",
+            "## 许可证",
         )
         positions = [text.find(section) for section in sections]
         self.assertNotIn(-1, positions)
@@ -108,11 +107,11 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("微信：PosterNote；添加时请备注 GitHub。", text)
         self.assertIn("请勿通过 GitHub Issue、Discussion 或微信发送未经脱敏的客户资料。", text)
         current_scope = current_release_scope(text)
-        self.assertIn("v0.1 基础版本", current_scope)
-        self.assertIn("CSV 序时账", current_scope)
-        self.assertIn("Excel、PDF、图片、OCR", current_scope)
-        self.assertIn("云端大模型调用", current_scope)
-        self.assertIn("当前版本尚不支持", current_scope)
+        self.assertIn("v0.1 / Phase 2A", current_scope)
+        self.assertIn("CSV `run`", current_scope)
+        self.assertIn("`.xlsx`、`.xlsm`、`.xls`", current_scope)
+        self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", current_scope)
+        self.assertIn("正式客户报告", current_scope)
         self.assertIn("公开路线不代表已经交付的能力", current_scope)
 
     def test_readme_links_scope_and_roadmap(self):
@@ -133,6 +132,48 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("20 位整数", text)
         self.assertIn("绝对金额总额", text)
         self.assertIn("ROUND_HALF_UP", text)
+
+    def test_readme_documents_excel_inspection_without_claiming_normalization(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn('pip install -e ".[excel]"', text)
+        self.assertIn("opentaxcheck inspect", text)
+        self.assertIn("opentaxcheck select-sheet", text)
+        self.assertIn("`.xlsx`、`.xlsm`、`.xls`", text)
+        self.assertIn("尚未标准化 Excel 业务行", text)
+        self.assertIn("隐藏工作表不得自动选择", text)
+        self.assertIn("隐藏行必须明确选择 `include` 或 `exclude`", text)
+        self.assertIn("资料覆盖矩阵", text)
+        self.assertIn("现有 CSV `run` 流程保持兼容", text)
+        self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", text)
+
+    def test_phase_2a_public_docs_are_chinese_first_and_keep_2b_boundary(self):
+        roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        example = (ROOT / "examples/fictional-company/README.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertTrue(roadmap.startswith("# 路线图\n"))
+        self.assertIn("阶段 2A：Excel 安全盘点与人工选表 — 已完成", roadmap)
+        self.assertIn(
+            "阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 计划中",
+            roadmap,
+        )
+        self.assertTrue(changelog.startswith("# 更新日志\n"))
+        self.assertIn("### 新增", changelog)
+        self.assertIn("运行时生成", example)
+        self.assertIn("不提交 `.xlsx` 二进制", example)
+
+    def test_fictional_example_script_generates_xlsx_at_runtime(self):
+        text = (ROOT / "scripts/run_fictional_example.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("journal.xlsx", text)
+        self.assertIn("Workbook", text)
+        self.assertIn("inspect_case", text)
+        self.assertNotIn("shutil.copy2", text)
 
     def test_roadmap_preserves_exact_phase_statuses(self):
         path = ROOT / "docs/roadmap.md"
