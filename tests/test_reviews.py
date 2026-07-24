@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -93,6 +94,28 @@ class SheetSelectionReviewTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_review(self, case: Path, review: dict) -> None:
+        (case / "reviews").mkdir(exist_ok=True)
+        (case / "reviews" / "sheet_selection.json").write_text(
+            json.dumps(review),
+            encoding="utf-8",
+        )
+
+    def resign(self, decision: dict) -> None:
+        payload = {
+            key: value
+            for key, value in decision["binding"].items()
+            if key != "fingerprint"
+        }
+        decision["binding"]["fingerprint"] = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
     def confirm(
         self,
         case: Path,
@@ -128,6 +151,9 @@ class SheetSelectionReviewTests(unittest.TestCase):
         self.assertEqual(decision["binding"]["source_sha256"], "a" * 64)
         self.assertEqual(decision["binding"]["sheet_id"], "sheet-0001")
         self.assertEqual(decision["binding"]["sheet_name"], "Journal")
+        self.assertEqual(decision["binding"]["role"], "journal")
+        self.assertEqual(decision["binding"]["hidden_rows"], "exclude")
+        self.assertEqual(decision["binding"]["reviewer"], "host:user")
         self.assertEqual(decision["header_rows"], [3])
         self.assertEqual(
             decision["binding"]["review_period"],
@@ -162,6 +188,16 @@ class SheetSelectionReviewTests(unittest.TestCase):
                 "hidden_row_decision_required",
             ):
                 self.confirm(case, hidden_rows="unspecified")
+            with self.assertRaisesRegex(ReviewError, "reviewer_required"):
+                confirm_sheet_selection(
+                    case,
+                    role="journal",
+                    source_id="a" * 16,
+                    sheet_id="sheet-0001",
+                    header_rows=(3,),
+                    hidden_rows="exclude",
+                    reviewer="",
+                )
 
     def test_unknown_role_and_out_of_bounds_or_duplicate_headers_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -173,6 +209,13 @@ class SheetSelectionReviewTests(unittest.TestCase):
                 self.confirm(case, header_rows=(21,))
             with self.assertRaisesRegex(ReviewError, "invalid_header_rows"):
                 self.confirm(case, header_rows=(3, 3))
+            for invalid in ((3, 5), (5, 3), (1, 2, 3, 4)):
+                with self.subTest(header_rows=invalid):
+                    with self.assertRaisesRegex(
+                        ReviewError,
+                        "invalid_header_rows",
+                    ):
+                        self.confirm(case, header_rows=invalid)
 
     def test_same_role_can_select_multiple_sheets_but_same_sheet_cannot_overlap(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -219,10 +262,20 @@ class SheetSelectionReviewTests(unittest.TestCase):
                 side_effect=recording_replace,
             ):
                 self.confirm(case)
+                self.confirm(
+                    case,
+                    sheet_id="sheet-0002",
+                    header_rows=(1,),
+                )
 
-        self.assertEqual(len(replaced), 1)
-        self.assertEqual(replaced[0][1], review_path)
-        self.assertNotEqual(replaced[0][0], review_path)
+        self.assertEqual(len(replaced), 2)
+        self.assertTrue(
+            all(destination == review_path for _, destination in replaced)
+        )
+        self.assertTrue(
+            all(source.parent == review_path.parent for source, _ in replaced)
+        )
+        self.assertEqual(len({source.name for source, _ in replaced}), 2)
 
     def test_changed_digest_invalidates_only_affected_selection(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -265,10 +318,10 @@ class SheetSelectionReviewTests(unittest.TestCase):
         self.assertEqual(valid["journal"], [current])
         self.assertEqual(invalid, [])
 
-    def test_sheet_header_and_period_changes_have_stable_invalidation_reasons(self):
+    def test_manual_header_choice_survives_heuristic_change_but_period_does_not(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case = self.make_case(Path(temp_dir))
-            self.confirm(case)
+            decision = self.confirm(case, header_rows=(5, 6))
             changed_header = self.inventory()
             changed_header["workbooks"][0]["sheets"][0]["header_rows"] = [4]
 
@@ -292,11 +345,273 @@ class SheetSelectionReviewTests(unittest.TestCase):
                 self.inventory(),
             )
 
-        self.assertEqual(valid, {})
-        self.assertIn("header_rows_changed", invalid[0]["reasons"])
+        self.assertEqual(valid["journal"], [decision])
+        self.assertEqual(invalid, [])
         self.assertIn(
             "review_period_changed",
             period_invalid[0]["reasons"],
+        )
+
+    def test_changed_source_filename_has_stable_invalidation_reason(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = self.make_case(Path(temp_dir))
+            self.confirm(case)
+            renamed = self.inventory()
+            renamed["workbooks"][0]["filename"] = "renamed-journal.xlsx"
+
+            valid, invalid = load_valid_sheet_selections(case, renamed)
+
+        self.assertEqual(valid, {})
+        self.assertIn("source_filename_changed", invalid[0]["reasons"])
+
+    def test_prior_binding_schema_is_invalidated_not_treated_as_malformed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = self.make_case(Path(temp_dir))
+            decision = self.confirm(case)
+            decision["binding"]["selection_schema_version"] = "0.1.0"
+            self.resign(decision)
+            self.write_review(
+                case,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "selections": [decision],
+                },
+            )
+
+            valid, invalid = load_valid_sheet_selections(
+                case,
+                self.inventory(),
+            )
+
+        self.assertEqual(valid, {})
+        self.assertIn("selection_schema_changed", invalid[0]["reasons"])
+
+    def test_malformed_or_tampered_review_file_has_one_stable_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = self.make_case(Path(temp_dir))
+            decision = self.confirm(case)
+            valid_review = {
+                "schema_version": SCHEMA_VERSION,
+                "selections": [decision],
+            }
+            malformed = []
+
+            wrong_schema = json.loads(json.dumps(valid_review))
+            wrong_schema["schema_version"] = "9.9.9"
+            malformed.append(wrong_schema)
+            malformed.append(
+                {"schema_version": SCHEMA_VERSION, "selections": [None]}
+            )
+            for field, value in (
+                ("role", "receipts"),
+                ("role", ["journal"]),
+                ("hidden_rows", "unspecified"),
+                ("hidden_rows", ["exclude"]),
+                ("reviewer", ""),
+                ("reviewer", {"host": "user"}),
+                ("header_rows", [3, 5]),
+            ):
+                changed = json.loads(json.dumps(valid_review))
+                changed["selections"][0][field] = value
+                changed["selections"][0]["binding"][field] = value
+                self.resign(changed["selections"][0])
+                malformed.append(changed)
+            missing_binding_field = json.loads(json.dumps(valid_review))
+            del missing_binding_field["selections"][0]["binding"][
+                "source_sha256"
+            ]
+            malformed.append(missing_binding_field)
+            invalid_sha = json.loads(json.dumps(valid_review))
+            invalid_sha["selections"][0]["binding"]["source_sha256"] = "x" * 64
+            self.resign(invalid_sha["selections"][0])
+            malformed.append(invalid_sha)
+            invalid_period = json.loads(json.dumps(valid_review))
+            invalid_period["selections"][0]["binding"]["review_period"] = {
+                "start": "2026-01-01"
+            }
+            self.resign(invalid_period["selections"][0])
+            malformed.append(invalid_period)
+            bad_fingerprint = json.loads(json.dumps(valid_review))
+            bad_fingerprint["selections"][0]["binding"]["fingerprint"] = "0" * 64
+            malformed.append(bad_fingerprint)
+            top_binding_mismatch = json.loads(json.dumps(valid_review))
+            top_binding_mismatch["selections"][0]["reviewer"] = "host:other"
+            malformed.append(top_binding_mismatch)
+            overlap = json.loads(json.dumps(valid_review))
+            duplicate = json.loads(json.dumps(decision))
+            duplicate["role"] = "trial_balance"
+            duplicate["binding"]["role"] = "trial_balance"
+            self.resign(duplicate)
+            overlap["selections"].append(duplicate)
+            malformed.append(overlap)
+
+            for index, review in enumerate(malformed):
+                with self.subTest(index=index):
+                    self.write_review(case, review)
+                    with self.assertRaisesRegex(
+                        ReviewError,
+                        "^invalid_sheet_selection_review$",
+                    ):
+                        load_valid_sheet_selections(
+                            case,
+                            self.inventory(),
+                        )
+            with self.assertRaisesRegex(
+                ReviewError,
+                "^invalid_sheet_selection_review$",
+            ):
+                self.confirm(case)
+
+    @unittest.skipUnless(os.name == "nt", "junctions are Windows-only")
+    def test_reviews_junction_is_rejected_without_external_write(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            case = self.make_case(root)
+            external = root / "external"
+            external.mkdir()
+            reviews = case / "reviews"
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(reviews), str(external)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(f"junctions unavailable: {result.stderr.strip()}")
+            try:
+                with self.assertRaisesRegex(
+                    ReviewError,
+                    "unsafe_review_path",
+                ):
+                    self.confirm(case)
+                self.assertEqual(list(external.iterdir()), [])
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(reviews)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+    @unittest.skipUnless(os.name == "nt", "junctions are Windows-only")
+    def test_work_junction_is_rejected_before_inventory_read(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            case = self.make_case(root)
+            original_work = case / "work"
+            external = root / "external-work"
+            original_work.rename(external)
+            result = subprocess.run(
+                [
+                    "cmd",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(original_work),
+                    str(external),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                external.rename(original_work)
+                self.skipTest(f"junctions unavailable: {result.stderr.strip()}")
+            try:
+                with self.assertRaisesRegex(
+                    ReviewError,
+                    "unsafe_review_path",
+                ):
+                    self.confirm(case)
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(original_work)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+                external.rename(original_work)
+
+    def test_same_role_partial_invalidation_keeps_other_sheet_confirmed(self):
+        from openpyxl import Workbook, load_workbook
+
+        def make_journal(path: Path, voucher: str) -> None:
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Journal"
+            sheet.append(("凭证号", "日期", "科目名称", "借方", "贷方"))
+            sheet.append((voucher, "2026-01-02", "银行存款", 100, 0))
+            sheet.row_dimensions[2].hidden = True
+            workbook.save(path)
+            workbook.close()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = Path(temp_dir) / "case"
+            (case / "input").mkdir(parents=True)
+            (case / "work").mkdir()
+            (case / "output").mkdir()
+            (case / "state.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "review_period": {
+                            "start": "2026-01-01",
+                            "end": "2026-12-31",
+                        },
+                        "completed_steps": ["init"],
+                        "artifacts": [],
+                        "current_run": None,
+                        "run_history": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            first_path = case / "input" / "journal-a.xlsx"
+            second_path = case / "input" / "journal-b.xlsx"
+            make_journal(first_path, "记-001")
+            make_journal(second_path, "记-101")
+            inspect_case(case)
+            inventory = json.loads(
+                (case / "work" / "workbook_inventory.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            for workbook in inventory["workbooks"]:
+                confirm_sheet_selection(
+                    case,
+                    role="journal",
+                    source_id=workbook["source_id"],
+                    sheet_id="sheet-0001",
+                    header_rows=(1,),
+                    hidden_rows="exclude",
+                    reviewer="host:user",
+                )
+            workbook = load_workbook(first_path)
+            workbook.active.append(
+                ("记-002", "2026-01-03", "库存现金", 50, 0)
+            )
+            workbook.save(first_path)
+            workbook.close()
+
+            code, result = inspect_case(case)
+            selection = json.loads(
+                (case / "work" / "sheet_selection.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            by_filename = {
+                item["filename"]: item for item in selection["journal"]
+            }
+
+        self.assertEqual(code, 4)
+        self.assertEqual(result["status"], "needs_sheet_selection")
+        self.assertEqual(
+            by_filename["journal-a.xlsx"]["decision_source"],
+            "manual",
+        )
+        self.assertEqual(
+            by_filename["journal-b.xlsx"]["decision_source"],
+            "confirmed",
         )
 
     def test_inspect_reuses_valid_decisions_and_invalidates_only_changed_source(self):

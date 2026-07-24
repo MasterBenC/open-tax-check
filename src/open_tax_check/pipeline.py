@@ -819,22 +819,46 @@ def apply_sheet_selection_reviews(
         case_dir,
         inventory_payload,
     )
-    for role, decisions in valid.items():
-        selection[role] = [
+    confirmed_by_role = {
+        role: [
             _confirmed_sheet_candidate(decision, inventory)
             for decision in decisions
         ]
-
+        for role, decisions in valid.items()
+    }
     invalid_roles = {
         item["role"]
         for item in invalid
         if item.get("role") in _INSPECTION_ROLES
     }
-    for role in invalid_roles:
-        selection[role] = [
-            {**candidate, "decision_source": "manual"}
-            for candidate in selection[role]
+    for role in _INSPECTION_ROLES:
+        confirmed = confirmed_by_role.get(role, [])
+        if role not in invalid_roles:
+            if role in valid:
+                selection[role] = confirmed
+            continue
+
+        invalid_bindings = [
+            item["binding"]
+            for item in invalid
+            if item.get("role") == role
         ]
+        affected_candidates = []
+        for candidate in selection[role]:
+            if any(
+                candidate["sheet_id"] == binding["sheet_id"]
+                and (
+                    candidate["source_id"]
+                    == binding["source_sha256"][:16]
+                    or candidate["filename"]
+                    == binding["source_filename"]
+                )
+                for binding in invalid_bindings
+            ):
+                affected_candidates.append(
+                    {**candidate, "decision_source": "manual"}
+                )
+        selection[role] = [*confirmed, *affected_candidates]
     return invalid_roles
 
 
