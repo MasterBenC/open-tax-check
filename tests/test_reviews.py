@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from open_tax_check.case import init_case
 from open_tax_check.reviews import (
     ReviewError,
     confirm_sheet_selection,
@@ -639,6 +640,129 @@ class SheetSelectionReviewTests(unittest.TestCase):
                 }
             ),
             3,
+        )
+
+    def test_inspect_preserves_new_same_role_candidate_after_existing_confirmation(
+        self,
+    ):
+        from openpyxl import Workbook
+
+        def make_journal(path: Path, voucher: str) -> None:
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Journal"
+            sheet.append(("凭证号", "日期", "科目名称", "借方", "贷方"))
+            sheet.append((voucher, "2026-01-02", "银行存款", 100, 0))
+            workbook.save(path)
+            workbook.close()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = Path(temp_dir) / "case"
+            init_case(
+                case,
+                "虚构企业",
+                "2026-01-01",
+                "2026-12-31",
+            )
+            make_journal(case / "input" / "journal-a.xlsx", "记-001")
+
+            first_code, _ = inspect_case(case)
+            first_inventory = json.loads(
+                (case / "work" / "workbook_inventory.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            first_source = first_inventory["workbooks"][0]
+            confirm_sheet_selection(
+                case,
+                role="journal",
+                source_id=first_source["source_id"],
+                sheet_id="sheet-0001",
+                header_rows=(1,),
+                hidden_rows="exclude",
+                reviewer="host:user",
+            )
+
+            make_journal(case / "input" / "journal-b.xlsx", "记-101")
+            added_code, added_result = inspect_case(case)
+            added_inventory = json.loads(
+                (case / "work" / "workbook_inventory.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            added_selection = json.loads(
+                (case / "work" / "sheet_selection.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            added_by_filename = {
+                item["filename"]: item
+                for item in added_selection["journal"]
+            }
+            second_source = next(
+                workbook
+                for workbook in added_inventory["workbooks"]
+                if workbook["filename"] == "journal-b.xlsx"
+            )
+            confirm_sheet_selection(
+                case,
+                role="journal",
+                source_id=second_source["source_id"],
+                sheet_id="sheet-0001",
+                header_rows=(1,),
+                hidden_rows="exclude",
+                reviewer="host:user",
+            )
+
+            confirmed_code, confirmed_result = inspect_case(case)
+            confirmed_selection = json.loads(
+                (case / "work" / "sheet_selection.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(first_code, 0)
+        self.assertEqual(added_code, 4)
+        self.assertEqual(added_result["status"], "needs_sheet_selection")
+        self.assertEqual(
+            added_result["next_action"],
+            "select_journal_sheet",
+        )
+        self.assertEqual(
+            [item["filename"] for item in added_selection["journal"]],
+            ["journal-a.xlsx", "journal-b.xlsx"],
+        )
+        self.assertEqual(
+            added_by_filename["journal-a.xlsx"]["decision_source"],
+            "confirmed",
+        )
+        self.assertEqual(
+            added_by_filename["journal-b.xlsx"]["decision_source"],
+            "manual",
+        )
+        self.assertEqual(
+            len(
+                {
+                    (item["source_id"], item["sheet_id"])
+                    for item in added_selection["journal"]
+                }
+            ),
+            2,
+        )
+        self.assertEqual(confirmed_code, 0)
+        self.assertEqual(
+            confirmed_result["status"],
+            "partial_scope_ready",
+        )
+        self.assertEqual(
+            [item["filename"] for item in confirmed_selection["journal"]],
+            ["journal-a.xlsx", "journal-b.xlsx"],
+        )
+        self.assertTrue(
+            all(
+                item["decision_source"] == "confirmed"
+                for item in confirmed_selection["journal"]
+            )
         )
 
     def test_inspect_reuses_valid_decisions_and_invalidates_only_changed_source(self):

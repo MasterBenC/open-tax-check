@@ -839,20 +839,25 @@ def apply_sheet_selection_reviews(
             if key not in current_keys:
                 confirmed.append(candidate)
                 current_keys.add(key)
-        if role not in invalid_roles:
-            if role in valid:
-                selection[role] = confirmed
+        if role not in valid and role not in invalid_roles:
             continue
 
-        affected_candidates = []
+        unconfirmed_candidates = []
         for candidate in selection[role]:
             key = (candidate["source_id"], candidate["sheet_id"])
             if key not in current_keys:
-                affected_candidates.append(
+                unconfirmed_candidates.append(
                     {**candidate, "decision_source": "manual"}
                 )
                 current_keys.add(key)
-        selection[role] = [*confirmed, *affected_candidates]
+        selection[role] = sorted(
+            [*confirmed, *unconfirmed_candidates],
+            key=lambda item: (
+                item["filename"].casefold(),
+                item["source_id"],
+                item["sheet_id"],
+            ),
+        )
     return invalid_roles
 
 
