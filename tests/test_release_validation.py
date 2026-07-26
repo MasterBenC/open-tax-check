@@ -66,6 +66,24 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("release validation passed", proc.stdout.lower())
 
+    def test_script_emits_utf8_when_inherited_encoding_cannot_encode_chinese(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "cp1252"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/validate_release.py")],
+            capture_output=True,
+            env=env,
+        )
+
+        self.assertEqual(
+            proc.returncode,
+            0,
+            proc.stderr.decode("utf-8", errors="replace"),
+        )
+        message = proc.stdout.decode("utf-8")
+        self.assertIn("Skill 公开文件：", message)
+        self.assertIn("release validation passed", message.lower())
+
     def test_volume_limits_are_explicit_binary_byte_limits(self):
         self.assertEqual(validate_release.SKILL_PUBLIC_LIMIT_BYTES, 250 * 1024)
         self.assertEqual(

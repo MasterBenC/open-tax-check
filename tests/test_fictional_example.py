@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,30 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertFalse((Path(temp_dir) / "output/findings.json").exists())
             self.assertFalse((Path(temp_dir) / "output/report.md").exists())
             self.assertEqual(JOURNAL.read_bytes(), source_before)
+
+    def test_example_emits_utf8_when_inherited_encoding_cannot_encode_chinese(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "cp1252"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "case"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/run_fictional_example.py"),
+                    "--output",
+                    str(output_dir),
+                ],
+                capture_output=True,
+                env=env,
+            )
+
+        self.assertEqual(
+            proc.returncode,
+            0,
+            proc.stderr.decode("utf-8", errors="replace"),
+        )
+        payload = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(payload["entity_name"], "虚构科技有限公司")
 
     def test_example_refuses_nonempty_output_without_changing_existing_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:

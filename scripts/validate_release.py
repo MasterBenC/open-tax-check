@@ -7,6 +7,7 @@ import re
 import stat
 import subprocess
 from pathlib import Path
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,6 +102,13 @@ ALLOWED_BINARY_FIXTURES = {
         5632,
     ),
 }
+
+
+def _configure_utf8_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 def allowed_binary_fixture(relative_path: Path, path: Path) -> bool:
@@ -280,6 +288,7 @@ def sensitive_category(content: str) -> str | None:
 
 
 def main() -> int:
+    _configure_utf8_output()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--require-distributions",

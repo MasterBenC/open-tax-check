@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import sys
 
 from open_tax_check.case import init_case
 from open_tax_check.pipeline import inspect_case
@@ -11,6 +12,13 @@ from open_tax_check.pipeline import inspect_case
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "examples" / "fictional-company" / "input" / "journal.csv"
+
+
+def _configure_utf8_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 def create_fictional_workbook(path: Path) -> None:
@@ -29,6 +37,7 @@ def create_fictional_workbook(path: Path) -> None:
 
 
 def main() -> int:
+    _configure_utf8_output()
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
