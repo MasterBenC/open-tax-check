@@ -20,18 +20,60 @@ from open_tax_check.reviews import (
 
 
 class MappingReviewTests(unittest.TestCase):
-    def make_case(self, root: Path) -> Path:
+    def make_case(
+        self,
+        root: Path,
+        *,
+        journal_extra_header: str = "unreported",
+    ) -> Path:
+        from openpyxl import Workbook
+
         case = root / "case"
         init_case(case, "Fictional Company", "2026-01-01", "2026-12-31")
+        journal_path = case / "input" / "journal.xlsx"
+        journal_workbook = Workbook()
+        journal_sheet = journal_workbook.active
+        journal_sheet.title = "Journal"
+        journal_sheet.append(())
+        journal_sheet.append(())
+        journal_sheet.append(
+            ("voucher", "date", "account", "debit", "credit", journal_extra_header)
+        )
+        journal_workbook.save(journal_path)
+        journal_workbook.close()
+
+        trial_balance_path = case / "input" / "trial-balance.xlsx"
+        trial_balance_workbook = Workbook()
+        trial_balance_sheet = trial_balance_workbook.active
+        trial_balance_sheet.title = "Trial Balance"
+        trial_balance_sheet.append(())
+        trial_balance_sheet.append(
+            (
+                "account",
+                "opening-amount",
+                "opening-direction",
+                "period-debit",
+                "period-credit",
+                "closing-amount",
+                "closing-direction",
+            )
+        )
+        trial_balance_workbook.save(trial_balance_path)
+        trial_balance_workbook.close()
+
+        journal_digest = hashlib.sha256(journal_path.read_bytes()).hexdigest()
+        trial_balance_digest = hashlib.sha256(
+            trial_balance_path.read_bytes()
+        ).hexdigest()
         (case / "work").mkdir(exist_ok=True)
         (case / "work" / "workbook_inventory.json").write_text(
             json.dumps(
                 {
                     "workbooks": [
                         {
-                            "source_id": "a" * 16,
+                            "source_id": journal_digest[:16],
                             "filename": "journal.xlsx",
-                            "sha256": "a" * 64,
+                            "sha256": journal_digest,
                             "sheets": [
                                 {
                                     "sheet_id": "sheet-0001",
@@ -41,9 +83,9 @@ class MappingReviewTests(unittest.TestCase):
                             ],
                         },
                         {
-                            "source_id": "b" * 16,
+                            "source_id": trial_balance_digest[:16],
                             "filename": "trial-balance.xlsx",
-                            "sha256": "b" * 64,
+                            "sha256": trial_balance_digest,
                             "sheets": [
                                 {
                                     "sheet_id": "sheet-0001",
@@ -60,7 +102,7 @@ class MappingReviewTests(unittest.TestCase):
         confirm_sheet_selection(
             case,
             role="journal",
-            source_id="a" * 16,
+            source_id=journal_digest[:16],
             sheet_id="sheet-0001",
             header_rows=(3,),
             hidden_rows="exclude",
@@ -69,7 +111,7 @@ class MappingReviewTests(unittest.TestCase):
         confirm_sheet_selection(
             case,
             role="trial_balance",
-            source_id="b" * 16,
+            source_id=trial_balance_digest[:16],
             sheet_id="sheet-0001",
             header_rows=(2,),
             hidden_rows="exclude",
@@ -77,13 +119,11 @@ class MappingReviewTests(unittest.TestCase):
         )
         return case
 
-    def valid_journal_payload(self, *, extra_header: str | None = None) -> dict:
+    def valid_journal_payload(self, *, extra_header: str = "unreported") -> dict:
         headers = ["voucher", "date", "account", "debit", "credit"]
-        if extra_header is not None:
-            headers.append(extra_header)
         return {
             "role": "journal",
-            "source_id": "a" * 16,
+            "source_id": "",
             "sheet_id": "sheet-0001",
             "header_rows": [3],
             "headers": headers,
@@ -94,9 +134,24 @@ class MappingReviewTests(unittest.TestCase):
                 "debit": "debit",
                 "credit": "credit",
             },
-            "exclusions": {},
+            "exclusions": {extra_header: "not needed for normalization"},
             "reviewer": "host:reviewer",
         }
+
+    def journal_payload_for_case(
+        self,
+        case: Path,
+        *,
+        extra_header: str = "unreported",
+    ) -> dict:
+        payload = self.valid_journal_payload(extra_header=extra_header)
+        inventory = json.loads(
+            (case / "work" / "workbook_inventory.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload["source_id"] = inventory["workbooks"][0]["source_id"]
+        return payload
 
     def test_ai_proposal_is_inactive_until_confirmed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -104,7 +159,7 @@ class MappingReviewTests(unittest.TestCase):
 
             save_mapping_proposal(
                 case,
-                self.valid_journal_payload(),
+                self.journal_payload_for_case(case),
                 proposal_source="ai",
             )
 
@@ -115,32 +170,33 @@ class MappingReviewTests(unittest.TestCase):
     def test_confirmation_rejects_duplicate_targets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case = self.make_case(Path(temp_dir))
-            payload = self.valid_journal_payload()
-            payload["headers"].append("debit-2")
-            payload["mapping"]["debit-2"] = "debit"
+            payload = self.journal_payload_for_case(case)
+            payload["headers"].append("unreported")
+            payload["mapping"]["unreported"] = "debit"
+            payload["exclusions"] = {}
 
             with self.assertRaisesRegex(
                 MappingReviewError, "duplicate_mapping_target"
             ):
                 confirm_mapping(case, payload)
 
-    def test_confirmation_requires_every_header_mapped_or_excluded(self):
+    def test_confirmation_requires_every_actual_header_mapped_or_excluded(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case = self.make_case(Path(temp_dir))
+            payload = self.journal_payload_for_case(case)
+            payload["exclusions"] = {}
 
             with self.assertRaisesRegex(
                 MappingReviewError, "unresolved_source_header"
             ):
-                confirm_mapping(
-                    case,
-                    self.valid_journal_payload(extra_header="internal-tag"),
-                )
+                confirm_mapping(case, payload)
 
     def test_exclusion_requires_a_nonempty_reason(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case = self.make_case(Path(temp_dir))
-            payload = self.valid_journal_payload(extra_header="internal-tag")
-            payload["exclusions"] = {"internal-tag": ""}
+            payload = self.journal_payload_for_case(case)
+            payload["headers"].append("unreported")
+            payload["exclusions"] = {"unreported": ""}
 
             with self.assertRaisesRegex(
                 MappingReviewError, "missing_exclusion_reason"
@@ -187,6 +243,12 @@ class MappingReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             case = self.make_case(Path(temp_dir))
 
+            inventory = json.loads(
+                (case / "work" / "workbook_inventory.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            payload["source_id"] = inventory["workbooks"][1]["source_id"]
             decision = confirm_mapping(case, payload)
             persisted = json.loads(
                 (case / "reviews" / "mapping_review.json").read_text(
@@ -198,14 +260,17 @@ class MappingReviewTests(unittest.TestCase):
         self.assertEqual(decision["composites"], payload["composites"])
         self.assertEqual(persisted["confirmations"][0]["composites"], payload["composites"])
         self.assertEqual(active["trial_balance"][0]["mapping"], payload["mapping"])
-        self.assertEqual(decision["binding"]["source_sha256"], "b" * 64)
+        self.assertEqual(
+            decision["binding"]["source_sha256"],
+            inventory["workbooks"][1]["sha256"],
+        )
         self.assertEqual(decision["binding"]["header_rows"], [2])
         self.assertEqual(decision["binding"]["case_period"], {"start": "2026-01-01", "end": "2026-12-31"})
 
     def test_mapping_becomes_inactive_when_confirmed_header_selection_changes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case = self.make_case(Path(temp_dir))
-            confirm_mapping(case, self.valid_journal_payload())
+            confirm_mapping(case, self.journal_payload_for_case(case))
             selection_path = case / "reviews" / "sheet_selection.json"
             selection = json.loads(selection_path.read_text(encoding="utf-8"))
             decision = selection["selections"][0]
@@ -232,11 +297,13 @@ class MappingReviewTests(unittest.TestCase):
 
     def test_cli_emits_no_source_header_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            case = self.make_case(Path(temp_dir))
-            payload = self.valid_journal_payload()
             private_header = "PRIVATE-SOURCE-HEADER"
-            payload["headers"].append(private_header)
-            payload["exclusions"] = {private_header: "internal-only"}
+            case = self.make_case(
+                Path(temp_dir), journal_extra_header=private_header
+            )
+            payload = self.journal_payload_for_case(
+                case, extra_header=private_header
+            )
             mapping_path = case / "mapping.json"
             mapping_path.write_text(json.dumps(payload), encoding="utf-8")
 

@@ -338,6 +338,43 @@ def detect_sheet(
     )
 
 
+def selected_headers(
+    reader: WorkbookReader,
+    sheet: SheetMeta,
+    header_rows: Sequence[int],
+) -> tuple[str, ...]:
+    """Return combined headers from the explicitly selected worksheet rows."""
+
+    rows = tuple(header_rows)
+    if (
+        not rows
+        or any(row < 1 for row in rows)
+        or any(current != previous + 1 for previous, current in zip(rows, rows[1:]))
+    ):
+        raise ValueError("invalid_header_rows")
+    max_col = min(max(sheet.max_column, 0), MAX_HEADER_COLUMNS)
+    if rows[-1] > sheet.max_row or max_col < 1:
+        return ()
+    source_rows = {}
+    selected = []
+    for row_number, row in enumerate(
+        reader.iter_rows(sheet.sheet_id, 1, rows[-1], max_col),
+        start=1,
+    ):
+        values = tuple(_cell_value(cell) for cell in row[:MAX_HEADER_COLUMNS])
+        source_rows[row_number] = values
+        if row_number in rows:
+            selected.append(_ObservedRow(row_number, values))
+    if len(selected) != len(rows):
+        raise ValueError("invalid_header_rows")
+    parsed_merges = tuple(
+        parsed
+        for item in sheet.merged_ranges
+        if (parsed := _parse_merged_range(item)) is not None
+    )
+    return _combine_headers(tuple(selected), source_rows, parsed_merges)
+
+
 def _first_nonempty_rows(
     rows: Iterable[Sequence[object]],
 ) -> tuple[_ObservedRow, ...]:

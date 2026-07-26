@@ -13,8 +13,11 @@ from datetime import date
 from pathlib import Path
 
 from .case import resolve_safe_case_path
+from .intake import sha256_file
 from .mapping import MAPPING_VERSION, ROLE_FIELDS, required_fields
 from .schemas import SCHEMA_VERSION
+from .sheet_detection import selected_headers
+from .workbooks import WorkbookError, open_workbook
 
 
 SHEET_ROLES = frozenset({"journal", "trial_balance"})
@@ -546,6 +549,7 @@ _MAPPING_BINDING_FIELDS = frozenset(
         "header_rows",
         "case_period",
         "mapping_schema_version",
+        "source_headers_fingerprint",
         "fingerprint",
     }
 )
@@ -625,6 +629,54 @@ def _source_headers_from_confirmation(payload: dict) -> tuple[str, ...]:
     return _validate_source_headers(source_headers)
 
 
+def _headers_fingerprint(headers: Sequence[str]) -> str:
+    return _fingerprint({"headers": list(headers)})
+
+
+def _actual_selected_headers(
+    case_dir: Path,
+    inventory: dict,
+    selection: dict,
+) -> tuple[str, ...]:
+    binding = selection["binding"]
+    source = _current_source(inventory, binding)
+    if source is None:
+        raise _mapping_error("source_missing")
+    filename = source.get("filename")
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or Path(filename).name != filename
+    ):
+        raise _mapping_error("source_headers_unavailable")
+    input_dir = case_dir / "input"
+    _require_safe_directory(input_dir)
+    source_path = input_dir / filename
+    _require_safe_file(source_path)
+    try:
+        if sha256_file(source_path) != binding["source_sha256"]:
+            raise _mapping_error("source_digest_changed")
+        with open_workbook(source_path) as reader:
+            sheet = next(
+                (
+                    item
+                    for item in reader.sheets()
+                    if item.sheet_id == binding["sheet_id"]
+                    and item.name == binding["sheet_name"]
+                ),
+                None,
+            )
+            if sheet is None:
+                raise _mapping_error("sheet_missing")
+            return _validate_source_headers(
+                selected_headers(reader, sheet, selection["header_rows"])
+            )
+    except MappingReviewError:
+        raise
+    except (OSError, ValueError, WorkbookError):
+        raise _mapping_error("source_headers_unavailable") from None
+
+
 def validate_confirmation(headers: Sequence[str], payload: dict) -> None:
     """Require a complete, non-conflicting, role-valid mapping decision."""
 
@@ -682,12 +734,17 @@ def mapping_binding(selection: dict, payload: dict) -> dict:
     case_dir = payload.get("case_dir")
     if not isinstance(case_dir, Path):
         raise _mapping_error("invalid_mapping_confirmation")
+    source_headers = payload.get("source_headers")
+    if source_headers is None:
+        source_headers = _source_headers_from_confirmation(payload)
+    source_headers = _validate_source_headers(source_headers)
     basis = {
         "source_sha256": selection["binding"]["source_sha256"],
         "sheet_id": selection["binding"]["sheet_id"],
         "header_rows": selection["header_rows"],
         "case_period": _review_period(case_dir),
         "mapping_schema_version": MAPPING_VERSION,
+        "source_headers_fingerprint": _headers_fingerprint(source_headers),
     }
     return {**basis, "fingerprint": _fingerprint(basis)}
 
@@ -722,6 +779,11 @@ def _validate_mapping_confirmation(decision: dict) -> dict:
         or not _is_valid_review_period(binding.get("case_period"))
         or not isinstance(binding.get("mapping_schema_version"), str)
         or not binding["mapping_schema_version"]
+        or not isinstance(binding.get("source_headers_fingerprint"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{64}", binding["source_headers_fingerprint"]
+        )
+        is None
         or not isinstance(binding.get("fingerprint"), str)
         or re.fullmatch(r"[0-9a-f]{64}", binding["fingerprint"]) is None
     ):
@@ -795,12 +857,13 @@ def confirm_mapping(case_dir: Path, payload: dict) -> dict:
     inventory = _load_current_inventory(case_dir)
     selections, _ = load_valid_sheet_selections(case_dir, inventory)
     selection = _selected_mapping_target(selections, payload)
-    headers = payload.get("headers")
-    if headers is None:
-        headers = _source_headers_from_confirmation(payload)
+    headers = _actual_selected_headers(case_dir, inventory, selection)
     validate_confirmation(headers, payload)
     composites = _validated_composites(payload["role"], payload.get("composites", {}))
-    binding = mapping_binding(selection, {**payload, "case_dir": case_dir})
+    binding = mapping_binding(
+        selection,
+        {**payload, "case_dir": case_dir, "source_headers": headers},
+    )
     decision = {
         "role": payload["role"],
         "source_id": payload["source_id"],
@@ -903,5 +966,12 @@ def load_active_mappings(case_dir: Path) -> dict[str, list[dict]]:
             None,
         )
         if selection is not None:
+            try:
+                headers = _actual_selected_headers(case_dir, inventory, selection)
+                validate_confirmation(headers, decision)
+            except MappingReviewError:
+                continue
+            if binding["source_headers_fingerprint"] != _headers_fingerprint(headers):
+                continue
             active.setdefault(decision["role"], []).append(decision)
     return active
