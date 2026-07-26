@@ -7,7 +7,12 @@ import sys
 
 from .case import init_case, set_case_scope
 from .pipeline import inspect_case, run_case
-from .reviews import ReviewError, confirm_sheet_selection
+from .reviews import (
+    MappingReviewError,
+    ReviewError,
+    confirm_mapping,
+    confirm_sheet_selection,
+)
 
 
 def _configure_utf8_output() -> None:
@@ -53,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     select_parser.add_argument("--hidden-rows", required=True)
     select_parser.add_argument("--reviewer", required=True)
+    mapping_parser = subparsers.add_parser(
+        "confirm-mapping",
+        help="Confirm a complete source-bound field mapping",
+    )
+    mapping_parser.add_argument("--case", required=True, type=Path)
+    mapping_parser.add_argument("--mapping", required=True, type=Path)
     run_parser = subparsers.add_parser("run", help="Run deterministic ingestion and screening")
     run_parser.add_argument("--case", required=True, type=Path)
     run_parser.add_argument("--ai-mode", choices=["off", "assist", "deep"], default="assist")
@@ -119,6 +130,46 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
+        return 0
+    if args.command == "confirm-mapping":
+        try:
+            mapping_payload = json.loads(args.mapping.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_mapping_review",
+                        "error_type": "invalid_mapping_file",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 3
+        try:
+            confirm_mapping(args.case, mapping_payload)
+        except MappingReviewError as error:
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_mapping_review",
+                        "error_type": str(error),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 3
+        except Exception:
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_mapping_review",
+                        "error_type": "confirm_mapping_failed",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 3
+        print(json.dumps({"status": "mapping_confirmed"}, ensure_ascii=False))
         return 0
     if args.command == "run":
         code, result = run_case(args.case, args.ai_mode)

@@ -8,10 +8,12 @@ import os
 import re
 import stat
 import tempfile
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
 from .case import resolve_safe_case_path
+from .mapping import MAPPING_VERSION, ROLE_FIELDS, required_fields
 from .schemas import SCHEMA_VERSION
 
 
@@ -20,6 +22,10 @@ SHEET_ROLES = frozenset({"journal", "trial_balance"})
 
 class ReviewError(ValueError):
     """A stable review-layer validation failure."""
+
+
+class MappingReviewError(ReviewError):
+    """A stable mapping-confirmation validation failure."""
 
 
 def _is_reparse_point(path_stat: os.stat_result) -> bool:
@@ -81,6 +87,14 @@ def _validate_review_paths(
     _require_safe_directory(case_dir / "reviews", missing_ok=True)
     _require_safe_file(
         case_dir / "reviews" / "sheet_selection.json",
+        missing_ok=True,
+    )
+    _require_safe_file(
+        case_dir / "reviews" / "mapping_review.json",
+        missing_ok=True,
+    )
+    _require_safe_file(
+        case_dir / "reviews" / "mapping_proposals.json",
         missing_ok=True,
     )
     return case_dir
@@ -510,3 +524,384 @@ def load_valid_sheet_selections(
         elif role in SHEET_ROLES:
             valid.setdefault(role, []).append(decision)
     return valid, invalid
+
+
+_MAPPING_CONFIRMATION_FIELDS = frozenset(
+    {
+        "role",
+        "source_id",
+        "sheet_id",
+        "header_rows",
+        "mapping",
+        "composites",
+        "exclusions",
+        "reviewer",
+        "binding",
+    }
+)
+_MAPPING_BINDING_FIELDS = frozenset(
+    {
+        "source_sha256",
+        "sheet_id",
+        "header_rows",
+        "case_period",
+        "mapping_schema_version",
+        "fingerprint",
+    }
+)
+_COMPOSITE_TARGETS = {
+    "opening": ("opening_debit", "opening_credit"),
+    "closing": ("closing_debit", "closing_credit"),
+}
+_COMPOSITE_FIELDS = frozenset(
+    {"amount_field", "direction_field", "debit_field", "credit_field"}
+)
+
+
+def _mapping_error(code: str) -> MappingReviewError:
+    return MappingReviewError(code)
+
+
+def _validate_source_headers(headers: Sequence[str]) -> tuple[str, ...]:
+    if (
+        isinstance(headers, str)
+        or not isinstance(headers, Sequence)
+        or any(not isinstance(header, str) or not header for header in headers)
+        or len(headers) != len(set(headers))
+    ):
+        raise _mapping_error("invalid_source_headers")
+    return tuple(headers)
+
+
+def _validated_composites(role: object, composites: object) -> dict[str, dict]:
+    if composites is None:
+        return {}
+    if not isinstance(composites, dict):
+        raise _mapping_error("invalid_composite_mapping")
+    if composites and role != "trial_balance":
+        raise _mapping_error("invalid_composite_mapping")
+
+    checked: dict[str, dict] = {}
+    for scope, composite in composites.items():
+        if (
+            scope not in _COMPOSITE_TARGETS
+            or not isinstance(composite, dict)
+            or set(composite) != _COMPOSITE_FIELDS
+            or any(
+                not isinstance(composite.get(key), str)
+                or not composite[key]
+                for key in _COMPOSITE_FIELDS
+            )
+            or (
+                composite["debit_field"],
+                composite["credit_field"],
+            )
+            != _COMPOSITE_TARGETS[scope]
+        ):
+            raise _mapping_error("invalid_composite_mapping")
+        if composite["amount_field"] == composite["direction_field"]:
+            raise _mapping_error("invalid_composite_mapping")
+        checked[scope] = {
+            key: composite[key] for key in sorted(_COMPOSITE_FIELDS)
+        }
+    return checked
+
+
+def _composite_source_headers(composites: dict[str, dict]) -> list[str]:
+    return [
+        composite[field]
+        for composite in composites.values()
+        for field in ("amount_field", "direction_field")
+    ]
+
+
+def _source_headers_from_confirmation(payload: dict) -> tuple[str, ...]:
+    mapping = payload.get("mapping", {})
+    exclusions = payload.get("exclusions", {})
+    composites = payload.get("composites", {})
+    source_headers = list(mapping) + list(exclusions)
+    if isinstance(composites, dict):
+        source_headers.extend(_composite_source_headers(composites))
+    return _validate_source_headers(source_headers)
+
+
+def validate_confirmation(headers: Sequence[str], payload: dict) -> None:
+    """Require a complete, non-conflicting, role-valid mapping decision."""
+
+    if not isinstance(payload, dict):
+        raise _mapping_error("invalid_mapping_confirmation")
+    role = payload.get("role")
+    if role not in ROLE_FIELDS:
+        raise _mapping_error("unknown_mapping_role")
+    mapping = payload.get("mapping", {})
+    exclusions = payload.get("exclusions", {})
+    if not isinstance(mapping, dict) or not isinstance(exclusions, dict):
+        raise _mapping_error("invalid_mapping_confirmation")
+    if any(
+        not isinstance(header, str)
+        or not header
+        or not isinstance(target, str)
+        or not target
+        for header, target in mapping.items()
+    ) or any(
+        not isinstance(header, str) or not header
+        for header in exclusions
+    ):
+        raise _mapping_error("invalid_mapping_confirmation")
+    composites = _validated_composites(role, payload.get("composites", {}))
+    checked_headers = _validate_source_headers(headers)
+    composite_headers = _composite_source_headers(composites)
+    mapped_headers = set(mapping) | set(composite_headers)
+    excluded_headers = set(exclusions)
+    if mapped_headers & excluded_headers:
+        raise _mapping_error("header_mapped_and_excluded")
+    if len(mapped_headers) != len(mapping) + len(composite_headers):
+        raise _mapping_error("header_mapped_twice")
+    if set(checked_headers) != mapped_headers | excluded_headers:
+        raise _mapping_error("unresolved_source_header")
+    if any(not isinstance(reason, str) or not reason.strip() for reason in exclusions.values()):
+        raise _mapping_error("missing_exclusion_reason")
+
+    targets = list(mapping.values()) + [
+        target
+        for scope in composites
+        for target in _COMPOSITE_TARGETS[scope]
+    ]
+    if len(targets) != len(set(targets)):
+        raise _mapping_error("duplicate_mapping_target")
+    valid_targets = required_fields(role) | ROLE_FIELDS[role]["optional"]
+    if any(target not in valid_targets for target in targets):
+        raise _mapping_error("unknown_mapping_target")
+    if required_fields(role) - set(targets):
+        raise _mapping_error("missing_required_mapping")
+
+
+def mapping_binding(selection: dict, payload: dict) -> dict:
+    """Return the stable source and scope binding for one confirmation."""
+
+    case_dir = payload.get("case_dir")
+    if not isinstance(case_dir, Path):
+        raise _mapping_error("invalid_mapping_confirmation")
+    basis = {
+        "source_sha256": selection["binding"]["source_sha256"],
+        "sheet_id": selection["binding"]["sheet_id"],
+        "header_rows": selection["header_rows"],
+        "case_period": _review_period(case_dir),
+        "mapping_schema_version": MAPPING_VERSION,
+    }
+    return {**basis, "fingerprint": _fingerprint(basis)}
+
+
+def _validate_mapping_confirmation(decision: dict) -> dict:
+    invalid = _mapping_error("invalid_mapping_review")
+    if not isinstance(decision, dict) or set(decision) != _MAPPING_CONFIRMATION_FIELDS:
+        raise invalid
+    if (
+        not isinstance(decision.get("role"), str)
+        or not isinstance(decision.get("source_id"), str)
+        or not isinstance(decision.get("sheet_id"), str)
+        or not _is_valid_header_sequence(decision.get("header_rows"))
+        or not isinstance(decision.get("reviewer"), str)
+        or not decision["reviewer"].strip()
+    ):
+        raise invalid
+    try:
+        validate_confirmation(_source_headers_from_confirmation(decision), decision)
+    except MappingReviewError as error:
+        raise invalid from error
+
+    binding = decision.get("binding")
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != _MAPPING_BINDING_FIELDS
+        or not isinstance(binding.get("source_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", binding["source_sha256"]) is None
+        or decision["source_id"] != binding["source_sha256"][:16]
+        or binding.get("sheet_id") != decision["sheet_id"]
+        or binding.get("header_rows") != decision["header_rows"]
+        or not _is_valid_review_period(binding.get("case_period"))
+        or not isinstance(binding.get("mapping_schema_version"), str)
+        or not binding["mapping_schema_version"]
+        or not isinstance(binding.get("fingerprint"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", binding["fingerprint"]) is None
+    ):
+        raise invalid
+    fingerprint_basis = {
+        key: value for key, value in binding.items() if key != "fingerprint"
+    }
+    if binding["fingerprint"] != _fingerprint(fingerprint_basis):
+        raise invalid
+    return decision
+
+
+def _load_mapping_review(path: Path) -> dict:
+    if _safe_path_stat(path) is None:
+        return {"schema_version": SCHEMA_VERSION, "confirmations": []}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise _mapping_error("invalid_mapping_review") from error
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"schema_version", "confirmations"}
+        or payload.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(payload.get("confirmations"), list)
+    ):
+        raise _mapping_error("invalid_mapping_review")
+    seen = set()
+    for decision in payload["confirmations"]:
+        _validate_mapping_confirmation(decision)
+        key = (
+            decision["role"],
+            decision["binding"]["source_sha256"],
+            decision["sheet_id"],
+        )
+        if key in seen:
+            raise _mapping_error("invalid_mapping_review")
+        seen.add(key)
+    return payload
+
+
+def _selected_mapping_target(
+    selections: dict[str, list[dict]],
+    payload: dict,
+) -> dict:
+    role = payload.get("role")
+    source_id = payload.get("source_id")
+    sheet_id = payload.get("sheet_id")
+    header_rows = payload.get("header_rows")
+    if (
+        role not in SHEET_ROLES
+        or not isinstance(source_id, str)
+        or not isinstance(sheet_id, str)
+        or not _is_valid_header_sequence(header_rows)
+    ):
+        raise _mapping_error("invalid_mapping_confirmation")
+    for selection in selections.get(role, []):
+        binding = selection["binding"]
+        if (
+            binding["source_sha256"][:16] == source_id
+            and binding["sheet_id"] == sheet_id
+            and selection["header_rows"] == header_rows
+        ):
+            return selection
+    raise _mapping_error("sheet_selection_unconfirmed")
+
+
+def confirm_mapping(case_dir: Path, payload: dict) -> dict:
+    """Persist a complete human mapping confirmation bound to one selection."""
+
+    case_dir = _validate_review_paths(case_dir, require_inventory=True)
+    inventory = _load_current_inventory(case_dir)
+    selections, _ = load_valid_sheet_selections(case_dir, inventory)
+    selection = _selected_mapping_target(selections, payload)
+    headers = payload.get("headers")
+    if headers is None:
+        headers = _source_headers_from_confirmation(payload)
+    validate_confirmation(headers, payload)
+    composites = _validated_composites(payload["role"], payload.get("composites", {}))
+    binding = mapping_binding(selection, {**payload, "case_dir": case_dir})
+    decision = {
+        "role": payload["role"],
+        "source_id": payload["source_id"],
+        "sheet_id": payload["sheet_id"],
+        "header_rows": list(payload["header_rows"]),
+        "mapping": dict(payload["mapping"]),
+        "composites": composites,
+        "exclusions": dict(payload["exclusions"]),
+        "reviewer": payload.get("reviewer"),
+        "binding": binding,
+    }
+    if not isinstance(decision["reviewer"], str) or not decision["reviewer"].strip():
+        raise _mapping_error("reviewer_required")
+    _validate_mapping_confirmation(decision)
+
+    review_path = case_dir / "reviews" / "mapping_review.json"
+    review = _load_mapping_review(review_path)
+    key = (decision["role"], binding["source_sha256"], decision["sheet_id"])
+    for index, existing in enumerate(review["confirmations"]):
+        existing_key = (
+            existing["role"],
+            existing["binding"]["source_sha256"],
+            existing["sheet_id"],
+        )
+        if existing_key != key:
+            continue
+        if existing == decision:
+            return existing
+        review["confirmations"][index] = decision
+        break
+    else:
+        review["confirmations"].append(decision)
+    _atomic_write_review(review_path, review)
+    return decision
+
+
+def save_mapping_proposal(
+    case_dir: Path,
+    payload: dict,
+    *,
+    proposal_source: str,
+) -> dict:
+    """Persist an untrusted proposal without making it active."""
+
+    case_dir = _validate_review_paths(case_dir, require_inventory=False)
+    if proposal_source not in {"ai", "host"} or not isinstance(payload, dict):
+        raise _mapping_error("invalid_mapping_proposal")
+    try:
+        proposal = json.loads(json.dumps(payload, ensure_ascii=False))
+    except (TypeError, ValueError) as error:
+        raise _mapping_error("invalid_mapping_proposal") from error
+    path = case_dir / "reviews" / "mapping_proposals.json"
+    if _safe_path_stat(path) is None:
+        proposals = {"schema_version": SCHEMA_VERSION, "proposals": []}
+    else:
+        try:
+            proposals = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise _mapping_error("invalid_mapping_proposal") from error
+        if (
+            not isinstance(proposals, dict)
+            or set(proposals) != {"schema_version", "proposals"}
+            or proposals.get("schema_version") != SCHEMA_VERSION
+            or not isinstance(proposals.get("proposals"), list)
+        ):
+            raise _mapping_error("invalid_mapping_proposal")
+    decision = {"proposal_source": proposal_source, "payload": proposal}
+    proposals["proposals"].append(decision)
+    _atomic_write_review(path, proposals)
+    return decision
+
+
+def load_active_mappings(case_dir: Path) -> dict[str, list[dict]]:
+    """Load only confirmations still bound to current selections and scope."""
+
+    case_dir = _validate_review_paths(case_dir, require_inventory=True)
+    review_path = case_dir / "reviews" / "mapping_review.json"
+    if _safe_path_stat(review_path) is None:
+        return {}
+    inventory = _load_current_inventory(case_dir)
+    selections, _ = load_valid_sheet_selections(case_dir, inventory)
+    current_period = _review_period(case_dir)
+    review = _load_mapping_review(review_path)
+    active: dict[str, list[dict]] = {}
+    for decision in review["confirmations"]:
+        binding = decision["binding"]
+        if (
+            binding["mapping_schema_version"] != MAPPING_VERSION
+            or binding["case_period"] != current_period
+        ):
+            continue
+        selection = next(
+            (
+                item
+                for item in selections.get(decision["role"], [])
+                if item["binding"]["source_sha256"] == binding["source_sha256"]
+                and item["binding"]["sheet_id"] == binding["sheet_id"]
+                and item["header_rows"] == binding["header_rows"]
+            ),
+            None,
+        )
+        if selection is not None:
+            active.setdefault(decision["role"], []).append(decision)
+    return active
