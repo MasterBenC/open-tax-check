@@ -18,30 +18,65 @@ def _is_reparse_point(path_stat: os.stat_result) -> bool:
     return bool(getattr(path_stat, "st_file_attributes", 0) & reparse_point)
 
 
-def _ensure_safe_case_path(case_dir: Path) -> None:
+def _direct_stat(path: Path) -> os.stat_result | None:
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise ValueError("unsafe_case_path") from error
+
+
+def _reject_unsafe_node(
+    path_stat: os.stat_result | None,
+    *,
+    directory: bool,
+) -> None:
+    if path_stat is None:
+        return
+    if stat.S_ISLNK(path_stat.st_mode) or _is_reparse_point(path_stat):
+        raise ValueError("unsafe_case_path")
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if not expected_type(path_stat.st_mode):
+        raise ValueError("unsafe_case_path")
+
+
+def resolve_safe_case_path(case_dir: Path) -> Path:
+    """Canonicalize parent aliases while rejecting links at managed nodes."""
+
     absolute_case_dir = case_dir.absolute()
-    current = Path(absolute_case_dir.anchor)
-    components = absolute_case_dir.parts[1:]
-    for component in components:
-        current /= component
+    _reject_unsafe_node(_direct_stat(absolute_case_dir), directory=True)
+
+    missing_parents = []
+    existing_parent = absolute_case_dir.parent
+    while True:
         try:
-            path_stat = current.lstat()
+            existing_parent.lstat()
+            break
         except FileNotFoundError:
+            missing_parents.append(existing_parent.name)
+            parent = existing_parent.parent
+            if parent == existing_parent:
+                raise ValueError("unsafe_case_path")
+            existing_parent = parent
             continue
         except OSError as error:
             raise ValueError("unsafe_case_path") from error
-        if stat.S_ISLNK(path_stat.st_mode) or _is_reparse_point(path_stat):
-            raise ValueError("unsafe_case_path")
 
-    state_path = absolute_case_dir / "state.json"
     try:
-        state_stat = state_path.lstat()
-    except FileNotFoundError:
-        return
-    except OSError as error:
+        canonical_parent = existing_parent.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
         raise ValueError("unsafe_case_path") from error
-    if stat.S_ISLNK(state_stat.st_mode) or _is_reparse_point(state_stat):
-        raise ValueError("unsafe_case_path")
+    _reject_unsafe_node(_direct_stat(canonical_parent), directory=True)
+    canonical_case_dir = canonical_parent.joinpath(
+        *reversed(missing_parents),
+        absolute_case_dir.name,
+    )
+    _reject_unsafe_node(_direct_stat(canonical_case_dir), directory=True)
+
+    state_path = canonical_case_dir / "state.json"
+    _reject_unsafe_node(_direct_stat(state_path), directory=False)
+    return canonical_case_dir
 
 
 def _review_period(start: str | None, end: str | None) -> dict | None:
@@ -66,7 +101,7 @@ def init_case(
     period_end: str | None = None,
 ) -> dict:
     review_period = _review_period(period_start, period_end)
-    _ensure_safe_case_path(case_dir)
+    case_dir = resolve_safe_case_path(case_dir)
     if case_dir.exists() and any(case_dir.iterdir()):
         raise FileExistsError(f"case directory must be empty: {case_dir}")
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -89,7 +124,7 @@ def init_case(
 
 
 def set_case_scope(case_dir: Path, period_start: str, period_end: str) -> dict:
-    _ensure_safe_case_path(case_dir)
+    case_dir = resolve_safe_case_path(case_dir)
     state_path = case_dir / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["review_period"] = _review_period(period_start, period_end)

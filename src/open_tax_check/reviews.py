@@ -11,6 +11,7 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
+from .case import resolve_safe_case_path
 from .schemas import SCHEMA_VERSION
 
 
@@ -29,18 +30,14 @@ def _is_reparse_point(path_stat: os.stat_result) -> bool:
 
 
 def _safe_path_stat(path: Path) -> os.stat_result | None:
-    absolute = path.absolute()
-    current = Path(absolute.anchor)
-    for component in absolute.parts[1:]:
-        current /= component
-        try:
-            path_stat = current.lstat()
-        except FileNotFoundError:
-            return None
-        except OSError as error:
-            raise ReviewError("unsafe_review_path") from error
-        if stat.S_ISLNK(path_stat.st_mode) or _is_reparse_point(path_stat):
-            raise ReviewError("unsafe_review_path")
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise ReviewError("unsafe_review_path") from error
+    if stat.S_ISLNK(path_stat.st_mode) or _is_reparse_point(path_stat):
+        raise ReviewError("unsafe_review_path")
     return path_stat
 
 
@@ -68,7 +65,11 @@ def _validate_review_paths(
     case_dir: Path,
     *,
     require_inventory: bool,
-) -> None:
+) -> Path:
+    try:
+        case_dir = resolve_safe_case_path(case_dir)
+    except ValueError as error:
+        raise ReviewError("unsafe_review_path") from error
     _require_safe_directory(case_dir)
     _require_safe_file(case_dir / "state.json", missing_ok=True)
     if require_inventory:
@@ -82,6 +83,7 @@ def _validate_review_paths(
         case_dir / "reviews" / "sheet_selection.json",
         missing_ok=True,
     )
+    return case_dir
 
 
 def _read_json(path: Path, error_type: str) -> dict:
@@ -362,7 +364,7 @@ def confirm_sheet_selection(
     hidden_rows: str,
     reviewer: str,
 ) -> dict:
-    _validate_review_paths(case_dir, require_inventory=True)
+    case_dir = _validate_review_paths(case_dir, require_inventory=True)
     if role not in SHEET_ROLES:
         raise ReviewError("unknown_sheet_role")
     if hidden_rows not in {"include", "exclude"}:
@@ -485,7 +487,7 @@ def load_valid_sheet_selections(
     case_dir: Path,
     inventory: dict,
 ) -> tuple[dict, list[dict]]:
-    _validate_review_paths(case_dir, require_inventory=False)
+    case_dir = _validate_review_paths(case_dir, require_inventory=False)
     review_path = case_dir / "reviews" / "sheet_selection.json"
     if _safe_path_stat(review_path) is None:
         return {}, []

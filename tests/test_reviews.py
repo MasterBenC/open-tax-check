@@ -19,6 +19,12 @@ from open_tax_check.schemas import SCHEMA_VERSION
 
 
 class SheetSelectionReviewTests(unittest.TestCase):
+    def make_directory_symlink(self, link: Path, target: Path) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"directory symlinks are unavailable: {error}")
+
     def make_case(self, root: Path) -> Path:
         case = root / "case"
         (case / "work").mkdir(parents=True)
@@ -164,6 +170,7 @@ class SheetSelectionReviewTests(unittest.TestCase):
             decision["binding"]["selection_schema_version"],
             SCHEMA_VERSION,
         )
+
         fingerprint_payload = {
             key: value
             for key, value in decision["binding"].items()
@@ -179,6 +186,60 @@ class SheetSelectionReviewTests(unittest.TestCase):
         ).hexdigest()
         self.assertEqual(decision["binding"]["fingerprint"], expected)
         self.assertEqual(persisted["selections"], [decision])
+
+    def test_confirmation_allows_symlinked_case_parent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            actual_parent = root / "actual"
+            actual_parent.mkdir()
+            case = self.make_case(actual_parent)
+            alias_parent = root / "alias"
+            self.make_directory_symlink(alias_parent, actual_parent)
+
+            decision = self.confirm(alias_parent / "case")
+
+            self.assertEqual(decision["role"], "journal")
+            self.assertTrue(
+                (case / "reviews" / "sheet_selection.json").is_file()
+            )
+
+    @unittest.skipUnless(os.name == "nt", "junctions are Windows-only")
+    def test_confirmation_allows_case_parent_junction(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            actual_parent = root / "actual"
+            actual_parent.mkdir()
+            case = self.make_case(actual_parent)
+            alias_parent = root / "alias"
+            result = subprocess.run(
+                [
+                    "cmd",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(alias_parent),
+                    str(actual_parent),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(f"junctions unavailable: {result.stderr.strip()}")
+            try:
+                decision = self.confirm(alias_parent / "case")
+
+                self.assertEqual(decision["role"], "journal")
+                self.assertTrue(
+                    (case / "reviews" / "sheet_selection.json").is_file()
+                )
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(alias_parent)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
 
     def test_hidden_data_requires_explicit_include_or_exclude(self):
         with tempfile.TemporaryDirectory() as temp_dir:

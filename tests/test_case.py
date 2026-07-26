@@ -54,6 +54,54 @@ class CaseTests(unittest.TestCase):
                 {"start": "2025-01-01", "end": "2025-12-31"},
             )
 
+    def test_init_allows_symlinked_parent_and_uses_resolved_case_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            actual_parent = root / "actual"
+            actual_parent.mkdir()
+            alias_parent = root / "alias"
+            self._make_directory_symlink(alias_parent, actual_parent)
+
+            state = init_case(alias_parent / "case", "虚构企业")
+
+            self.assertEqual(state["status"], "ready_for_input")
+            self.assertTrue((actual_parent / "case" / "state.json").is_file())
+
+    @unittest.skipUnless(os.name == "nt", "Windows junctions are only available on Windows")
+    def test_init_allows_parent_junction_and_uses_resolved_case_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            actual_parent = root / "actual"
+            actual_parent.mkdir()
+            alias_parent = root / "alias"
+            result = subprocess.run(
+                [
+                    "cmd",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(alias_parent),
+                    str(actual_parent),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(f"junctions are unavailable: {result.stderr.strip()}")
+            try:
+                state = init_case(alias_parent / "case", "虚构企业")
+
+                self.assertEqual(state["status"], "ready_for_input")
+                self.assertTrue((actual_parent / "case" / "state.json").is_file())
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(alias_parent)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
     def test_scope_rejects_reversed_period_without_changing_state(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = Path(temp_dir) / "case"
