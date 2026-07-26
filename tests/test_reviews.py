@@ -312,6 +312,7 @@ class SheetSelectionReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             case = self.make_case(Path(temp_dir))
             review_path = case / "reviews" / "sheet_selection.json"
+            canonical_review_path = review_path.resolve()
             real_replace = __import__("os").replace
             replaced = []
 
@@ -332,10 +333,16 @@ class SheetSelectionReviewTests(unittest.TestCase):
 
         self.assertEqual(len(replaced), 2)
         self.assertTrue(
-            all(destination == review_path for _, destination in replaced)
+            all(
+                destination == canonical_review_path
+                for _, destination in replaced
+            )
         )
         self.assertTrue(
-            all(source.parent == review_path.parent for source, _ in replaced)
+            all(
+                source.parent == canonical_review_path.parent
+                for source, _ in replaced
+            )
         )
         self.assertEqual(len({source.name for source, _ in replaced}), 2)
 
