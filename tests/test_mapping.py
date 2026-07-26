@@ -33,6 +33,46 @@ class HeaderMappingTests(unittest.TestCase):
         self.assertEqual(proposal.unresolved, ("内部标签",))
         self.assertFalse(proposal.ready_for_confirmation)
 
+    def test_trial_balance_amount_and_direction_are_an_explicit_composite(self):
+        proposal = propose_mapping(
+            "trial_balance",
+            [
+                "科目名称",
+                "期初余额金额",
+                "期初余额方向",
+                "本期借方发生额",
+                "本期贷方发生额",
+                "期末余额金额",
+                "期末余额方向",
+            ],
+        )
+
+        self.assertEqual(proposal.composites["opening"].amount_field, "期初余额金额")
+        self.assertEqual(
+            proposal.composites["opening"].direction_field, "期初余额方向"
+        )
+        self.assertEqual(proposal.missing_required, ())
+        self.assertTrue(proposal.ready_for_confirmation)
+
+    def test_trial_balance_rejects_split_and_composite_for_the_same_balance(self):
+        proposal = propose_mapping(
+            "trial_balance",
+            [
+                "科目名称",
+                "期初余额|借方",
+                "期初余额|贷方",
+                "期初余额金额",
+                "期初余额方向",
+                "本期借方发生额",
+                "本期贷方发生额",
+                "期末余额金额",
+                "期末余额方向",
+            ],
+        )
+
+        self.assertIn("opening_debit", proposal.conflicts)
+        self.assertFalse(proposal.ready_for_confirmation)
+
     def test_required_fields_are_role_specific_and_immutable(self):
         self.assertEqual(
             required_fields("journal"),

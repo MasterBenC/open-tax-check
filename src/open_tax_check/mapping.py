@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 
@@ -65,6 +65,21 @@ TRIAL_BALANCE_ALIASES = {
     "auxiliary_type": {"辅助核算类型", "辅助类型"},
     "auxiliary_name": {"辅助核算名称", "辅助核算", "辅助名称"},
     "currency": {"币种", "货币"},
+}
+
+TRIAL_BALANCE_COMPOSITE_ALIASES = {
+    "opening": {
+        "amount": {"期初余额金额", "期初余额|金额", "期初金额"},
+        "direction": {"期初余额方向", "期初余额|方向", "期初方向"},
+        "debit_field": "opening_debit",
+        "credit_field": "opening_credit",
+    },
+    "closing": {
+        "amount": {"期末余额金额", "期末余额|金额", "期末金额"},
+        "direction": {"期末余额方向", "期末余额|方向", "期末方向"},
+        "debit_field": "closing_debit",
+        "credit_field": "closing_credit",
+    },
 }
 
 ROLE_FIELDS = {
@@ -128,6 +143,16 @@ NORMALIZED_ALIASES = _normalized_aliases("journal")
 
 
 @dataclass(frozen=True)
+class CompositeMapping:
+    """A balance amount and its direction, which together produce split fields."""
+
+    amount_field: str
+    direction_field: str
+    debit_field: str
+    credit_field: str
+
+
+@dataclass(frozen=True)
 class MappingProposal:
     role: str
     mapping: dict[str, str]
@@ -135,6 +160,7 @@ class MappingProposal:
     missing_required: tuple[str, ...]
     conflicts: dict[str, tuple[str, ...]]
     mapping_version: str = MAPPING_VERSION
+    composites: dict[str, CompositeMapping] = field(default_factory=dict)
 
     @property
     def ready_for_confirmation(self) -> bool:
@@ -161,34 +187,85 @@ def required_fields(role: str) -> frozenset[str]:
     return fields["required"]
 
 
+def _composite_components(role: str) -> dict[str, tuple[str, str]]:
+    if role != "trial_balance":
+        return {}
+    return {
+        _normalize(alias): (scope, component)
+        for scope, fields in TRIAL_BALANCE_COMPOSITE_ALIASES.items()
+        for component in ("amount", "direction")
+        for alias in fields[component]
+    }
+
+
 def propose_mapping(role: str, headers: Sequence[str]) -> MappingProposal:
     if role not in ROLE_FIELDS:
         raise ValueError("unknown_mapping_role")
 
     aliases = _normalized_aliases(role)
+    composite_components = _composite_components(role)
     mapping: dict[str, str] = {}
     unresolved: list[str] = []
     targets: defaultdict[str, list[str]] = defaultdict(list)
+    composite_sources: defaultdict[str, dict[str, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for header in headers:
         canonical = aliases.get(_normalize(header))
-        if canonical is None:
+        if canonical is not None:
+            mapping[header] = canonical
+            targets[canonical].append(header)
+            continue
+        component = composite_components.get(_normalize(header))
+        if component is None:
             unresolved.append(header)
             continue
-        mapping[header] = canonical
-        targets[canonical].append(header)
+        scope, kind = component
+        composite_sources[scope][kind].append(header)
 
     conflicts = {
         canonical: tuple(source_headers)
         for canonical, source_headers in targets.items()
         if len(source_headers) > 1
     }
-    missing = tuple(sorted(required_fields(role) - set(mapping.values())))
+    composites: dict[str, CompositeMapping] = {}
+    for scope, components in composite_sources.items():
+        amount_headers = components["amount"]
+        direction_headers = components["direction"]
+        if len(amount_headers) == 1 and len(direction_headers) == 1:
+            fields = TRIAL_BALANCE_COMPOSITE_ALIASES[scope]
+            composite = CompositeMapping(
+                amount_field=amount_headers[0],
+                direction_field=direction_headers[0],
+                debit_field=fields["debit_field"],
+                credit_field=fields["credit_field"],
+            )
+            composites[scope] = composite
+            for target in (composite.debit_field, composite.credit_field):
+                if targets[target]:
+                    conflicts[target] = tuple(
+                        targets[target]
+                        + [composite.amount_field, composite.direction_field]
+                    )
+            continue
+        unresolved.extend(amount_headers)
+        unresolved.extend(direction_headers)
+
+    composite_targets = {
+        field
+        for composite in composites.values()
+        for field in (composite.debit_field, composite.credit_field)
+    }
+    missing = tuple(
+        sorted(required_fields(role) - set(mapping.values()) - composite_targets)
+    )
     return MappingProposal(
         role=role,
         mapping=mapping,
         unresolved=tuple(unresolved),
         missing_required=missing,
         conflicts=conflicts,
+        composites=composites,
     )
 
 
