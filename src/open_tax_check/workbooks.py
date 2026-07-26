@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 from dataclasses import dataclass
 from importlib import import_module
+from io import BytesIO
 from itertools import zip_longest
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterator
@@ -604,11 +605,11 @@ def _ooxml_worksheet_members(
 
 
 def _ooxml_sheet_features(
-    path: Path,
+    source: Any,
     element_tree: Any,
 ) -> tuple[_SheetFeatures, ...]:
     try:
-        with ZipFile(path) as package:
+        with ZipFile(source) as package:
             relationships = _ooxml_relationships(
                 package,
                 element_tree,
@@ -782,53 +783,65 @@ def _raise_xlrd_error(error: Exception) -> None:
     raise WorkbookError("corrupt_workbook") from None
 
 
-def preflight_ooxml(path: Path) -> None:
+def _validate_ooxml_package(package: ZipFile) -> None:
+    members = package.infolist()
+    if len(members) > MAX_ZIP_MEMBERS:
+        raise WorkbookSafetyError("ooxml_member_limit_exceeded")
+    if sum(item.file_size for item in members) > MAX_UNCOMPRESSED_BYTES:
+        raise WorkbookSafetyError("ooxml_uncompressed_limit_exceeded")
+    for item in members:
+        normalised_name = item.filename.replace("\\", "/")
+        parts = PurePosixPath(normalised_name).parts
+        has_drive = bool(PureWindowsPath(item.filename).drive)
+        if normalised_name.startswith("/") or ".." in parts or has_drive:
+            raise WorkbookSafetyError("ooxml_unsafe_member_name")
+        ratio = item.file_size / max(item.compress_size, 1)
+        if ratio > MAX_COMPRESSION_RATIO:
+            raise WorkbookSafetyError("ooxml_compression_ratio_exceeded")
+
+
+def preflight_ooxml(path: Path, source_bytes: bytes | None = None) -> None:
     try:
-        with path.open("rb") as source:
-            if source.read(len(OLE_COMPOUND_HEADER)) == OLE_COMPOUND_HEADER:
-                raise WorkbookError("encrypted_workbook")
-        with ZipFile(path) as package:
-            members = package.infolist()
-            if len(members) > MAX_ZIP_MEMBERS:
-                raise WorkbookSafetyError("ooxml_member_limit_exceeded")
-            if (
-                sum(item.file_size for item in members)
-                > MAX_UNCOMPRESSED_BYTES
-            ):
-                raise WorkbookSafetyError(
-                    "ooxml_uncompressed_limit_exceeded"
-                )
-            for item in members:
-                normalised_name = item.filename.replace("\\", "/")
-                parts = PurePosixPath(normalised_name).parts
-                has_drive = bool(PureWindowsPath(item.filename).drive)
-                if (
-                    normalised_name.startswith("/")
-                    or ".." in parts
-                    or has_drive
-                ):
-                    raise WorkbookSafetyError("ooxml_unsafe_member_name")
-                ratio = item.file_size / max(item.compress_size, 1)
-                if ratio > MAX_COMPRESSION_RATIO:
-                    raise WorkbookSafetyError(
-                        "ooxml_compression_ratio_exceeded"
-                    )
+        if source_bytes is None:
+            with path.open("rb") as source:
+                header = source.read(len(OLE_COMPOUND_HEADER))
+            package_source: Any = path
+        else:
+            header = source_bytes[: len(OLE_COMPOUND_HEADER)]
+            package_source = BytesIO(source_bytes)
+        if header == OLE_COMPOUND_HEADER:
+            if source_bytes is not None:
+                package_source.close()
+            raise WorkbookError("encrypted_workbook")
+        try:
+            with ZipFile(package_source) as package:
+                _validate_ooxml_package(package)
+        finally:
+            if source_bytes is not None:
+                package_source.close()
     except (BadZipFile, UnicodeDecodeError):
         raise WorkbookError("corrupt_workbook") from None
     except OSError:
         raise WorkbookError("workbook_io_error") from None
 
 
-def open_workbook(path: Path) -> WorkbookReader:
+def open_workbook(path: Path, source_bytes: bytes | None = None) -> WorkbookReader:
     suffix = path.suffix.lower()
     if suffix == ".xls":
         xlrd = _required_module("xlrd")
         try:
-            workbook = xlrd.open_workbook(
-                path,
-                on_demand=True,
-                formatting_info=True,
-            )
+            if source_bytes is None:
+                workbook = xlrd.open_workbook(
+                    path,
+                    on_demand=True,
+                    formatting_info=True,
+                )
+            else:
+                workbook = xlrd.open_workbook(
+                    file_contents=source_bytes,
+                    on_demand=True,
+                    formatting_info=True,
+                )
         except Exception as error:
             _raise_xlrd_error(error)
         if workbook.nsheets > MAX_WORKSHEETS:
@@ -839,11 +852,22 @@ def open_workbook(path: Path) -> WorkbookReader:
     if suffix not in {".xlsx", ".xlsm"}:
         raise UnsupportedWorkbook("unsupported_workbook_format")
 
-    preflight_ooxml(path)
+    preflight_ooxml(path, source_bytes)
     element_tree = _defused_element_tree()
-    sheet_features = _ooxml_sheet_features(path, element_tree)
+    if source_bytes is None:
+        sheet_features = _ooxml_sheet_features(path, element_tree)
+    else:
+        with BytesIO(source_bytes) as metadata_stream:
+            sheet_features = _ooxml_sheet_features(
+                metadata_stream,
+                element_tree,
+            )
     openpyxl = _required_module("openpyxl")
-    formula_stream = _open_binary_stream(path)
+    formula_stream = (
+        _open_binary_stream(path)
+        if source_bytes is None
+        else BytesIO(source_bytes)
+    )
     try:
         formula_workbook = openpyxl.load_workbook(
             formula_stream,
@@ -859,7 +883,11 @@ def open_workbook(path: Path) -> WorkbookReader:
         _close_suppressing_errors(formula_workbook, formula_stream)
         raise WorkbookSafetyError("worksheet_limit_exceeded")
     try:
-        cached_stream = _open_binary_stream(path)
+        cached_stream = (
+            _open_binary_stream(path)
+            if source_bytes is None
+            else BytesIO(source_bytes)
+        )
     except WorkbookError:
         _close_suppressing_errors(formula_workbook, formula_stream)
         raise

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -323,6 +324,62 @@ class InspectPipelineTests(unittest.TestCase):
             sensitive,
             inventory_text + json.dumps(result),
         )
+
+    def test_workbook_changed_after_inventory_is_rejected_before_inspection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = self.init_case(Path(temp_dir), period=True)
+            workbook_path = make_xlsx(
+                case / "input" / "journal.xlsx",
+                sheets=(("Original", JOURNAL_ROWS),),
+            )
+            original_inventory_inputs = pipeline.inventory_inputs
+            recorded_sha256 = None
+
+            def inventory_then_change(*args, **kwargs):
+                nonlocal recorded_sha256
+                intake = original_inventory_inputs(*args, **kwargs)
+                recorded_sha256 = intake.sources[0].sha256
+                make_xlsx(
+                    workbook_path,
+                    sheets=(("Changed", JOURNAL_ROWS),),
+                )
+                return intake
+
+            with patch.object(
+                pipeline,
+                "inventory_inputs",
+                side_effect=inventory_then_change,
+            ), patch.object(
+                pipeline,
+                "open_workbook",
+                side_effect=AssertionError(
+                    "changed workbook must remain unopened"
+                ),
+            ) as workbook_opener:
+                code, result = inspect_case(case)
+
+            inventory = json.loads(
+                (case / "work" / "workbook_inventory.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            actual_sha256 = hashlib.sha256(
+                workbook_path.read_bytes()
+            ).hexdigest()
+
+        self.assertEqual(code, 4)
+        self.assertEqual(result["status"], "needs_intake_review")
+        self.assertEqual(result["next_action"], "resolve_workbook_issues")
+        self.assertEqual(
+            inventory["issues"][0]["code"],
+            "source_changed_during_inspection",
+        )
+        self.assertEqual(
+            inventory["workbooks"][0]["diagnostic_code"],
+            "source_changed_during_inspection",
+        )
+        self.assertNotEqual(recorded_sha256, actual_sha256)
+        workbook_opener.assert_not_called()
 
     def test_successful_workbook_inventory_has_complete_source_lineage_and_adapter_status(self):
         with tempfile.TemporaryDirectory() as temp_dir:

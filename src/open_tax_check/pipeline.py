@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -53,6 +54,10 @@ class _WorkbookInspection:
     issues: tuple[dict, ...]
 
 
+class InputChangedError(Exception):
+    """Raised when analyzed bytes no longer match the input manifest."""
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -90,6 +95,29 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_snapshot(
+    path: Path,
+    expected_sha256: str,
+    expected_size_bytes: int,
+) -> bytes:
+    content = bytearray()
+    with path.open("rb") as handle:
+        while len(content) <= expected_size_bytes:
+            chunk = handle.read(
+                min(1024 * 1024, expected_size_bytes + 1 - len(content))
+            )
+            if not chunk:
+                break
+            content.extend(chunk)
+    snapshot = bytes(content)
+    if (
+        len(snapshot) != expected_size_bytes
+        or hashlib.sha256(snapshot).hexdigest() != expected_sha256
+    ):
+        raise InputChangedError("input_changed_during_processing")
+    return snapshot
+
+
 def _describe_input_entry(path: Path) -> dict:
     if path.is_symlink():
         entry_type = "symlink"
@@ -100,18 +128,6 @@ def _describe_input_entry(path: Path) -> dict:
     else:
         entry_type = "other"
     return {"name": path.name, "entry_type": entry_type}
-
-
-def _input_manifest(entries: list[Path]) -> list[dict]:
-    return [
-        {
-            "path": f"input/{path.name}",
-            "size_bytes": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in entries
-        if _describe_input_entry(path)["entry_type"] == "regular_file"
-    ]
 
 
 def _input_entries_manifest(entries: list[Path]) -> list[dict]:
@@ -392,6 +408,8 @@ def _finalize_run(
 
 
 def _safe_error_type(error: Exception) -> str:
+    if isinstance(error, InputChangedError):
+        return "input_changed_during_processing"
     if isinstance(error, ValueError):
         return "invalid_numeric_value"
     if isinstance(error, UnicodeError):
@@ -455,8 +473,20 @@ def _select_journal(
     return selected, input_entries, next_action
 
 
-def _load_and_normalize(source_file: Path) -> tuple[dict, list[dict]]:
-    with source_file.open("r", encoding="utf-8-sig", newline="") as handle:
+def _load_and_normalize(
+    source_file: Path,
+    expected_sha256: str,
+    expected_size_bytes: int,
+) -> tuple[dict, list[dict]]:
+    source_bytes = _source_snapshot(
+        source_file,
+        expected_sha256,
+        expected_size_bytes,
+    )
+    with io.StringIO(
+        source_bytes.decode("utf-8-sig"),
+        newline="",
+    ) as handle:
         reader = csv.DictReader(handle)
         headers = reader.fieldnames or []
         mapping = map_headers(headers)
@@ -656,7 +686,19 @@ def inspect_workbooks(
             "sheets": [],
         }
         try:
-            with open_workbook(path) as reader:
+            try:
+                source_bytes = _source_snapshot(
+                    path,
+                    source.sha256,
+                    source.size_bytes,
+                )
+            except InputChangedError:
+                raise WorkbookError(
+                    "source_changed_during_inspection"
+                ) from None
+            except OSError:
+                raise WorkbookError("workbook_io_error") from None
+            with open_workbook(path, source_bytes=source_bytes) as reader:
                 sheets = []
                 for sheet in reader.sheets():
                     detection = detect_sheet(
@@ -1109,8 +1151,16 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
         source_file, discovered_entries, selection_next_action = _select_journal(
             case_dir, run_work_dir
         )
-        input_files = _input_manifest(discovered_entries)
         input_entries = _input_entries_manifest(discovered_entries)
+        input_files = [
+            {
+                "path": item["path"],
+                "size_bytes": item["size_bytes"],
+                "sha256": item["sha256"],
+            }
+            for item in input_entries
+            if item["entry_type"] == "regular_file"
+        ]
 
         if source_file is None:
             exit_code = 4
@@ -1120,7 +1170,16 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
             completed_steps = ["init", "input_selection"]
             response_details = {}
         else:
-            mapping, rows = _load_and_normalize(source_file)
+            selected_manifest = next(
+                item
+                for item in input_files
+                if item["path"] == f"input/{source_file.name}"
+            )
+            mapping, rows = _load_and_normalize(
+                source_file,
+                selected_manifest["sha256"],
+                selected_manifest["size_bytes"],
+            )
             _write_json(run_work_dir / "mapping_review.json", mapping)
             if not mapping["ready_for_calculation"]:
                 exit_code = 3

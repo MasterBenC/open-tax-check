@@ -89,6 +89,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(state["next_action"], "review_findings")
             self.assertIn("CIT-BE-001", rule_ids)
             self.assertIn("SEM-EXP-001", rule_ids)
+
             entertainment = next(item for item in findings if item["rule_id"] == "CIT-BE-001")
             self.assertEqual(entertainment["tax_adjustment"], "15000.00")
             self.assertEqual(entertainment["revenue_basis"], "1000000.00")
@@ -128,6 +129,53 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(
                 (case_dir / "runs" / "run-0001" / "output" / "findings.json").is_file()
             )
+
+    def test_csv_changed_after_manifest_is_rejected_before_parsing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = self._init_case(temp_dir, "case-changing-input")
+            input_file = case_dir / "input" / "journal.csv"
+            self._write_balanced_journal(input_file)
+            original_manifest = pipeline._input_entries_manifest
+            recorded_sha256 = None
+
+            def manifest_then_change(entries):
+                nonlocal recorded_sha256
+                manifest = original_manifest(entries)
+                recorded_sha256 = manifest[0]["sha256"]
+                self._change_entertainment_amount(input_file, "30000")
+                return manifest
+
+            with patch.object(
+                pipeline,
+                "_input_entries_manifest",
+                side_effect=manifest_then_change,
+            ):
+                code, response = pipeline.run_case(case_dir, "off")
+
+            manifest = json.loads(
+                (
+                    case_dir
+                    / "runs"
+                    / "run-0001"
+                    / "manifest.json"
+                ).read_text(encoding="utf-8")
+            )
+            actual_sha256 = hashlib.sha256(input_file.read_bytes()).hexdigest()
+
+        self.assertEqual(code, 5)
+        self.assertEqual(response["status"], "blocked_processing_error")
+        self.assertEqual(
+            response["error_type"],
+            "input_changed_during_processing",
+        )
+        self.assertEqual(
+            manifest["error_type"],
+            "input_changed_during_processing",
+        )
+        self.assertEqual(manifest["input_files"][0]["sha256"], recorded_sha256)
+        self.assertNotEqual(recorded_sha256, actual_sha256)
+        self.assertNotIn("work/normalized_journal.jsonl", manifest["artifacts"])
+        self.assertNotIn("output/findings.json", manifest["artifacts"])
 
     def test_business_entertainment_is_calculated_separately_by_tax_year(self):
         with tempfile.TemporaryDirectory() as temp_dir:
