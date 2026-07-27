@@ -10,7 +10,7 @@ from itertools import zip_longest
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterator
 from xml.etree.ElementTree import ParseError
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZipFile, ZipInfo
 
 
 MAX_COMPRESSION_RATIO = 100
@@ -19,6 +19,8 @@ MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_VISITED_CELLS = 5_000_000
 MAX_WORKSHEETS = 200
 MAX_METADATA_MEMBER_BYTES = 64 * 1024 * 1024
+MAX_METADATA_TOTAL_BYTES = 128 * 1024 * 1024
+MAX_METADATA_TOTAL_NODES = 1_000_000
 MAX_METADATA_NODES = 5_500_000
 # Metadata allowance plus four start nodes per maximum cell covers the
 # common c/f/v and c/is/r/t shapes while bounding the whole worksheet.
@@ -491,6 +493,35 @@ def _relationship_member(target: str) -> str:
     return member
 
 
+def _ooxml_metadata_members(package: ZipFile) -> tuple[ZipInfo, ...]:
+    members = []
+    for item in package.infolist():
+        if item.is_dir():
+            continue
+        normalised = item.filename.replace("\\", "/")
+        casefolded = normalised.casefold()
+        suffix = PurePosixPath(casefolded).suffix
+        worksheet_xml = (
+            casefolded.startswith("xl/worksheets/")
+            and suffix == ".xml"
+            and not casefolded.startswith("xl/worksheets/_rels/")
+        )
+        if suffix in {".xml", ".rels"} and not worksheet_xml:
+            members.append(item)
+    return tuple(members)
+
+
+def _bounded_ooxml_metadata_members(
+    package: ZipFile,
+) -> tuple[ZipInfo, ...]:
+    members = _ooxml_metadata_members(package)
+    if any(item.file_size > MAX_METADATA_MEMBER_BYTES for item in members):
+        raise WorkbookSafetyError("ooxml_metadata_member_too_large")
+    if sum(item.file_size for item in members) > MAX_METADATA_TOTAL_BYTES:
+        raise WorkbookSafetyError("ooxml_metadata_total_too_large")
+    return members
+
+
 def _iter_xml_elements(
     package: ZipFile,
     member: str,
@@ -821,6 +852,7 @@ def preflight_ooxml(path: Path, source_bytes: bytes | None = None) -> None:
         try:
             with ZipFile(package_source) as package:
                 _validate_ooxml_package(package)
+                _bounded_ooxml_metadata_members(package)
         finally:
             if source_bytes is not None:
                 package_source.close()

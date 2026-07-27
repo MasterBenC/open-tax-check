@@ -46,6 +46,22 @@ def rewrite_zip_member(path: Path, member_name: str, transform) -> None:
     temporary.replace(path)
 
 
+def upsert_zip_member(path: Path, member_name: str, content: bytes) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    replaced = False
+    with ZipFile(path, "r") as source:
+        with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                if item.filename == member_name:
+                    target.writestr(item, content)
+                    replaced = True
+                else:
+                    target.writestr(item, source.read(item))
+            if not replaced:
+                target.writestr(member_name, content)
+    temporary.replace(path)
+
+
 class WorkbookReaderTests(unittest.TestCase):
     def test_ooxml_limits_match_security_contract(self):
         self.assertEqual(workbooks.MAX_ZIP_MEMBERS, 10_000)
@@ -60,6 +76,11 @@ class WorkbookReaderTests(unittest.TestCase):
             workbooks.MAX_METADATA_MEMBER_BYTES,
             64 * 1024 * 1024,
         )
+        self.assertEqual(
+            workbooks.MAX_METADATA_TOTAL_BYTES,
+            128 * 1024 * 1024,
+        )
+        self.assertEqual(workbooks.MAX_METADATA_TOTAL_NODES, 1_000_000)
         self.assertEqual(workbooks.MAX_METADATA_NODES, 5_500_000)
         self.assertEqual(
             workbooks.MAX_WORKSHEET_XML_NODES,
@@ -67,6 +88,34 @@ class WorkbookReaderTests(unittest.TestCase):
         )
         self.assertEqual(workbooks.MAX_CELL_SUBTREE_NODES, 1_024)
         self.assertEqual(workbooks.MAX_MERGED_RANGES, 100_000)
+
+    def test_metadata_members_include_relationships_but_exclude_worksheet_xml(self):
+        payload = io.BytesIO()
+        with ZipFile(payload, "w") as package:
+            package.writestr("[Content_Types].xml", b"<Types/>")
+            package.writestr("xl/styles.xml", b"<styleSheet/>")
+            package.writestr("xl/worksheets/sheet1.xml", b"<worksheet/>")
+            package.writestr(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                b"<Relationships/>",
+            )
+            package.writestr("xl/media/image1.png", b"image")
+
+        payload.seek(0)
+        with ZipFile(payload) as package:
+            names = tuple(
+                item.filename
+                for item in workbooks._ooxml_metadata_members(package)
+            )
+
+        self.assertEqual(
+            names,
+            (
+                "[Content_Types].xml",
+                "xl/styles.xml",
+                "xl/worksheets/_rels/sheet1.xml.rels",
+            ),
+        )
 
     def test_xlsx_reader_exposes_formula_metadata_without_recalculation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -294,6 +343,134 @@ class WorkbookReaderTests(unittest.TestCase):
                     "^ooxml_metadata_member_too_large$",
                 ):
                     open_workbook(path)
+
+    def test_oversized_shared_strings_are_rejected_before_openpyxl(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "shared-strings.xlsx")
+            content = (
+                '<sst xmlns="http://schemas.openxmlformats.org/'
+                'spreadsheetml/2006/main">'
+                + "".join(
+                    f"<si><t>unique-{index:05d}</t></si>"
+                    for index in range(2_000)
+                )
+                + "</sst>"
+            ).encode("utf-8")
+            upsert_zip_member(path, "xl/sharedStrings.xml", content)
+
+            with mock.patch.object(workbooks, "MAX_METADATA_MEMBER_BYTES", 16_384):
+                with mock.patch.object(workbooks, "MAX_COMPRESSION_RATIO", 10_000):
+                    with mock.patch(
+                        "open_tax_check.workbooks._open_binary_stream",
+                        side_effect=AssertionError("openpyxl stream must not open"),
+                    ) as stream_opener:
+                        with self.assertRaisesRegex(
+                            WorkbookSafetyError,
+                            "^ooxml_metadata_member_too_large$",
+                        ):
+                            open_workbook(path)
+
+        stream_opener.assert_not_called()
+
+    def test_oversized_styles_are_rejected_before_openpyxl(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "styles.xlsx")
+            content = (
+                '<styleSheet xmlns="http://schemas.openxmlformats.org/'
+                'spreadsheetml/2006/main"><numFmts>'
+                + "".join(
+                    f'<numFmt numFmtId="{index + 164}" formatCode="value-{index:05d}"/>'
+                    for index in range(1_000)
+                )
+                + "</numFmts></styleSheet>"
+            ).encode("utf-8")
+            upsert_zip_member(path, "xl/styles.xml", content)
+
+            with mock.patch.object(workbooks, "MAX_METADATA_MEMBER_BYTES", 16_384):
+                with mock.patch.object(workbooks, "MAX_COMPRESSION_RATIO", 10_000):
+                    with mock.patch(
+                        "open_tax_check.workbooks._open_binary_stream",
+                        side_effect=AssertionError("openpyxl stream must not open"),
+                    ) as stream_opener:
+                        with self.assertRaisesRegex(
+                            WorkbookSafetyError,
+                            "^ooxml_metadata_member_too_large$",
+                        ):
+                            open_workbook(path)
+
+        stream_opener.assert_not_called()
+
+    def test_metadata_members_reject_aggregate_size_split_across_members(self):
+        payload = io.BytesIO()
+        with ZipFile(payload, "w") as package:
+            package.writestr("docProps/a.xml", b"<a>1234</a>")
+            package.writestr("docProps/b.xml", b"<b>5678</b>")
+
+        payload.seek(0)
+        with ZipFile(payload) as package:
+            sizes = tuple(item.file_size for item in package.infolist())
+            with mock.patch.object(
+                workbooks,
+                "MAX_METADATA_MEMBER_BYTES",
+                max(sizes),
+            ):
+                with mock.patch.object(
+                    workbooks,
+                    "MAX_METADATA_TOTAL_BYTES",
+                    sum(sizes) - 1,
+                ):
+                    with self.assertRaisesRegex(
+                        WorkbookSafetyError,
+                        "^ooxml_metadata_total_too_large$",
+                    ):
+                        workbooks._bounded_ooxml_metadata_members(package)
+
+    def test_metadata_member_limit_precedes_aggregate_limit(self):
+        payload = io.BytesIO()
+        with ZipFile(payload, "w") as package:
+            package.writestr("docProps/a.xml", b"<a>1234</a>")
+
+        payload.seek(0)
+        with ZipFile(payload) as package:
+            size = package.infolist()[0].file_size
+            with mock.patch.object(
+                workbooks,
+                "MAX_METADATA_MEMBER_BYTES",
+                size - 1,
+            ):
+                with mock.patch.object(
+                    workbooks,
+                    "MAX_METADATA_TOTAL_BYTES",
+                    size - 1,
+                ):
+                    with self.assertRaisesRegex(
+                        WorkbookSafetyError,
+                        "^ooxml_metadata_member_too_large$",
+                    ):
+                        workbooks._bounded_ooxml_metadata_members(package)
+
+    def test_metadata_size_boundaries_are_inclusive(self):
+        payload = io.BytesIO()
+        with ZipFile(payload, "w") as package:
+            package.writestr("docProps/a.xml", b"<a/>")
+            package.writestr("docProps/b.xml", b"<b/>")
+
+        payload.seek(0)
+        with ZipFile(payload) as package:
+            sizes = tuple(item.file_size for item in package.infolist())
+            with mock.patch.object(
+                workbooks,
+                "MAX_METADATA_MEMBER_BYTES",
+                max(sizes),
+            ):
+                with mock.patch.object(
+                    workbooks,
+                    "MAX_METADATA_TOTAL_BYTES",
+                    sum(sizes),
+                ):
+                    members = workbooks._bounded_ooxml_metadata_members(package)
+
+        self.assertEqual(len(members), 2)
 
     def test_unreferenced_worksheet_relationships_count_toward_limit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
