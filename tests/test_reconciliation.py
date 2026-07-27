@@ -124,6 +124,26 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(result.issues[0].code, "trial_balance_movement_unbalanced")
         self.assertEqual(result.issues[0].difference, Decimal("100.00"))
 
+    def test_identity_mismatch_item_uses_exact_roll_forward_difference(self):
+        result = reconcile_trial_balance(
+            [
+                tb_row(
+                    period_debit="100.00",
+                    closing_debit="99.99",
+                ),
+                tb_row(
+                    code="2001",
+                    name="Balancing account",
+                    period_credit="100.00",
+                    closing_credit="100.00",
+                    row=3,
+                ),
+            ]
+        )
+
+        self.assertEqual(result.issues[0].difference, Decimal("0.01"))
+        self.assertEqual(result.items[0].difference, Decimal("0.01"))
+
     def test_trial_balance_period_debits_must_equal_period_credits(self):
         result = reconcile_trial_balance(
             [
@@ -153,6 +173,19 @@ class ReconciliationTests(unittest.TestCase):
 
         self.assertEqual(result.items[0].match_method, "unique_account_name")
         self.assertEqual(result.items[0].status, "matched")
+
+    def test_unique_name_match_preserves_identifiers_from_both_sides(self):
+        result = reconcile_journal_to_trial_balance(
+            [journal_row(code="1002", name="Bank deposits", debit="100.00")],
+            [tb_row(code="1102", name="Bank deposits", period_debit="100.00")],
+        )
+
+        item = result.items[0]
+        self.assertEqual(item.match_method, "unique_account_name")
+        self.assertEqual(item.journal_account_code, "1002")
+        self.assertEqual(item.journal_account_name, "Bank deposits")
+        self.assertEqual(item.trial_balance_account_code, "1102")
+        self.assertEqual(item.trial_balance_account_name, "Bank deposits")
 
     def test_duplicate_names_are_never_force_matched(self):
         result = reconcile_journal_to_trial_balance(

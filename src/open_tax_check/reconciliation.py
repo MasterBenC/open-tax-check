@@ -29,6 +29,10 @@ class ReconciliationItem:
 
     account_code: str | None
     account_name: str | None
+    journal_account_code: str | None
+    journal_account_name: str | None
+    trial_balance_account_code: str | None
+    trial_balance_account_name: str | None
     status: str
     match_method: str | None
     journal_debit: Decimal
@@ -49,6 +53,10 @@ class ReconciliationIssue:
     code: str
     account_code: str | None
     account_name: str | None
+    journal_account_code: str | None
+    journal_account_name: str | None
+    trial_balance_account_code: str | None
+    trial_balance_account_name: str | None
     journal_debit: Decimal
     journal_credit: Decimal
     trial_balance_debit: Decimal
@@ -180,6 +188,7 @@ def _item(
     *,
     status: str,
     match_method: str | None,
+    difference_override: Decimal | None = None,
 ) -> ReconciliationItem:
     journal_debit = journal.debit if journal else _ZERO
     journal_credit = journal.credit if journal else _ZERO
@@ -187,14 +196,22 @@ def _item(
     trial_balance_credit = trial_balance.credit if trial_balance else _ZERO
     debit_difference = exact_subtract(journal_debit, trial_balance_debit)
     credit_difference = exact_subtract(journal_credit, trial_balance_credit)
-    difference = exact_subtract(
-        signed(journal_debit, journal_credit),
-        signed(trial_balance_debit, trial_balance_credit),
+    difference = (
+        difference_override
+        if difference_override is not None
+        else exact_subtract(
+            signed(journal_debit, journal_credit),
+            signed(trial_balance_debit, trial_balance_credit),
+        )
     )
     account = journal or trial_balance
     return ReconciliationItem(
         account.code if account else None,
         account.name if account else None,
+        journal.code if journal else None,
+        journal.name if journal else None,
+        trial_balance.code if trial_balance else None,
+        trial_balance.name if trial_balance else None,
         status,
         match_method,
         journal_debit,
@@ -216,6 +233,10 @@ def _issue_from_trial_balance(
 ) -> ReconciliationIssue:
     return ReconciliationIssue(
         code,
+        trial_balance.code,
+        trial_balance.name,
+        None,
+        None,
         trial_balance.code,
         trial_balance.name,
         _ZERO,
@@ -248,6 +269,10 @@ def reconcile_trial_balance(rows: Iterable[dict]) -> ReconciliationResult:
                 "trial_balance_movement_unbalanced",
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
                 _ZERO,
                 _ZERO,
                 total_debit,
@@ -272,6 +297,7 @@ def reconcile_trial_balance(rows: Iterable[dict]) -> ReconciliationResult:
                 account,
                 status="identity_mismatch",
                 match_method=None,
+                difference_override=difference,
             )
         )
     return ReconciliationResult(not issues, tuple(items), tuple(issues))
@@ -353,6 +379,10 @@ def reconcile_journal_to_trial_balance(
             item.status,
             item.account_code,
             item.account_name,
+            item.journal_account_code,
+            item.journal_account_name,
+            item.trial_balance_account_code,
+            item.trial_balance_account_name,
             item.journal_debit,
             item.journal_credit,
             item.trial_balance_debit,
