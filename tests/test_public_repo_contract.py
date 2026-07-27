@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROADMAP_MILESTONES = (
     "1. 阶段 1：仓库基础与确定性 CSV 核心 — 已完成",
     "2. 阶段 2A：Excel 安全盘点与人工选表 — 已完成",
-    "3. 阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 已完成",
+    "3. 阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成（正式客户报告未实现）",
     "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 计划中",
     "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 计划中",
     "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例与公开 v1 — 计划中",
@@ -167,7 +167,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertTrue(roadmap.startswith("# 路线图\n"))
         self.assertIn("阶段 2A：Excel 安全盘点与人工选表 — 已完成", roadmap)
         self.assertIn(
-            "阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 已完成",
+            "阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成（正式客户报告未实现）",
             roadmap,
         )
         self.assertTrue(changelog.startswith("# 更新日志\n"))

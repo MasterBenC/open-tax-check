@@ -22,6 +22,68 @@ EXPECTED_JOURNAL_ROWS = [
 
 
 class FictionalExampleTests(unittest.TestCase):
+    def test_mapping_payloads_use_preset_reviewer_mappings_not_proposals(self):
+        """Changing proposal heuristics must not change the fictional review decision."""
+        from scripts.run_fictional_example import _mapping_payloads
+
+        proposals = {
+            "proposals": [
+                {
+                    "role": "journal",
+                    "source_id": "runtime-journal-source",
+                    "sheet_id": "sheet-runtime-1",
+                    "header_rows": [7],
+                    "mapping": {"proposal-only": "wrong"},
+                    "composites": {"proposal-only": {"wrong": "wrong"}},
+                },
+                {
+                    "role": "trial_balance",
+                    "source_id": "runtime-tb-source",
+                    "sheet_id": "sheet-runtime-2",
+                    "header_rows": [9],
+                    "mapping": {"proposal-only": "wrong"},
+                    "composites": {"proposal-only": {"wrong": "wrong"}},
+                },
+            ]
+        }
+        expected = {
+            "journal": {
+                "凭证号": "voucher_no",
+                "记账日期": "date",
+                "科目编码": "account_code",
+                "科目名称": "account_name",
+                "业务说明": "summary",
+                "借方发生额": "debit",
+                "贷方发生额": "credit",
+            },
+            "trial_balance": {
+                "科目编码": "account_code",
+                "科目名称": "account_name",
+                "期初借方": "opening_debit",
+                "期初贷方": "opening_credit",
+                "本期借方": "period_debit",
+                "本期贷方": "period_credit",
+                "期末借方": "closing_debit",
+                "期末贷方": "closing_credit",
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = Path(temp_dir)
+            (case / "work").mkdir()
+            (case / "work/mapping_review.json").write_text(
+                json.dumps(proposals), encoding="utf-8"
+            )
+
+            payloads = _mapping_payloads(case)
+
+        self.assertEqual({item["role"] for item in payloads}, set(expected))
+        for payload in payloads:
+            self.assertEqual(payload["mapping"], expected[payload["role"]])
+            self.assertEqual(payload["composites"], {})
+            self.assertEqual(payload["exclusions"], {})
+            self.assertEqual(payload["reviewer"], "host:fictional-example")
+            self.assertTrue(payload["source_id"].startswith("runtime-"))
+
     def test_journal_matches_documented_balanced_fictional_case(self):
         with JOURNAL.open(newline="", encoding="utf-8") as handle:
             rows = list(csv.reader(handle))
@@ -85,6 +147,19 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertTrue((Path(temp_dir) / "work/reconciliation.json").is_file())
             self.assertTrue((Path(temp_dir) / "output/findings.json").is_file())
             self.assertTrue((Path(temp_dir) / "output/report.md").is_file())
+            confirmations = json.loads(
+                (Path(temp_dir) / "reviews/mapping_review.json").read_text(
+                    encoding="utf-8"
+                )
+            )["confirmations"]
+            journal = next(item for item in confirmations if item["role"] == "journal")
+            self.assertEqual(
+                journal["mapping"]["业务说明"],
+                "summary",
+            )
+            self.assertEqual(journal["composites"], {})
+            self.assertEqual(journal["exclusions"], {})
+            self.assertEqual(journal["reviewer"], "host:fictional-example")
             self.assertEqual(JOURNAL.read_bytes(), source_before)
 
     def test_example_emits_utf8_when_inherited_encoding_cannot_encode_chinese(self):

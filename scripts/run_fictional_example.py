@@ -30,6 +30,35 @@ TRIAL_BALANCE_ROWS = (
     ("6001", "主营业务收入", 0, 0, 0, 1_000_000, 0, 1_000_000),
     ("6602", "管理费用-业务招待费", 0, 0, 25_000, 0, 25_000, 0),
 )
+FICTIONAL_MAPPING_TEMPLATES = {
+    "journal": {
+        "mapping": {
+            "凭证号": "voucher_no",
+            "记账日期": "date",
+            "科目编码": "account_code",
+            "科目名称": "account_name",
+            "业务说明": "summary",
+            "借方发生额": "debit",
+            "贷方发生额": "credit",
+        },
+        "composites": {},
+        "exclusions": {},
+    },
+    "trial_balance": {
+        "mapping": {
+            "科目编码": "account_code",
+            "科目名称": "account_name",
+            "期初借方": "opening_debit",
+            "期初贷方": "opening_credit",
+            "本期借方": "period_debit",
+            "本期贷方": "period_credit",
+            "期末借方": "closing_debit",
+            "期末贷方": "closing_credit",
+        },
+        "composites": {},
+        "exclusions": {},
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -80,17 +109,20 @@ def _mapping_payloads(case_dir: Path) -> list[dict]:
     proposals = json.loads(
         (case_dir / "work" / "mapping_review.json").read_text(encoding="utf-8")
     )["proposals"]
+    if {proposal["role"] for proposal in proposals} != set(FICTIONAL_MAPPING_TEMPLATES):
+        raise RuntimeError("fictional example mapping roles changed")
     payloads = []
     for proposal in proposals:
+        template = FICTIONAL_MAPPING_TEMPLATES[proposal["role"]]
         payloads.append(
             {
                 "role": proposal["role"],
                 "source_id": proposal["source_id"],
                 "sheet_id": proposal["sheet_id"],
                 "header_rows": proposal["header_rows"],
-                "mapping": proposal["mapping"],
-                "composites": proposal["composites"],
-                "exclusions": {},
+                "mapping": template["mapping"],
+                "composites": template["composites"],
+                "exclusions": template["exclusions"],
                 "reviewer": "host:fictional-example",
             }
         )

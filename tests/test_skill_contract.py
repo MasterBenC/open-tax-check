@@ -116,8 +116,9 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("必须是 `include` 或 `exclude`", text)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", text)
         self.assertIn("资料覆盖矩阵", methodology)
-        self.assertIn("尚未标准化 Excel 业务行", schema)
-        self.assertIn("2B", schema)
+        self.assertIn("Phase 2A 自身止于安全盘点", schema)
+        self.assertIn("当前 Phase 2B", schema)
+        self.assertIn("不生成正式客户报告", schema)
         self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", text)
 
     def test_skill_application_contract_requires_confirmed_mapping_for_phase_2b(self):
