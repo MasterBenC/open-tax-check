@@ -378,6 +378,42 @@ class ExcelPipelineTests(unittest.TestCase):
         self.assertEqual(mapping_review["proposals"][0]["role"], "journal")
         self.assertFalse((case / "work" / "normalized_journal.jsonl").exists())
 
+    def test_automatic_selection_mapping_can_be_confirmed_then_run(self):
+        case = self.root / "automatic-confirmation-case"
+        init_case(case, "Fictional Company", "2025-01-01", "2025-12-31")
+        write_workbook(
+            case / "input" / "journal.xlsx",
+            "Journal",
+            (
+                ("凭证号", "日期", "科目名称", "借方", "贷方"),
+                ("J-001", "2025-01-02", "Bank", 100, 0),
+                ("J-001", "2025-01-02", "主营业务收入", 0, 100),
+            ),
+        )
+        first_code, first_result = run_case(case, "off")
+        proposal = load_json(case / "work" / "mapping_review.json")["proposals"][0]
+
+        confirm_mapping(
+            case,
+            {
+                "role": proposal["role"],
+                "source_id": proposal["source_id"],
+                "sheet_id": proposal["sheet_id"],
+                "header_rows": proposal["header_rows"],
+                "mapping": proposal["mapping"],
+                "composites": proposal["composites"],
+                "exclusions": {},
+                "reviewer": "host:test",
+            },
+        )
+        second_code, second_result = run_case(case, "off")
+
+        self.assertEqual(first_code, 3)
+        self.assertEqual(first_result["status"], "needs_mapping_review")
+        self.assertEqual(second_code, 0)
+        self.assertEqual(second_result["status"], "needs_professional_review")
+        self.assertTrue((case / "work" / "normalized_journal.jsonl").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

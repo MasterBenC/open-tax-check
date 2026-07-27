@@ -850,12 +850,123 @@ def _selected_mapping_target(
     raise _mapping_error("sheet_selection_unconfirmed")
 
 
+def _automatic_mapping_targets(
+    case_dir: Path,
+    inventory: dict,
+) -> dict[str, list[dict]]:
+    """Return automatic selections re-verified against current inventory."""
+
+    selection_path = case_dir / "work" / "sheet_selection.json"
+    if _safe_path_stat(selection_path) is None:
+        return {}
+    artifact = _read_json(selection_path, "invalid_sheet_selection_artifact")
+    if (
+        artifact.get("schema_version") != SCHEMA_VERSION
+        or any(not isinstance(artifact.get(role), list) for role in SHEET_ROLES)
+    ):
+        raise _mapping_error("invalid_sheet_selection_artifact")
+
+    targets: dict[str, list[dict]] = {}
+    for role in sorted(SHEET_ROLES):
+        for candidate in artifact[role]:
+            if (
+                not isinstance(candidate, dict)
+                or candidate.get("decision_source") != "automatic"
+            ):
+                continue
+            source = next(
+                (
+                    item
+                    for item in inventory.get("workbooks", ())
+                    if item.get("source_id") == candidate.get("source_id")
+                    and item.get("filename") == candidate.get("filename")
+                ),
+                None,
+            )
+            if source is None or not isinstance(source.get("sha256"), str):
+                continue
+            sheet = next(
+                (
+                    item
+                    for item in source.get("sheets", ())
+                    if item.get("sheet_id") == candidate.get("sheet_id")
+                    and item.get("name") == candidate.get("sheet_name")
+                ),
+                None,
+            )
+            if sheet is None:
+                continue
+            role_score = next(
+                (
+                    item.get("score")
+                    for item in sheet.get("role_scores", ())
+                    if item.get("role") == role
+                ),
+                None,
+            )
+            header_rows = candidate.get("header_rows")
+            if (
+                role_score is None
+                or role_score < 85
+                or sheet.get("visibility") != "visible"
+                or sheet.get("has_hidden_data") is not False
+                or not _is_valid_header_sequence(header_rows)
+                or list(header_rows) != sheet.get("header_rows")
+            ):
+                continue
+            targets.setdefault(role, []).append(
+                {
+                    "role": role,
+                    "source_id": source["source_id"],
+                    "sheet_id": sheet["sheet_id"],
+                    "header_rows": list(header_rows),
+                    "hidden_rows": "exclude",
+                    "decision_source": "automatic",
+                    "binding": {
+                        "source_sha256": source["sha256"],
+                        "source_filename": source["filename"],
+                        "sheet_id": sheet["sheet_id"],
+                        "sheet_name": sheet["name"],
+                    },
+                }
+            )
+    return targets
+
+
+def _mapping_selection_targets(
+    case_dir: Path,
+    inventory: dict,
+) -> dict[str, list[dict]]:
+    manual, _ = load_valid_sheet_selections(case_dir, inventory)
+    targets = {role: list(items) for role, items in manual.items()}
+    for role, items in _automatic_mapping_targets(case_dir, inventory).items():
+        existing = {
+            (
+                item["binding"]["source_sha256"],
+                item["binding"]["sheet_id"],
+                tuple(item["header_rows"]),
+            )
+            for item in targets.get(role, ())
+        }
+        targets.setdefault(role, []).extend(
+            item
+            for item in items
+            if (
+                item["binding"]["source_sha256"],
+                item["binding"]["sheet_id"],
+                tuple(item["header_rows"]),
+            )
+            not in existing
+        )
+    return targets
+
+
 def confirm_mapping(case_dir: Path, payload: dict) -> dict:
     """Persist a complete human mapping confirmation bound to one selection."""
 
     case_dir = _validate_review_paths(case_dir, require_inventory=True)
     inventory = _load_current_inventory(case_dir)
-    selections, _ = load_valid_sheet_selections(case_dir, inventory)
+    selections = _mapping_selection_targets(case_dir, inventory)
     selection = _selected_mapping_target(selections, payload)
     headers = _actual_selected_headers(case_dir, inventory, selection)
     validate_confirmation(headers, payload)
@@ -944,7 +1055,7 @@ def load_active_mappings(case_dir: Path) -> dict[str, list[dict]]:
     if _safe_path_stat(review_path) is None:
         return {}
     inventory = _load_current_inventory(case_dir)
-    selections, _ = load_valid_sheet_selections(case_dir, inventory)
+    selections = _mapping_selection_targets(case_dir, inventory)
     current_period = _review_period(case_dir)
     review = _load_mapping_review(review_path)
     active: dict[str, list[dict]] = {}
