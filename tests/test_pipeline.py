@@ -113,6 +113,26 @@ class PipelineTests(unittest.TestCase):
                 },
             )
             self.assertTrue((case_dir / "work" / "normalized_journal.jsonl").exists())
+            normalized = json.loads(
+                (case_dir / "work" / "normalized_journal.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()[0]
+            )
+            self.assertEqual(
+                normalized["field_lineage"]["voucher_no"],
+                {
+                    "source_id": hashlib.sha256(input_file.read_bytes()).hexdigest()[:16],
+                    "sheet_id": "csv",
+                    "row": 2,
+                    "column": 1,
+                    "coordinate": "A2",
+                    "original_type": "str",
+                    "value_origin": "source",
+                    "mapping_version": normalized["mapping_version"],
+                },
+            )
+            self.assertTrue((case_dir / "work" / "reconciliation.json").exists())
+            self.assertTrue((case_dir / "work" / "coverage_matrix.json").exists())
             self.assertTrue((case_dir / "output" / "report.md").exists())
 
             state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
@@ -276,8 +296,13 @@ class PipelineTests(unittest.TestCase):
                 code, _ = pipeline.run_case(case_dir, "off")
 
             self.assertEqual(code, 0)
-            self.assertEqual(write_jsonl.call_count, 1)
-            normalized_path = write_jsonl.call_args.args[0]
+            journal_writes = [
+                call
+                for call in write_jsonl.call_args_list
+                if call.args[0].name == "normalized_journal.jsonl"
+            ]
+            self.assertEqual(len(journal_writes), 1)
+            normalized_path = journal_writes[0].args[0]
             self.assertEqual(normalized_path.name, "normalized_journal.jsonl")
             normalized_rows = [
                 json.loads(line)

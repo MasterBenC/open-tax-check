@@ -64,7 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mapping_parser.add_argument("--case", required=True, type=Path)
     mapping_parser.add_argument("--mapping", required=True, type=Path)
-    run_parser = subparsers.add_parser("run", help="Run deterministic ingestion and screening")
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Normalize selected CSV/Excel accounting sources and run screening",
+    )
     run_parser.add_argument("--case", required=True, type=Path)
     run_parser.add_argument("--ai-mode", choices=["off", "assist", "deep"], default="assist")
     return parser

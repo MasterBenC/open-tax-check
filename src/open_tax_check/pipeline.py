@@ -20,14 +20,30 @@ from .intake import (
     detect_filename_roles,
     inventory_inputs,
 )
-from .mapping import map_headers
+from .coverage import (
+    PROCEDURE_DEPENDENCIES,
+    ProcedureCoverage,
+    evaluate_procedure_coverage,
+)
+from .mapping import map_headers, propose_mapping
+from .normalization import (
+    NormalizationResult,
+    RowIssue,
+    normalize_journal,
+    normalize_trial_balance,
+)
 from .numeric import exact_add, exact_subtract, format_money, parse_decimal
 from .quality import validate_journal_quality
-from .reviews import load_valid_sheet_selections
+from .reconciliation import (
+    ReconciliationResult,
+    reconcile_journal_to_trial_balance,
+    reconcile_trial_balance,
+)
+from .reviews import load_active_mappings, load_valid_sheet_selections
 from .rules import business_entertainment_adjustment
 from .schemas import SCHEMA_VERSION, SheetRecord, SourceRecord, to_dict
 from .semantic import detect_semantic_candidates
-from .sheet_detection import confidence_band, detect_sheet
+from .sheet_detection import confidence_band, detect_sheet, selected_headers
 from .workbooks import (
     WORKBOOK_ADAPTER_VERSION,
     WorkbookError,
@@ -54,8 +70,75 @@ class _WorkbookInspection:
     issues: tuple[dict, ...]
 
 
+@dataclass(slots=True)
+class _CaseRun:
+    case_dir: Path
+    ai_mode: str
+    run_id: str
+    run_dir: Path
+    started_at: str
+    input_files: list[dict]
+    input_entries: list[dict]
+
+    @property
+    def work_dir(self) -> Path:
+        return self.run_dir / "work"
+
+    @property
+    def output_dir(self) -> Path:
+        return self.run_dir / "output"
+
+    def finish(
+        self,
+        exit_code: int,
+        status: str,
+        next_action: str,
+        completed_steps: list[str],
+        *,
+        response_details: dict | None = None,
+        error_type: str | None = None,
+        publish_current_view: bool = True,
+    ) -> tuple[int, dict]:
+        artifacts = _run_artifacts(self.run_dir)
+        try:
+            state = _finalize_run(
+                case_dir=self.case_dir,
+                run_id=self.run_id,
+                run_dir=self.run_dir,
+                started_at=self.started_at,
+                ai_mode=self.ai_mode,
+                input_files=self.input_files,
+                input_entries=self.input_entries,
+                status=status,
+                next_action=next_action,
+                artifacts=artifacts,
+                completed_steps=completed_steps,
+                error_type=error_type,
+                publish_current_view=publish_current_view,
+            )
+        except Exception as error:
+            raise _RunPublicationError from error
+        return exit_code, {
+            "status": status,
+            "next_action": next_action,
+            **(response_details or {}),
+            **(
+                {
+                    "failed_run": state["failed_run"],
+                    "failed_run_manifest": state["failed_run_manifest"],
+                }
+                if not publish_current_view
+                else {}
+            ),
+        }
+
+
 class InputChangedError(Exception):
     """Raised when analyzed bytes no longer match the input manifest."""
+
+
+class _RunPublicationError(Exception):
+    """Distinguish atomic publication failures from safe processing failures."""
 
 
 def _utc_now() -> str:
@@ -85,6 +168,14 @@ def _write_json(path: Path, payload) -> None:
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     content = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
     _atomic_write_text(path, content + ("\n" if content else ""))
+
+
+def _column_label(column: int) -> str:
+    label = ""
+    while column:
+        column, remainder = divmod(column - 1, 26)
+        label = chr(ord("A") + remainder) + label
+    return label
 
 
 def _sha256(path: Path) -> str:
@@ -164,6 +255,36 @@ def _start_run(case_dir: Path) -> tuple[str, Path, str]:
     (run_dir / "work").mkdir()
     (run_dir / "output").mkdir()
     return run_id, run_dir, _utc_now()
+
+
+def _start_case_run(case_dir: Path, ai_mode: str) -> _CaseRun:
+    run_id, run_dir, started_at = _start_run(case_dir)
+    return _CaseRun(case_dir, ai_mode, run_id, run_dir, started_at, [], [])
+
+
+def _input_records(intake: IntakeResult) -> tuple[list[dict], list[dict]]:
+    entries = to_dict(intake.sources)
+    files = [
+        {
+            "path": f"input/{source.filename}",
+            "size_bytes": source.size_bytes,
+            "sha256": source.sha256,
+        }
+        for source in intake.sources
+        if source.status == "accepted"
+    ]
+    return files, entries
+
+
+def _json_business_value(value):
+    converted = to_dict(value)
+    if isinstance(converted, Decimal):
+        return _money(converted)
+    if isinstance(converted, list):
+        return [_json_business_value(item) for item in converted]
+    if isinstance(converted, dict):
+        return {key: _json_business_value(item) for key, item in converted.items()}
+    return converted
 
 
 def _transaction_dir(case_dir: Path, prefix: str, run_id: str) -> Path:
@@ -493,9 +614,26 @@ def _load_and_normalize(
         if not mapping["ready_for_calculation"]:
             return mapping, []
 
+        source_id = expected_sha256[:16]
         normalized = []
         for source_row, row in enumerate(reader, start=2):
             entry = {canonical: row.get(original) for original, canonical in mapping["mapping"].items()}
+            field_lineage = {}
+            for column, header in enumerate(headers, start=1):
+                canonical = mapping["mapping"].get(header)
+                if canonical is None:
+                    continue
+                value = row.get(header)
+                field_lineage[canonical] = {
+                    "source_id": source_id,
+                    "sheet_id": "csv",
+                    "row": source_row,
+                    "column": column,
+                    "coordinate": f"{_column_label(column)}{source_row}",
+                    "original_type": type(value).__name__,
+                    "value_origin": "source",
+                    "mapping_version": mapping["mapping_version"],
+                }
             structure_issues = []
             if None in row:
                 structure_issues.append("extra_cells")
@@ -509,6 +647,7 @@ def _load_and_normalize(
                     "source_sheet": "CSV",
                     "source_row": source_row,
                     "mapping_version": mapping["mapping_version"],
+                    "field_lineage": field_lineage,
                 }
             )
             normalized.append(entry)
@@ -1139,146 +1278,608 @@ def inspect_case(case_dir: Path) -> tuple[int, dict]:
         )
 
 
-def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
-    run_id, run_dir, started_at = _start_run(case_dir)
-    run_work_dir = run_dir / "work"
-    run_output_dir = run_dir / "output"
-    input_files: list[dict] = []
-    input_entries: list[dict] = []
-    error_type = None
+def _inspection_payload(inventory: _WorkbookInspection) -> dict:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "workbooks": list(inventory.workbooks),
+        "issues": list(inventory.issues),
+    }
 
-    try:
-        source_file, discovered_entries, selection_next_action = _select_journal(
-            case_dir, run_work_dir
-        )
-        input_entries = _input_entries_manifest(discovered_entries)
-        input_files = [
-            {
-                "path": item["path"],
-                "size_bytes": item["size_bytes"],
-                "sha256": item["sha256"],
-            }
-            for item in input_entries
-            if item["entry_type"] == "regular_file"
-        ]
 
-        if source_file is None:
-            exit_code = 4
-            status = "blocked_data_quality"
-            next_action = selection_next_action or "provide_exactly_one_csv_journal"
-            artifacts = ["work/input_selection.json"]
-            completed_steps = ["init", "input_selection"]
-            response_details = {}
-        else:
-            selected_manifest = next(
-                item
-                for item in input_files
-                if item["path"] == f"input/{source_file.name}"
-            )
-            mapping, rows = _load_and_normalize(
-                source_file,
-                selected_manifest["sha256"],
-                selected_manifest["size_bytes"],
-            )
-            _write_json(run_work_dir / "mapping_review.json", mapping)
-            if not mapping["ready_for_calculation"]:
-                exit_code = 3
-                status = "needs_mapping_review"
-                next_action = "confirm_field_mapping"
-                artifacts = ["work/input_selection.json", "work/mapping_review.json"]
-                completed_steps = ["init", "input_selection", "ingest", "mapping"]
-                response_details = {}
+def _write_excel_run_inputs(
+    context: _CaseRun,
+    intake: IntakeResult,
+    inventory: _WorkbookInspection,
+    selection: dict,
+) -> None:
+    _write_json(
+        context.work_dir / "input_manifest.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "sources": to_dict(intake.sources),
+            "issues": to_dict(intake.issues),
+        },
+    )
+    _write_json(context.work_dir / "workbook_inventory.json", _inspection_payload(inventory))
+    _write_json(context.work_dir / "sheet_selection.json", selection)
+
+
+def _selection_key(selection: dict) -> tuple[str, str, tuple[int, ...]]:
+    binding = selection["binding"]
+    return (
+        binding["source_sha256"],
+        binding["sheet_id"],
+        tuple(selection["header_rows"]),
+    )
+
+
+def _mapping_key(mapping: dict) -> tuple[str, str, tuple[int, ...]]:
+    binding = mapping["binding"]
+    return (
+        binding["source_sha256"],
+        binding["sheet_id"],
+        tuple(mapping["header_rows"]),
+    )
+
+
+def _active_mappings_for(
+    case_dir: Path,
+    selections: dict[str, list[dict]],
+) -> tuple[dict[str, list[dict]], list[tuple[str, dict]]]:
+    current = (
+        load_active_mappings(case_dir)
+        if (case_dir / "work" / "workbook_inventory.json").is_file()
+        else {}
+    )
+    active: dict[str, list[dict]] = {}
+    missing: list[tuple[str, dict]] = []
+    for role in _INSPECTION_ROLES:
+        by_key = {_mapping_key(item): item for item in current.get(role, ())}
+        for selection in selections.get(role, ()):
+            mapping = by_key.get(_selection_key(selection))
+            if mapping is None:
+                missing.append((role, selection))
             else:
-                try:
-                    quality_findings = validate_journal_quality(rows)
-                finally:
-                    _write_jsonl(run_work_dir / "normalized_journal.jsonl", rows)
-                _write_json(run_work_dir / "data_quality.json", quality_findings)
-                if quality_findings:
-                    exit_code = 4
-                    status = "blocked_data_quality"
-                    next_action = "resolve_data_quality_findings"
-                    artifacts = [
-                        "work/input_selection.json",
-                        "work/mapping_review.json",
-                        "work/normalized_journal.jsonl",
-                        "work/data_quality.json",
-                    ]
-                    completed_steps = [
-                        "init",
-                        "input_selection",
-                        "ingest",
-                        "mapping",
-                        "data_quality",
-                    ]
-                    response_details = {}
-                else:
-                    findings = _hard_rule_findings(rows) + detect_semantic_candidates(rows)
-                    _write_json(run_output_dir / "findings.json", findings)
-                    entity_name = json.loads(
-                        (case_dir / "state.json").read_text(encoding="utf-8")
-                    )["entity_name"]
-                    _atomic_write_text(
-                        run_output_dir / "report.md",
-                        _render_markdown(entity_name, len(rows), findings, ai_mode),
-                    )
-                    exit_code = 0
-                    status = "needs_professional_review"
-                    next_action = "review_findings"
-                    artifacts = [
-                        "work/input_selection.json",
-                        "work/mapping_review.json",
-                        "work/normalized_journal.jsonl",
-                        "work/data_quality.json",
-                        "output/findings.json",
-                        "output/report.md",
-                    ]
-                    completed_steps = [
-                        "init",
-                        "input_selection",
-                        "ingest",
-                        "mapping",
-                        "data_quality",
-                        "hard_rules",
-                        "semantic_screening",
-                    ]
-                    response_details = {
-                        "finding_count": len(findings),
-                        "artifacts": artifacts,
-                    }
+                active.setdefault(role, []).append(mapping)
+    return active, missing
+
+
+def _source_for_selection(
+    intake: IntakeResult,
+    selection: dict,
+) -> SourceRecord:
+    digest = selection["binding"]["source_sha256"]
+    return next(source for source in intake.sources if source.sha256 == digest)
+
+
+def _automatic_selections(
+    inventory: _WorkbookInspection,
+    selection: dict,
+) -> dict[str, list[dict]]:
+    automatic: dict[str, list[dict]] = {}
+    for role in _INSPECTION_ROLES:
+        for candidate in selection.get(role, ()):
+            if candidate.get("decision_source") != "automatic":
+                continue
+            workbook = next(
+                item
+                for item in inventory.workbooks
+                if item["source_id"] == candidate["source_id"]
+            )
+            automatic.setdefault(role, []).append(
+                {
+                    "role": role,
+                    "source_id": candidate["source_id"],
+                    "header_rows": list(candidate["header_rows"]),
+                    "hidden_rows": "exclude",
+                    "binding": {
+                        "source_sha256": workbook["sha256"],
+                        "source_filename": workbook["filename"],
+                        "sheet_id": candidate["sheet_id"],
+                        "sheet_name": candidate["sheet_name"],
+                    },
+                }
+            )
+    return automatic
+
+
+def _mapping_proposal(
+    case_dir: Path,
+    intake: IntakeResult,
+    role: str,
+    selection: dict,
+) -> dict:
+    source = _source_for_selection(intake, selection)
+    source_path = case_dir / "input" / source.filename
+    source_bytes = _source_snapshot(source_path, source.sha256, source.size_bytes)
+    with open_workbook(source_path, source_bytes=source_bytes) as reader:
+        sheet = next(
+            item
+            for item in reader.sheets()
+            if item.sheet_id == selection["binding"]["sheet_id"]
+        )
+        headers = selected_headers(reader, sheet, selection["header_rows"])
+    proposal = propose_mapping(role, headers)
+    return {
+        "role": role,
+        "source_id": source.source_id,
+        "sheet_id": selection["binding"]["sheet_id"],
+        "header_rows": list(selection["header_rows"]),
+        "mapping": dict(proposal.mapping),
+        "composites": _json_business_value(proposal.composites),
+        "unresolved": list(proposal.unresolved),
+        "missing_required": list(proposal.missing_required),
+        "conflicts": {
+            target: list(headers) for target, headers in proposal.conflicts.items()
+        },
+        "mapping_version": proposal.mapping_version,
+    }
+
+
+def _inventory_sheet(
+    inventory: _WorkbookInspection,
+    selection: dict,
+) -> dict:
+    binding = selection["binding"]
+    workbook = next(
+        item
+        for item in inventory.workbooks
+        if item["sha256"] == binding["source_sha256"]
+    )
+    return next(
+        item for item in workbook["sheets"] if item["sheet_id"] == binding["sheet_id"]
+    )
+
+
+def _annotate_excel_rows(
+    result: NormalizationResult,
+    source: SourceRecord,
+    selection: dict,
+    mapping: dict,
+) -> NormalizationResult:
+    rows = []
+    for item in result.rows:
+        row = dict(item)
+        lineage = row.get("field_lineage", {})
+        locations = [value for value in lineage.values() if isinstance(value, dict)]
+        row.update(
+            {
+                "source_file": source.filename,
+                "source_sheet": selection["binding"]["sheet_name"],
+                "source_row": locations[0].get("row") if locations else None,
+                "mapping_version": mapping["binding"]["mapping_schema_version"],
+            }
+        )
+        rows.append(row)
+    return NormalizationResult(tuple(rows), result.issues)
+
+
+def _normalize_excel_sources(
+    context: _CaseRun,
+    intake: IntakeResult,
+    inventory: _WorkbookInspection,
+    selections: dict[str, list[dict]],
+    mappings: dict[str, list[dict]],
+    review_period: dict,
+) -> tuple[dict[str, list[dict]], dict[str, list[RowIssue]]]:
+    normalized = {role: [] for role in _INSPECTION_ROLES}
+    role_issues = {role: [] for role in _INSPECTION_ROLES}
+    mapping_indexes = {
+        role: {_mapping_key(item): item for item in mappings.get(role, ())}
+        for role in _INSPECTION_ROLES
+    }
+    ordered = sorted(
+        (
+            (role, selection)
+            for role in _INSPECTION_ROLES
+            for selection in selections.get(role, ())
+        ),
+        key=lambda item: (
+            item[1]["binding"]["source_filename"].casefold(),
+            item[0],
+            item[1]["binding"]["sheet_id"],
+        ),
+    )
+    for role, selection in ordered:
+        source = _source_for_selection(intake, selection)
+        sheet = _inventory_sheet(inventory, selection)
+        if (
+            selection["hidden_rows"] == "exclude"
+            and sheet.get("has_hidden_data") is True
+        ):
+            role_issues[role].append(
+                RowIssue(
+                    "hidden_row_exclusion_unavailable",
+                    source.source_id,
+                    selection["binding"]["sheet_id"],
+                )
+            )
+            continue
+        source_path = context.case_dir / "input" / source.filename
+        source_bytes = _source_snapshot(source_path, source.sha256, source.size_bytes)
+        mapping = mapping_indexes[role][_selection_key(selection)]
+        with open_workbook(source_path, source_bytes=source_bytes) as reader:
+            result = (
+                normalize_journal(reader, selection, mapping, review_period)
+                if role == "journal"
+                else normalize_trial_balance(reader, selection, mapping)
+            )
+        result = _annotate_excel_rows(result, source, selection, mapping)
+        normalized[role].extend(result.rows)
+        role_issues[role].extend(result.issues)
+    return normalized, role_issues
+
+
+def _reconciliation_payload(
+    journal: list[dict],
+    trial_balance: list[dict],
+) -> tuple[dict, ReconciliationResult | None, ReconciliationResult | None]:
+    trial_result = reconcile_trial_balance(trial_balance) if trial_balance else None
+    journal_result = (
+        reconcile_journal_to_trial_balance(journal, trial_balance)
+        if journal and trial_balance
+        else None
+    )
+    return (
+        {
+            "schema_version": SCHEMA_VERSION,
+            "trial_balance": _json_business_value(trial_result),
+            "journal_to_trial_balance": _json_business_value(journal_result),
+        },
+        trial_result,
+        journal_result,
+    )
+
+
+def _procedure_coverage(
+    *,
+    journal_present: bool,
+    trial_balance_present: bool,
+    role_issues: dict[str, list],
+    trial_result: ReconciliationResult | None,
+    journal_result: ReconciliationResult | None,
+) -> tuple[ProcedureCoverage, ...]:
+    evidence = {
+        role: "missing"
+        for roles in PROCEDURE_DEPENDENCIES.values()
+        for role in roles
+    }
+    evidence.update({
+        "journal": "present_parsed" if journal_present else "missing",
+        "trial_balance": "present_parsed" if trial_balance_present else "missing",
+    })
+    coverage = list(
+        evaluate_procedure_coverage(
+            evidence,
+            {
+                role: [getattr(issue, "code", str(issue)) for issue in issues]
+                for role, issues in role_issues.items()
+            },
+        )
+    )
+    reconciliation_blocked = (
+        trial_result is not None
+        and journal_result is not None
+        and (not trial_result.passed or not journal_result.passed)
+    )
+    if reconciliation_blocked:
+        coverage = [
+            ProcedureCoverage(
+                item.procedure,
+                item.required_roles,
+                "blocked",
+                ("journal", "trial_balance"),
+            )
+            if item.procedure == "journal_tb_reconciliation"
+            else item
+            for item in coverage
+        ]
+    return tuple(coverage)
+
+
+def _coverage_status(coverage: tuple[ProcedureCoverage, ...], procedure: str) -> str:
+    return next(item.status for item in coverage if item.procedure == procedure)
+
+
+def _write_review_outputs(
+    context: _CaseRun,
+    rows: list[dict],
+    findings: list[dict],
+) -> None:
+    _write_json(context.output_dir / "findings.json", findings)
+    entity_name = load_case_state(context.case_dir)["entity_name"]
+    _atomic_write_text(
+        context.output_dir / "report.md",
+        _render_markdown(entity_name, len(rows), findings, context.ai_mode),
+    )
+
+
+def _complete_normalized_run(
+    context: _CaseRun,
+    normalized: dict[str, list[dict]],
+    role_issues: dict[str, list],
+    *,
+    completed_steps: list[str],
+) -> tuple[int, dict]:
+    journal = normalized["journal"]
+    trial_balance = normalized["trial_balance"]
+    journal_quality = validate_journal_quality(journal)
+    quality_payload = [
+        _json_business_value(issue)
+        for role in _INSPECTION_ROLES
+        for issue in role_issues[role]
+    ] + journal_quality
+    if quality_payload:
+        _write_json(context.work_dir / "data_quality.json", quality_payload)
+    else:
+        _write_json(context.work_dir / "data_quality.json", [])
+    _write_jsonl(context.work_dir / "normalized_journal.jsonl", journal)
+    _write_jsonl(
+        context.work_dir / "normalized_trial_balance.jsonl",
+        trial_balance,
+    )
+    reconciliation, trial_result, journal_result = _reconciliation_payload(
+        journal, trial_balance
+    )
+    _write_json(context.work_dir / "reconciliation.json", reconciliation)
+    if journal_quality:
+        role_issues["journal"].append("journal_quality_failed")
+    coverage = _procedure_coverage(
+        journal_present=bool(journal) or bool(role_issues["journal"]),
+        trial_balance_present=bool(trial_balance) or bool(role_issues["trial_balance"]),
+        role_issues=role_issues,
+        trial_result=trial_result,
+        journal_result=journal_result,
+    )
+    _write_json(
+        context.work_dir / "coverage_matrix.json",
+        {"schema_version": SCHEMA_VERSION, "items": _json_business_value(coverage)},
+    )
+
+    journal_eligible = all(
+        _coverage_status(coverage, procedure) == "performed"
+        for procedure in ("journal_hard_rules", "journal_semantic_screen")
+    )
+    if journal_eligible:
+        findings = _hard_rule_findings(journal) + detect_semantic_candidates(journal)
+        _write_review_outputs(context, journal, findings)
+        return context.finish(
+            0,
+            "needs_professional_review",
+            "review_findings",
+            completed_steps + ["reconciliation", "coverage", "rules"],
+            response_details={"finding_count": len(findings)},
+        )
+    return context.finish(
+        4 if role_issues["journal"] or journal_quality else 0,
+        "blocked_data_quality" if role_issues["journal"] or journal_quality else "partial_scope_ready",
+        "resolve_data_quality_findings" if role_issues["journal"] or journal_quality else "review_coverage",
+        completed_steps + ["reconciliation", "coverage"],
+    )
+
+
+def _run_csv_case(context: _CaseRun) -> tuple[int, dict]:
+    source_file, discovered_entries, selection_next_action = _select_journal(
+        context.case_dir, context.work_dir
+    )
+    context.input_entries = _input_entries_manifest(discovered_entries)
+    context.input_files = [
+        {
+            "path": item["path"],
+            "size_bytes": item["size_bytes"],
+            "sha256": item["sha256"],
+        }
+        for item in context.input_entries
+        if item["entry_type"] == "regular_file"
+    ]
+    if source_file is None:
+        return context.finish(
+            4,
+            "blocked_data_quality",
+            selection_next_action or "provide_exactly_one_csv_journal",
+            ["init", "input_selection"],
+        )
+    selected_manifest = next(
+        item
+        for item in context.input_files
+        if item["path"] == f"input/{source_file.name}"
+    )
+    mapping, rows = _load_and_normalize(
+        source_file,
+        selected_manifest["sha256"],
+        selected_manifest["size_bytes"],
+    )
+    _write_json(context.work_dir / "mapping_review.json", mapping)
+    if not mapping["ready_for_calculation"]:
+        return context.finish(
+            3,
+            "needs_mapping_review",
+            "confirm_field_mapping",
+            ["init", "input_selection", "ingest", "mapping"],
+        )
+    return _complete_normalized_run(
+        context,
+        {"journal": rows, "trial_balance": []},
+        {"journal": [], "trial_balance": []},
+        completed_steps=["init", "input_selection", "ingest", "mapping", "normalization"],
+    )
+
+
+def _run_excel_case(
+    context: _CaseRun,
+    state: dict,
+) -> tuple[int, dict]:
+    review_period = state.get("review_period")
+    intake = inventory_inputs(context.case_dir, review_period)
+    context.input_files, context.input_entries = _input_records(intake)
+    inventory = inspect_workbooks(context.case_dir, intake.sources)
+    selection = build_sheet_selection(inventory)
+    invalid_roles = apply_sheet_selection_reviews(
+        context.case_dir,
+        inventory,
+        selection,
+    )
+    _write_excel_run_inputs(context, intake, inventory, selection)
+    if intake.issues or inventory.issues or review_period is None:
+        next_action = (
+            "set_case_period"
+            if review_period is None
+            else "resolve_intake_issues"
+            if intake.issues
+            else "resolve_workbook_issues"
+        )
+        return context.finish(
+            4,
+            "needs_intake_review",
+            next_action,
+            ["init", "intake", "workbook_inventory"],
+        )
+    status, next_action = inspection_state(
+        intake,
+        inventory,
+        selection,
+        invalid_roles,
+    )
+    if status == "needs_sheet_selection":
+        return context.finish(
+            4,
+            status,
+            next_action,
+            ["init", "intake", "workbook_inventory", "sheet_selection"],
+        )
+
+    valid_selections, _ = load_valid_sheet_selections(
+        context.case_dir,
+        _inspection_payload(inventory),
+    )
+    for role, decisions in _automatic_selections(inventory, selection).items():
+        existing = {_selection_key(item) for item in valid_selections.get(role, ())}
+        valid_selections.setdefault(role, []).extend(
+            item for item in decisions if _selection_key(item) not in existing
+        )
+    mappings, missing = _active_mappings_for(context.case_dir, valid_selections)
+    if missing:
+        proposals = [
+            _mapping_proposal(context.case_dir, intake, role, selected)
+            for role, selected in missing
+        ]
+        _write_json(
+            context.work_dir / "mapping_review.json",
+            {"schema_version": SCHEMA_VERSION, "proposals": proposals},
+        )
+        return context.finish(
+            3,
+            "needs_mapping_review",
+            "confirm_field_mapping",
+            ["init", "intake", "workbook_inventory", "sheet_selection", "mapping"],
+        )
+    csv_sources = sorted(
+        (
+            source
+            for source in intake.sources
+            if source.status == "accepted" and source.extension == ".csv"
+        ),
+        key=lambda source: (source.filename.casefold(), source.source_id),
+    )
+    if len(csv_sources) > 1:
+        _write_json(
+            context.work_dir / "input_selection.json",
+            {
+                "status": "blocked",
+                "required_count": 1,
+                "candidate_count": len(csv_sources),
+                "candidates": [source.filename for source in csv_sources],
+                "next_action": "provide_exactly_one_csv_journal",
+            },
+        )
+        return context.finish(
+            4,
+            "blocked_data_quality",
+            "provide_exactly_one_csv_journal",
+            ["init", "intake", "workbook_inventory", "sheet_selection", "mapping"],
+        )
+    csv_rows: list[dict] = []
+    if csv_sources:
+        csv_source = csv_sources[0]
+        csv_mapping, csv_rows = _load_and_normalize(
+            context.case_dir / "input" / csv_source.filename,
+            csv_source.sha256,
+            csv_source.size_bytes,
+        )
+        if not csv_mapping["ready_for_calculation"]:
+            _write_json(context.work_dir / "mapping_review.json", csv_mapping)
+            return context.finish(
+                3,
+                "needs_mapping_review",
+                "confirm_field_mapping",
+                ["init", "intake", "workbook_inventory", "sheet_selection", "mapping"],
+            )
+    normalized, role_issues = _normalize_excel_sources(
+        context,
+        intake,
+        inventory,
+        valid_selections,
+        mappings,
+        review_period,
+    )
+    normalized["journal"].extend(csv_rows)
+    normalized["journal"].sort(
+        key=lambda row: (
+            str(row.get("source_file", "")).casefold(),
+            int(row.get("source_row") or 0),
+        )
+    )
+    return _complete_normalized_run(
+        context,
+        normalized,
+        role_issues,
+        completed_steps=[
+            "init",
+            "intake",
+            "workbook_inventory",
+            "sheet_selection",
+            "mapping",
+            "normalization",
+        ],
+    )
+
+
+def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
+    context = _start_case_run(case_dir, ai_mode)
+    try:
+        state = load_case_state(case_dir)
+        has_excel = any(
+            path.is_file() and path.suffix.lower() in _EXCEL_EXTENSIONS
+            for path in (case_dir / "input").iterdir()
+        )
+        return _run_excel_case(context, state) if has_excel else _run_csv_case(context)
+    except _RunPublicationError as error:
+        cause = error.__cause__
+        if cause is None:
+            raise
+        raise cause
     except Exception as error:
         error_type = _safe_error_type(error)
         _write_json(
-            run_work_dir / "processing_error.json",
+            context.work_dir / "processing_error.json",
             {
                 "status": "blocked_processing_error",
                 "next_action": "inspect_processing_error",
                 "error_type": error_type,
             },
         )
-        exit_code = 5
-        status = "blocked_processing_error"
-        next_action = "inspect_processing_error"
-        artifacts = _run_artifacts(run_dir)
-        completed_steps = ["init", "processing_error"]
-        response_details = {"error_type": error_type}
-
-    state = _finalize_run(
-        case_dir=case_dir,
-        run_id=run_id,
-        run_dir=run_dir,
-        started_at=started_at,
-        ai_mode=ai_mode,
-        input_files=input_files,
-        input_entries=input_entries,
-        status=status,
-        next_action=next_action,
-        artifacts=artifacts,
-        completed_steps=completed_steps,
-        error_type=error_type,
-    )
-    return exit_code, {
-        "status": state["status"],
-        "next_action": state["next_action"],
-        **response_details,
-    }
+        try:
+            return context.finish(
+                5,
+                "blocked_processing_error",
+                "inspect_processing_error",
+                ["init", "processing_error"],
+                response_details={"error_type": error_type},
+                error_type=error_type,
+                publish_current_view=False,
+            )
+        except _RunPublicationError as publication_error:
+            cause = publication_error.__cause__
+            if cause is None:
+                raise
+            raise cause
