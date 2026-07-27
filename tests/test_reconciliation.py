@@ -221,6 +221,42 @@ class ReconciliationTests(unittest.TestCase):
         self.assertNotIn("private journal summary", repr(item))
         self.assertNotIn("private counterparty", repr(item))
 
+    def test_reconciliation_serialization_preserves_composite_cell_lineage(self):
+        from open_tax_check.pipeline import _json_business_value
+
+        trial = tb_row(period_debit="99.99")
+        amount = {**_lineage(2, "period_debit"), "column": 5, "coordinate": "E2"}
+        direction = {
+            **_lineage(2, "period_debit"),
+            "column": 6,
+            "coordinate": "F2",
+        }
+        trial["field_lineage"]["period_debit"] = {
+            **amount,
+            "value_origin": "derived_direction_split",
+            "contributing_cells": {
+                "amount": amount,
+                "direction": direction,
+            },
+        }
+
+        payload = _json_business_value(
+            reconcile_journal_to_trial_balance(
+                [journal_row(debit="100.00")],
+                [trial],
+            )
+        )
+
+        lineage = payload["items"][0]["trial_balance_lineage"][0]["period_debit"]
+        self.assertEqual(
+            lineage["contributing_cells"]["amount"]["coordinate"],
+            "E2",
+        )
+        self.assertEqual(
+            lineage["contributing_cells"]["direction"]["coordinate"],
+            "F2",
+        )
+
     def test_low_ambient_precision_is_ignored_without_mutating_global_context(self):
         original = getcontext().copy()
         with localcontext() as context:

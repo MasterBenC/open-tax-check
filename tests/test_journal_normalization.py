@@ -1,8 +1,10 @@
 from datetime import date, datetime
 from dataclasses import replace
+import types
 import unittest
+from unittest import mock
 
-from open_tax_check.workbooks import CellValue, SheetMeta, WorkbookReader
+from open_tax_check.workbooks import CellValue, SheetMeta, WorkbookReader, XlrdReader
 
 
 SOURCE_ID = "source-0001"
@@ -52,7 +54,7 @@ class MemoryReader(WorkbookReader):
                 name="Journal",
                 visibility="visible",
                 max_row=len(self._rows),
-                max_column=len(HEADERS),
+                max_column=max((len(row) for row in self._rows), default=0),
             ),
         )
 
@@ -136,6 +138,107 @@ class JournalNormalizationTests(unittest.TestCase):
         self.assertEqual(set(row["field_lineage"]), set(MAPPING["mapping"].values()))
         self.assertEqual(row["field_lineage"]["credit"]["value_origin"], "formula")
         self.assertEqual(result.issues, ())
+
+    def test_internal_blank_header_keeps_later_fields_on_physical_columns(self):
+        from open_tax_check.normalization import normalize_journal
+
+        headers = (
+            "voucher",
+            "date",
+            None,
+            "account_code",
+            "account",
+            "summary",
+            "debit",
+            "credit",
+            "counterparty",
+        )
+        reader = MemoryReader(
+            (
+                cells(headers, row_number=1),
+                cells(
+                    (
+                        "V-1",
+                        "2025-01-01",
+                        None,
+                        "1001",
+                        "Cash",
+                        "opening entry",
+                        100,
+                        0,
+                        "Customer A",
+                    ),
+                    row_number=2,
+                ),
+            )
+        )
+
+        result = normalize_journal(reader, SELECTION, MAPPING, REVIEW_PERIOD)
+
+        self.assertEqual(result.issues, ())
+        self.assertEqual(result.rows[0]["account_code"], "1001")
+        self.assertEqual(result.rows[0]["account_name"], "Cash")
+        self.assertEqual(result.rows[0]["debit"], "100.00")
+        self.assertEqual(result.rows[0]["field_lineage"]["debit"]["coordinate"], "G2")
+
+    def test_xls_date_systems_produce_the_same_period_tax_year_and_lineage(self):
+        from open_tax_check.normalization import normalize_journal
+
+        headers = ("voucher", "date", "account", "debit", "credit")
+        mapping = {
+            "mapping": {
+                "voucher": "voucher_no",
+                "date": "date",
+                "account": "account_name",
+                "debit": "debit",
+                "credit": "credit",
+            },
+            "binding": {"mapping_schema_version": "0.2.0"},
+        }
+        for datemode, serial in ((0, 45658), (1, 44196)):
+            with self.subTest(datemode=datemode):
+                source_rows = (
+                    tuple(types.SimpleNamespace(value=value, ctype=1) for value in headers),
+                    (
+                        types.SimpleNamespace(value="V-1", ctype=1),
+                        types.SimpleNamespace(value=serial, ctype=3),
+                        types.SimpleNamespace(value="Cash", ctype=1),
+                        types.SimpleNamespace(value=100, ctype=2),
+                        types.SimpleNamespace(value=0, ctype=2),
+                    ),
+                )
+                sheet = types.SimpleNamespace(
+                    name="Journal",
+                    nrows=2,
+                    ncols=5,
+                    merged_cells=(),
+                    rowinfo_map={},
+                    colinfo_map={},
+                    cell=lambda row, column: source_rows[row][column],
+                )
+                workbook = types.SimpleNamespace(
+                    nsheets=1,
+                    datemode=datemode,
+                    sheet_visibility=(0,),
+                    sheet_by_index=mock.Mock(return_value=sheet),
+                    unload_sheet=mock.Mock(),
+                    release_resources=mock.Mock(),
+                )
+
+                result = normalize_journal(
+                    XlrdReader(workbook),
+                    SELECTION,
+                    mapping,
+                    REVIEW_PERIOD,
+                )
+
+                self.assertEqual(result.issues, ())
+                row = result.rows[0]
+                self.assertEqual(row["date"], "2025-01-01")
+                self.assertEqual(row["period"], "2025-01")
+                self.assertEqual(row["tax_year"], "2025")
+                self.assertEqual(row["field_lineage"]["date"]["original_type"], "date")
+                self.assertEqual(row["field_lineage"]["date"]["value_origin"], "stored_value")
 
     def test_required_formula_without_cached_value_blocks(self):
         from open_tax_check.normalization import normalize_journal

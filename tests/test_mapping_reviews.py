@@ -25,6 +25,7 @@ class MappingReviewTests(unittest.TestCase):
         root: Path,
         *,
         journal_extra_header: str = "unreported",
+        journal_spacer_column: int | None = None,
     ) -> Path:
         from openpyxl import Workbook
 
@@ -36,9 +37,17 @@ class MappingReviewTests(unittest.TestCase):
         journal_sheet.title = "Journal"
         journal_sheet.append(())
         journal_sheet.append(())
-        journal_sheet.append(
-            ("voucher", "date", "account", "debit", "credit", journal_extra_header)
-        )
+        journal_headers = [
+            "voucher",
+            "date",
+            "account",
+            "debit",
+            "credit",
+            journal_extra_header,
+        ]
+        if journal_spacer_column is not None:
+            journal_headers.insert(journal_spacer_column - 1, None)
+        journal_sheet.append(journal_headers)
         journal_workbook.save(journal_path)
         journal_workbook.close()
 
@@ -78,7 +87,7 @@ class MappingReviewTests(unittest.TestCase):
                                 {
                                     "sheet_id": "sheet-0001",
                                     "name": "Journal",
-                                    "used_range": "A1:F20",
+                                    "used_range": f"A1:{'G' if journal_spacer_column else 'F'}20",
                                 }
                             ],
                         },
@@ -266,6 +275,48 @@ class MappingReviewTests(unittest.TestCase):
         )
         self.assertEqual(decision["binding"]["header_rows"], [2])
         self.assertEqual(decision["binding"]["case_period"], {"start": "2026-01-01", "end": "2026-12-31"})
+
+    def test_header_fingerprint_binds_physical_columns_not_only_labels(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plain = self.make_case(root / "plain")
+            spaced = self.make_case(
+                root / "spaced",
+                journal_spacer_column=3,
+            )
+
+            plain_decision = confirm_mapping(
+                plain,
+                self.journal_payload_for_case(plain),
+            )
+            spaced_decision = confirm_mapping(
+                spaced,
+                self.journal_payload_for_case(spaced),
+            )
+
+        self.assertNotEqual(
+            plain_decision["binding"]["source_headers_fingerprint"],
+            spaced_decision["binding"]["source_headers_fingerprint"],
+        )
+
+    def test_duplicate_physical_header_labels_remain_unsafe_to_map(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case = self.make_case(
+                Path(temp_dir),
+                journal_extra_header="voucher",
+            )
+
+            with self.assertRaisesRegex(
+                MappingReviewError,
+                "invalid_source_headers",
+            ):
+                confirm_mapping(
+                    case,
+                    self.journal_payload_for_case(
+                        case,
+                        extra_header="voucher",
+                    ),
+                )
 
     def test_mapping_becomes_inactive_when_confirmed_header_selection_changes(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -10,7 +10,7 @@ from typing import Any, Iterator
 from .mapping import MAPPING_VERSION, ROLE_FIELDS
 from .numeric import format_money, parse_decimal
 from .quality import _normalize_date
-from .sheet_detection import normalize_header, selected_headers
+from .sheet_detection import normalize_header, selected_header_columns
 from .workbooks import CellValue, SheetMeta, WorkbookReader
 
 
@@ -151,11 +151,14 @@ def _selected_sheet(reader: WorkbookReader, selection: dict) -> SheetMeta | None
     return None
 
 
-def _source_columns(headers: tuple[str, ...], mapping: dict) -> dict[str, int] | None:
+def _source_columns(
+    headers: tuple[tuple[int, str], ...],
+    mapping: dict,
+) -> dict[str, int] | None:
     source_mapping = mapping["mapping"]
     targets = set(ROLE_FIELDS["journal"]["required"]) | set(ROLE_FIELDS["journal"]["optional"])
     columns: dict[str, int] = {}
-    for index, header in enumerate(headers, start=1):
+    for index, header in headers:
         canonical = source_mapping.get(header)
         if canonical not in targets:
             continue
@@ -270,7 +273,11 @@ def normalize_journal(
     if sheet is None:
         return NormalizationResult((), (RowIssue("selected_sheet_unavailable"),))
     try:
-        headers = selected_headers(reader, sheet, _selection_value(selection, "header_rows"))
+        headers = selected_header_columns(
+            reader,
+            sheet,
+            _selection_value(selection, "header_rows"),
+        )
     except (TypeError, ValueError):
         return NormalizationResult((), (RowIssue("selected_headers_unavailable"),))
     columns = _source_columns(headers, mapping)
@@ -335,14 +342,14 @@ _DIRECTION_ALIASES = {
 
 
 def _trial_balance_source_columns(
-    headers: tuple[str, ...],
+    headers: tuple[tuple[int, str], ...],
     mapping: dict,
 ) -> tuple[dict[str, int], dict[str, tuple[int, int, str, str]]] | None:
     targets = set(ROLE_FIELDS["trial_balance"]["required"]) | set(
         ROLE_FIELDS["trial_balance"]["optional"]
     )
     columns: dict[str, int] = {}
-    for index, header in enumerate(headers, start=1):
+    for index, header in headers:
         canonical = mapping["mapping"].get(header)
         if canonical not in targets:
             continue
@@ -382,11 +389,11 @@ def _trial_balance_source_columns(
         ):
             return None
         amount_indexes = [
-            index for index, header in enumerate(headers, start=1) if header == amount_field
+            index for index, header in headers if header == amount_field
         ]
         direction_indexes = [
             index
-            for index, header in enumerate(headers, start=1)
+            for index, header in headers
             if header == direction_field
         ]
         if len(amount_indexes) != 1 or len(direction_indexes) != 1:
@@ -468,14 +475,33 @@ def _build_trial_balance_row(
         credit = abs(amount) if side == "credit" else Decimal("0")
         normalized[debit_field] = format_money(debit)
         normalized[credit_field] = format_money(credit)
+        contributing_cells = {
+            "amount": field_lineage(
+                amount_cell,
+                source_id=source_id,
+                sheet=sheet,
+                mapping_version=mapping_version,
+            ),
+            "direction": field_lineage(
+                direction_cell,
+                source_id=source_id,
+                sheet=sheet,
+                mapping_version=mapping_version,
+            ),
+        }
         for field in (debit_field, credit_field):
-            lineage[field] = field_lineage(
+            derived_lineage = field_lineage(
                 amount_cell,
                 source_id=source_id,
                 sheet=sheet,
                 mapping_version=mapping_version,
                 value_origin="derived_direction_split",
             )
+            derived_lineage["contributing_cells"] = {
+                role: dict(location)
+                for role, location in contributing_cells.items()
+            }
+            lineage[field] = derived_lineage
     normalized["field_lineage"] = lineage
     return normalized
 
@@ -494,7 +520,11 @@ def normalize_trial_balance(
     if sheet is None:
         return NormalizationResult((), (RowIssue("selected_sheet_unavailable"),))
     try:
-        headers = selected_headers(reader, sheet, _selection_value(selection, "header_rows"))
+        headers = selected_header_columns(
+            reader,
+            sheet,
+            _selection_value(selection, "header_rows"),
+        )
     except (TypeError, ValueError):
         return NormalizationResult((), (RowIssue("selected_headers_unavailable"),))
     source_columns = _trial_balance_source_columns(headers, mapping)

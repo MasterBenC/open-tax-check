@@ -397,6 +397,11 @@ class XlrdReader(WorkbookReader):
                         )
                         if data_type in {"empty", "blank"}:
                             value = None
+                        elif data_type == "date":
+                            value = _required_module("xlrd").xldate_as_datetime(
+                                value,
+                                self._workbook.datemode,
+                            )
                     else:
                         value = None
                         data_type = "empty"

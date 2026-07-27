@@ -1533,6 +1533,7 @@ def _reconciliation_payload(
 
 def _procedure_coverage(
     *,
+    evidence_statuses: dict[str, str] | None,
     journal_present: bool,
     trial_balance_present: bool,
     role_issues: dict[str, list],
@@ -1544,10 +1545,11 @@ def _procedure_coverage(
         for roles in PROCEDURE_DEPENDENCIES.values()
         for role in roles
     }
-    evidence.update({
-        "journal": "present_parsed" if journal_present else "missing",
-        "trial_balance": "present_parsed" if trial_balance_present else "missing",
-    })
+    evidence.update(evidence_statuses or {})
+    if journal_present:
+        evidence["journal"] = "present_parsed"
+    if trial_balance_present:
+        evidence["trial_balance"] = "present_parsed"
     coverage = list(
         evaluate_procedure_coverage(
             evidence,
@@ -1600,6 +1602,7 @@ def _complete_normalized_run(
     role_issues: dict[str, list],
     *,
     completed_steps: list[str],
+    evidence_statuses: dict[str, str] | None = None,
 ) -> tuple[int, dict]:
     journal = normalized["journal"]
     trial_balance = normalized["trial_balance"]
@@ -1625,6 +1628,7 @@ def _complete_normalized_run(
     if journal_quality:
         role_issues["journal"].append("journal_quality_failed")
     coverage = _procedure_coverage(
+        evidence_statuses=evidence_statuses,
         journal_present=bool(journal) or bool(role_issues["journal"]),
         trial_balance_present=bool(trial_balance) or bool(role_issues["trial_balance"]),
         role_issues=role_issues,
@@ -1841,6 +1845,10 @@ def _run_excel_case(
             "mapping",
             "normalization",
         ],
+        evidence_statuses={
+            item.evidence_role: item.status
+            for item in intake.coverage
+        },
     )
 
 

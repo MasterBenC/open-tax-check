@@ -6,7 +6,7 @@
 
 仓库中的 `input/journal.csv` 是可直接审查的虚构文本源，包含三张借贷平衡的凭证：销售收入 1,000,000 元、业务招待费 20,000 元，以及摘要含“中秋礼品及高档茶叶”的办公费 5,000 元。
 
-`scripts/run_fictional_example.py` 会在 `--output` 指定的独立案件中运行时生成 `input/journal.xlsx` 和 `input/trial-balance.xlsx`，从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构 mapping JSON。仓库不提交 `.xlsx` 二进制。预期产物包括：
+`scripts/run_fictional_example.py` 会在 `--output` 指定的独立案件中运行时生成 `input/journal.xlsx`、`input/trial-balance.xlsx`，以及仅供 Phase 2A 检测的财务报表和纳税申报表文本占位证据；这些占位证据保持 `present_unparsed`。runner 从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构 mapping JSON。仓库不提交 `.xlsx` 二进制。预期产物包括：
 
 - `state.json`，状态为 `needs_professional_review`；
 - `work/input_manifest.json`、`work/workbook_inventory.json`、`work/sheet_selection.json` 和 `work/coverage_matrix.json`；

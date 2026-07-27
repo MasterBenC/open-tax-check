@@ -5,6 +5,7 @@ import io
 import tempfile
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 from xml.etree.ElementTree import ParseError
@@ -403,6 +404,37 @@ class WorkbookReaderTests(unittest.TestCase):
         self.assertIs(metadata.has_merged_ranges, True)
         self.assertIs(metadata.has_hidden_data, True)
         self.assertEqual(metadata.merged_ranges, ("A1:B1",))
+
+    def test_xls_date_cells_respect_1900_and_1904_workbook_date_modes(self):
+        for datemode, serial in ((0, 45658), (1, 44196)):
+            with self.subTest(datemode=datemode):
+                cell = types.SimpleNamespace(value=serial, ctype=3)
+                sheet = types.SimpleNamespace(
+                    nrows=1,
+                    ncols=1,
+                    cell=mock.Mock(return_value=cell),
+                )
+                workbook = types.SimpleNamespace(
+                    nsheets=1,
+                    datemode=datemode,
+                    sheet_by_index=mock.Mock(return_value=sheet),
+                    unload_sheet=mock.Mock(),
+                    release_resources=mock.Mock(),
+                )
+
+                values = list(
+                    workbooks.XlrdReader(workbook).iter_rows(
+                        "sheet-0001",
+                        1,
+                        1,
+                        1,
+                    )
+                )
+
+                converted = values[0][0]
+                self.assertEqual(converted.value, datetime(2025, 1, 1))
+                self.assertEqual(converted.data_type, "date")
+                self.assertEqual(converted.value_origin, "stored_value")
 
     def test_ooxml_formula_and_cached_rows_are_traversed_once_in_lockstep(
         self,

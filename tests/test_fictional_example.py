@@ -129,6 +129,13 @@ class FictionalExampleTests(unittest.TestCase):
             generated = Path(temp_dir) / "input/journal.xlsx"
             self.assertTrue(generated.is_file())
             self.assertTrue((Path(temp_dir) / "input/trial-balance.xlsx").is_file())
+            for filename in (
+                "balance-sheet.txt",
+                "income-statement.txt",
+                "vat-return.txt",
+                "cit-return.txt",
+            ):
+                self.assertTrue((Path(temp_dir) / "input" / filename).is_file())
             state = json.loads(
                 (Path(temp_dir) / "state.json").read_text(encoding="utf-8")
             )
@@ -141,6 +148,24 @@ class FictionalExampleTests(unittest.TestCase):
             )
             self.assertTrue(
                 (Path(temp_dir) / "work/coverage_matrix.json").is_file()
+            )
+            coverage = json.loads(
+                (Path(temp_dir) / "work/coverage_matrix.json").read_text(
+                    encoding="utf-8"
+                )
+            )["items"]
+            by_procedure = {item["procedure"]: item for item in coverage}
+            self.assertEqual(
+                by_procedure["financial_statement_reconciliation"]["status"],
+                "present_unparsed",
+            )
+            self.assertEqual(
+                by_procedure["vat_return_reconciliation"]["status"],
+                "present_unparsed",
+            )
+            self.assertEqual(
+                by_procedure["cit_return_reconciliation"]["status"],
+                "present_unparsed",
             )
             self.assertTrue((Path(temp_dir) / "work/normalized_journal.jsonl").is_file())
             self.assertTrue((Path(temp_dir) / "work/normalized_trial_balance.jsonl").is_file())

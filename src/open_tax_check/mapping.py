@@ -124,7 +124,7 @@ ROLE_ALIASES = {
 # Backward-compatible public names used by the CSV-only interface.
 HEADER_ALIASES = JOURNAL_ALIASES
 REQUIRED_JOURNAL_FIELDS = set(ROLE_FIELDS["journal"]["required"])
-MAPPING_VERSION = "0.2.0"
+MAPPING_VERSION = "0.3.0"
 
 
 def _normalize(value: str) -> str:

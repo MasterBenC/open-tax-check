@@ -50,7 +50,7 @@ opentaxcheck select-sheet --case .\cases\demo --role journal --source <source_id
 opentaxcheck inspect --case .\cases\demo
 ```
 
-如决定纳入隐藏行，将 `--hidden-rows exclude` 改为 `--hidden-rows include`；不得省略该决定。隐藏工作表只能在人工复核后显式选择，不能自动选择。
+当前读取器尚不支持实际过滤隐藏行。含隐藏数据时，`exclude` 不会过滤后继续处理，而是阻断并记录 `hidden_row_exclusion_unavailable`；复核人只能在复核后改为 `include`，或停止处理。不得省略该决定。隐藏工作表只能在人工复核后显式选择，不能自动选择。
 
 macOS 或 Linux 使用 `source .venv/bin/activate` 激活虚拟环境；其余命令相同。
 
@@ -66,7 +66,7 @@ Excel 文件不能交给 CSV 适配器冒充 CSV 处理；只有来源绑定映�
 
 ## 运行虚构示例
 
-仓库保留一份完全虚构且借贷平衡的 CSV 文本作为可审查的示例源。runner 会在独立案件目录中生成 `journal.xlsx` 和 `trial-balance.xlsx`，从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构映射；仓库不提交 `.xlsx` 二进制。
+仓库保留一份完全虚构且借贷平衡的 CSV 文本作为可审查的示例源。runner 会在独立案件目录中生成 `journal.xlsx`、`trial-balance.xlsx`，以及仅供 Phase 2A 检测且保持 `present_unparsed` 的财务报表和纳税申报表文本占位证据；随后从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构映射。仓库不提交 `.xlsx` 二进制。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_fictional_example.py --output work\phase-2b-demo --format excel

@@ -62,6 +62,7 @@ class ExcelPipelineTests(unittest.TestCase):
         confirm: bool,
         reconciles: bool = True,
         hidden_journal_row: int | None = None,
+        unparsed_statement_and_return_evidence: bool = False,
     ) -> Path:
         case = self.root / "case"
         init_case(case, "Fictional Company", "2025-01-01", "2025-12-31")
@@ -88,6 +89,17 @@ class ExcelPipelineTests(unittest.TestCase):
                 ("6602", "管理费用-业务招待费", 0, 0, 20_000, 0, 20_000, 0),
             ),
         )
+        if unparsed_statement_and_return_evidence:
+            for filename in (
+                "balance-sheet.txt",
+                "income-statement.txt",
+                "vat-return.txt",
+                "cit-return.txt",
+            ):
+                (case / "input" / filename).write_text(
+                    "Fictional placeholder supplied for intake detection only.\n",
+                    encoding="utf-8",
+                )
 
         inspect_code, _ = inspect_case(case)
         self.assertIn(inspect_code, (0, 4))
@@ -180,6 +192,32 @@ class ExcelPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "needs_professional_review")
         entertainment = next(item for item in findings if item["rule_id"] == "CIT-BE-001")
         self.assertEqual(entertainment["tax_adjustment"], "15000.00")
+
+    def test_excel_run_preserves_detected_unparsed_statement_and_return_evidence(self):
+        case = self.prepared_excel_case(
+            confirm=True,
+            reconciles=True,
+            unparsed_statement_and_return_evidence=True,
+        )
+
+        code, result = run_case(case, "off")
+
+        coverage = load_json(case / "work" / "coverage_matrix.json")["items"]
+        by_procedure = {item["procedure"]: item for item in coverage}
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "needs_professional_review")
+        self.assertEqual(
+            by_procedure["financial_statement_reconciliation"]["status"],
+            "present_unparsed",
+        )
+        self.assertEqual(
+            by_procedure["vat_return_reconciliation"]["status"],
+            "present_unparsed",
+        )
+        self.assertEqual(
+            by_procedure["cit_return_reconciliation"]["status"],
+            "present_unparsed",
+        )
 
     def test_unconfirmed_mapping_stops_before_normalized_artifacts(self):
         case = self.prepared_excel_case(confirm=False)

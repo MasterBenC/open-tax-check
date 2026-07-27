@@ -231,6 +231,40 @@ class TrialBalanceNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(result.issues, ())
 
+    def test_internal_blank_header_keeps_trial_balance_fields_on_physical_columns(self):
+        from open_tax_check.normalization import normalize_trial_balance
+
+        headers = (
+            "account-code",
+            None,
+            "account",
+            "opening-debit",
+            "opening-credit",
+            "period-debit",
+            "period-credit",
+            "closing-debit",
+            "closing-credit",
+        )
+        reader = MemoryReader(
+            (
+                cells(headers, row_number=1),
+                cells(
+                    ("1001", None, "Cash", 250, 0, 100, 25, 325, 0),
+                    row_number=2,
+                ),
+            )
+        )
+
+        result = normalize_trial_balance(reader, SELECTION, SPLIT_MAPPING)
+
+        self.assertEqual(result.issues, ())
+        self.assertEqual(result.rows[0]["account_name"], "Cash")
+        self.assertEqual(result.rows[0]["period_debit"], "100.00")
+        self.assertEqual(
+            result.rows[0]["field_lineage"]["period_debit"]["coordinate"],
+            "F2",
+        )
+
     def test_amount_direction_is_split_and_traced_as_derived(self):
         from open_tax_check.normalization import normalize_trial_balance
 
@@ -251,6 +285,20 @@ class TrialBalanceNormalizationTests(unittest.TestCase):
             "derived_direction_split",
         )
         self.assertEqual(row["field_lineage"]["opening_credit"]["coordinate"], "B2")
+        contributors = row["field_lineage"]["opening_credit"]["contributing_cells"]
+        self.assertEqual(set(contributors), {"amount", "direction"})
+        self.assertEqual(contributors["amount"]["coordinate"], "B2")
+        self.assertEqual(contributors["amount"]["original_type"], "number")
+        self.assertEqual(contributors["amount"]["value_origin"], "literal")
+        self.assertEqual(contributors["direction"]["coordinate"], "C2")
+        self.assertEqual(contributors["direction"]["original_type"], "text")
+        self.assertEqual(contributors["direction"]["value_origin"], "literal")
+        self.assertEqual(
+            contributors["amount"]["mapping_version"],
+            contributors["direction"]["mapping_version"],
+        )
+        self.assertNotIn("Payables", repr(contributors))
+        self.assertNotIn("贷", repr(contributors))
         self.assertEqual(row["field_lineage"]["period_debit"]["value_origin"], "literal")
         self.assertEqual(result.issues, ())
 

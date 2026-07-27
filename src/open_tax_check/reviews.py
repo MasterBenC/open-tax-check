@@ -16,7 +16,7 @@ from .case import resolve_safe_case_path
 from .intake import sha256_file
 from .mapping import MAPPING_VERSION, ROLE_FIELDS, required_fields
 from .schemas import SCHEMA_VERSION
-from .sheet_detection import selected_headers
+from .sheet_detection import selected_header_columns
 from .workbooks import WorkbookError, open_workbook
 
 
@@ -629,15 +629,48 @@ def _source_headers_from_confirmation(payload: dict) -> tuple[str, ...]:
     return _validate_source_headers(source_headers)
 
 
-def _headers_fingerprint(headers: Sequence[str]) -> str:
-    return _fingerprint({"headers": list(headers)})
+def _validate_source_header_columns(
+    headers: Sequence[tuple[int, str]],
+) -> tuple[tuple[int, str], ...]:
+    if isinstance(headers, str) or not isinstance(headers, Sequence):
+        raise _mapping_error("invalid_source_headers")
+    checked = tuple(headers)
+    if (
+        any(
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not isinstance(item[0], int)
+            or isinstance(item[0], bool)
+            or item[0] < 1
+            or not isinstance(item[1], str)
+            or not item[1]
+            for item in checked
+        )
+        or tuple(column for column, _ in checked)
+        != tuple(sorted({column for column, _ in checked}))
+    ):
+        raise _mapping_error("invalid_source_headers")
+    _validate_source_headers(tuple(header for _, header in checked))
+    return checked
+
+
+def _headers_fingerprint(headers: Sequence[tuple[int, str]]) -> str:
+    checked = _validate_source_header_columns(headers)
+    return _fingerprint(
+        {
+            "headers": [
+                {"column": column, "header": header}
+                for column, header in checked
+            ]
+        }
+    )
 
 
 def _actual_selected_headers(
     case_dir: Path,
     inventory: dict,
     selection: dict,
-) -> tuple[str, ...]:
+) -> tuple[tuple[int, str], ...]:
     binding = selection["binding"]
     source = _current_source(inventory, binding)
     if source is None:
@@ -668,8 +701,12 @@ def _actual_selected_headers(
             )
             if sheet is None:
                 raise _mapping_error("sheet_missing")
-            return _validate_source_headers(
-                selected_headers(reader, sheet, selection["header_rows"])
+            return _validate_source_header_columns(
+                selected_header_columns(
+                    reader,
+                    sheet,
+                    selection["header_rows"],
+                )
             )
     except MappingReviewError:
         raise
@@ -734,10 +771,9 @@ def mapping_binding(selection: dict, payload: dict) -> dict:
     case_dir = payload.get("case_dir")
     if not isinstance(case_dir, Path):
         raise _mapping_error("invalid_mapping_confirmation")
-    source_headers = payload.get("source_headers")
-    if source_headers is None:
-        source_headers = _source_headers_from_confirmation(payload)
-    source_headers = _validate_source_headers(source_headers)
+    source_headers = _validate_source_header_columns(
+        payload.get("source_header_columns")
+    )
     basis = {
         "source_sha256": selection["binding"]["source_sha256"],
         "sheet_id": selection["binding"]["sheet_id"],
@@ -968,12 +1004,17 @@ def confirm_mapping(case_dir: Path, payload: dict) -> dict:
     inventory = _load_current_inventory(case_dir)
     selections = _mapping_selection_targets(case_dir, inventory)
     selection = _selected_mapping_target(selections, payload)
-    headers = _actual_selected_headers(case_dir, inventory, selection)
+    header_columns = _actual_selected_headers(case_dir, inventory, selection)
+    headers = tuple(header for _, header in header_columns)
     validate_confirmation(headers, payload)
     composites = _validated_composites(payload["role"], payload.get("composites", {}))
     binding = mapping_binding(
         selection,
-        {**payload, "case_dir": case_dir, "source_headers": headers},
+        {
+            **payload,
+            "case_dir": case_dir,
+            "source_header_columns": header_columns,
+        },
     )
     decision = {
         "role": payload["role"],
@@ -1078,11 +1119,20 @@ def load_active_mappings(case_dir: Path) -> dict[str, list[dict]]:
         )
         if selection is not None:
             try:
-                headers = _actual_selected_headers(case_dir, inventory, selection)
-                validate_confirmation(headers, decision)
+                header_columns = _actual_selected_headers(
+                    case_dir,
+                    inventory,
+                    selection,
+                )
+                validate_confirmation(
+                    tuple(header for _, header in header_columns),
+                    decision,
+                )
             except MappingReviewError:
                 continue
-            if binding["source_headers_fingerprint"] != _headers_fingerprint(headers):
+            if binding["source_headers_fingerprint"] != _headers_fingerprint(
+                header_columns
+            ):
                 continue
             active.setdefault(decision["role"], []).append(decision)
     return active

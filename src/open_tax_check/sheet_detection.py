@@ -345,6 +345,19 @@ def selected_headers(
 ) -> tuple[str, ...]:
     """Return combined headers from the explicitly selected worksheet rows."""
 
+    return tuple(
+        header
+        for _, header in selected_header_columns(reader, sheet, header_rows)
+    )
+
+
+def selected_header_columns(
+    reader: WorkbookReader,
+    sheet: SheetMeta,
+    header_rows: Sequence[int],
+) -> tuple[tuple[int, str], ...]:
+    """Return each nonempty selected header with its physical worksheet column."""
+
     rows = tuple(header_rows)
     if (
         not rows
@@ -372,7 +385,7 @@ def selected_headers(
         for item in sheet.merged_ranges
         if (parsed := _parse_merged_range(item)) is not None
     )
-    return _combine_headers(tuple(selected), source_rows, parsed_merges)
+    return _combine_header_columns(tuple(selected), source_rows, parsed_merges)
 
 
 def _first_nonempty_rows(
@@ -445,6 +458,21 @@ def _combine_headers(
     source_rows: dict[int, tuple[object, ...]],
     merged_ranges: Sequence[tuple[int, int, int, int]],
 ) -> tuple[str, ...]:
+    return tuple(
+        header
+        for _, header in _combine_header_columns(
+            selected,
+            source_rows,
+            merged_ranges,
+        )
+    )
+
+
+def _combine_header_columns(
+    selected: Sequence[_ObservedRow],
+    source_rows: dict[int, tuple[object, ...]],
+    merged_ranges: Sequence[tuple[int, int, int, int]],
+) -> tuple[tuple[int, str], ...]:
     selected_numbers = {row.number for row in selected}
     width = max((len(row.values) for row in selected), default=0)
     for min_row, min_col, max_row, max_col in merged_ranges:
@@ -494,7 +522,7 @@ def _combine_headers(
             components.append(str(value).strip())
             normalized_components.add(normalized)
         if components:
-            headers.append("|".join(components))
+            headers.append((column, "|".join(components)))
     return tuple(headers)
 
 

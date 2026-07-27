@@ -30,6 +30,12 @@ TRIAL_BALANCE_ROWS = (
     ("6001", "主营业务收入", 0, 0, 0, 1_000_000, 0, 1_000_000),
     ("6602", "管理费用-业务招待费", 0, 0, 25_000, 0, 25_000, 0),
 )
+UNPARSED_EVIDENCE_FILES = (
+    "balance-sheet.txt",
+    "income-statement.txt",
+    "vat-return.txt",
+    "cit-return.txt",
+)
 FICTIONAL_MAPPING_TEMPLATES = {
     "journal": {
         "mapping": {
@@ -162,6 +168,11 @@ def _run_fictional_case(case_dir: Path, format: str) -> FictionalCaseResult:
     else:
         create_fictional_workbook(case_dir / "input" / "journal.xlsx")
         create_fictional_trial_balance(case_dir / "input" / "trial-balance.xlsx")
+        for filename in UNPARSED_EVIDENCE_FILES:
+            (case_dir / "input" / filename).write_text(
+                "Fictional placeholder supplied for intake detection only.\n",
+                encoding="utf-8",
+            )
         inspect_code, _ = inspect_case(case_dir)
         if inspect_code not in (0, 4):
             raise RuntimeError("fictional example inspection failed")

@@ -200,6 +200,8 @@ Mapping is role-specific and versioned. Each source header must be:
 - mapped to exactly one canonical field; or
 - explicitly excluded with a reason.
 
+Mapping schema `0.3.0` keeps the public confirmation JSON label-keyed, but binds each nonempty selected header to its one-based physical worksheet column. The source-header fingerprint hashes the ordered `{column, header}` pairs, so inserting or moving a blank spacer column invalidates an earlier confirmation rather than redirecting it to another cell. Legacy label-only `0.2.0` confirmations are inactive and must be reconfirmed.
+
 No two source headers may map to the same canonical field unless the schema explicitly defines a composite mapping, such as a three-row header or an amount-and-direction pair. Missing required fields, duplicate targets, uncertain directions, and incompatible data types stop normalization.
 
 An AI or host agent may propose mappings from header labels, field type profiles, sheet dimensions, and redacted structural samples. It does not receive the full workbook by default. The proposal is stored with `proposal_source=ai` or `proposal_source=host`; only a validated confirmation activates it.
@@ -246,6 +248,8 @@ Every canonical field records:
 - original cell type;
 - `value_origin` (`literal`, `cached_formula`, `xls_formula_result`, or `derived_direction_split`);
 - mapping version.
+
+For an amount-plus-direction split, the derived debit and credit lineage keeps the amount cell at the compatible top level with `value_origin=derived_direction_split` and adds `contributing_cells.amount` plus `contributing_cells.direction`. Each contributor repeats the location-only fields above with its own original type and origin; raw cell values are not included. Reconciliation preserves this nested lineage unchanged.
 
 Raw client values do not appear in general application logs.
 

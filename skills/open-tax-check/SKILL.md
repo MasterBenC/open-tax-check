@@ -56,7 +56,7 @@ Excel `inspect_case` 的处理异常使用上述契约；`blocked_processing_err
 python <skill-dir>/scripts/opentaxcheck.py select-sheet --case <case-dir> --role journal --source <source_id> --sheet <sheet_id> --header-row <行号> --hidden-rows <include|exclude> --reviewer host:<复核人>
 ```
 
-多行表头要重复传 `--header-row`。隐藏行必须明确写为 `--hidden-rows include` 或 `--hidden-rows exclude`。隐藏工作表只能人工确认，不得自动选择。
+多行表头要重复传 `--header-row`。隐藏行必须明确写为 `--hidden-rows include` 或 `--hidden-rows exclude`。当前读取器尚不能实际过滤隐藏行；含隐藏数据时，`exclude` 不会实际过滤，而会以 `hidden_row_exclusion_unavailable` 阻断。复核人只能在复核后改为 `include`，或停止处理。隐藏工作表只能人工确认，不得自动选择。
 
 4. 再次运行 `inspect`，再次读取 `state.json`。
 5. 达到 `partial_scope_ready` 后，读取 `work/mapping_review.json` 的提案；由复核人执行 `confirm-mapping` 后才可标准化、勾稽和跑规则，仍不得生成正式客户报告。
