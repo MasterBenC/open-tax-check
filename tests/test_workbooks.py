@@ -99,6 +99,10 @@ class WorkbookReaderTests(unittest.TestCase):
                 "xl/worksheets/_rels/sheet1.xml.rels",
                 b"<Relationships/>",
             )
+            package.writestr(
+                "xl/worksheets/charts/unreferenced.xml",
+                b"<chartSpace/>",
+            )
             package.writestr("xl/media/image1.png", b"image")
 
         payload.seek(0)
@@ -114,6 +118,7 @@ class WorkbookReaderTests(unittest.TestCase):
                 "[Content_Types].xml",
                 "xl/styles.xml",
                 "xl/worksheets/_rels/sheet1.xml.rels",
+                "xl/worksheets/charts/unreferenced.xml",
             ),
         )
 

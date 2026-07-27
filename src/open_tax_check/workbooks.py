@@ -500,11 +500,11 @@ def _ooxml_metadata_members(package: ZipFile) -> tuple[ZipInfo, ...]:
             continue
         normalised = item.filename.replace("\\", "/")
         casefolded = normalised.casefold()
-        suffix = PurePosixPath(casefolded).suffix
+        member_path = PurePosixPath(casefolded)
+        suffix = member_path.suffix
         worksheet_xml = (
-            casefolded.startswith("xl/worksheets/")
+            member_path.parent == PurePosixPath("xl/worksheets")
             and suffix == ".xml"
-            and not casefolded.startswith("xl/worksheets/_rels/")
         )
         if suffix in {".xml", ".rels"} and not worksheet_xml:
             members.append(item)
