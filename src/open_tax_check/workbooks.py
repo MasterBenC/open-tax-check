@@ -522,14 +522,36 @@ def _bounded_ooxml_metadata_members(
     return members
 
 
+def _validate_ooxml_metadata(
+    package: ZipFile,
+    element_tree: Any,
+) -> None:
+    nodes = 0
+    for metadata in _bounded_ooxml_metadata_members(package):
+        for event, element in _iter_xml_elements(
+            package,
+            metadata,
+            element_tree,
+            bounded_index_member=False,
+        ):
+            if event == "start":
+                nodes += 1
+                if nodes > MAX_METADATA_TOTAL_NODES:
+                    raise WorkbookSafetyError(
+                        "ooxml_metadata_node_limit_exceeded"
+                    )
+            else:
+                element.clear()
+
+
 def _iter_xml_elements(
     package: ZipFile,
-    member: str,
+    member: str | ZipInfo,
     element_tree: Any,
     *,
     bounded_index_member: bool,
 ) -> Iterator[tuple[str, Any]]:
-    metadata = package.getinfo(member)
+    metadata = package.getinfo(member) if isinstance(member, str) else member
     if (
         bounded_index_member
         and metadata.file_size > MAX_METADATA_MEMBER_BYTES
@@ -852,14 +874,18 @@ def preflight_ooxml(path: Path, source_bytes: bytes | None = None) -> None:
         try:
             with ZipFile(package_source) as package:
                 _validate_ooxml_package(package)
-                _bounded_ooxml_metadata_members(package)
+                _validate_ooxml_metadata(package, _defused_element_tree())
         finally:
             if source_bytes is not None:
                 package_source.close()
-    except (BadZipFile, UnicodeDecodeError):
+    except WorkbookError:
+        raise
+    except (BadZipFile, KeyError, ParseError, UnicodeDecodeError):
         raise WorkbookError("corrupt_workbook") from None
     except OSError:
         raise WorkbookError("workbook_io_error") from None
+    except Exception:
+        raise WorkbookError("corrupt_workbook") from None
 
 
 def open_workbook(path: Path, source_bytes: bytes | None = None) -> WorkbookReader:

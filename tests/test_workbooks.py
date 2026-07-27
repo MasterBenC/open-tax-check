@@ -472,6 +472,85 @@ class WorkbookReaderTests(unittest.TestCase):
 
         self.assertEqual(len(members), 2)
 
+    def test_metadata_node_budget_accumulates_across_members(self):
+        payload = io.BytesIO()
+        with ZipFile(payload, "w") as package:
+            package.writestr("docProps/a.xml", b"<root><a/></root>")
+            package.writestr("docProps/b.xml", b"<root><b/></root>")
+
+        payload.seek(0)
+        with ZipFile(payload) as package:
+            with mock.patch.object(workbooks, "MAX_METADATA_TOTAL_NODES", 3):
+                with self.assertRaisesRegex(
+                    WorkbookSafetyError,
+                    "^ooxml_metadata_node_limit_exceeded$",
+                ):
+                    workbooks._validate_ooxml_metadata(
+                        package,
+                        workbooks._defused_element_tree(),
+                    )
+
+    def test_metadata_node_boundary_is_inclusive(self):
+        payload = io.BytesIO()
+        with ZipFile(payload, "w") as package:
+            package.writestr("docProps/a.xml", b"<root><a/><b/></root>")
+
+        payload.seek(0)
+        with ZipFile(payload) as package:
+            with mock.patch.object(workbooks, "MAX_METADATA_TOTAL_NODES", 3):
+                workbooks._validate_ooxml_metadata(
+                    package,
+                    workbooks._defused_element_tree(),
+                )
+
+    def test_corrupt_shared_strings_fail_before_openpyxl_without_detail_leak(self):
+        sensitive_detail = "private-shared-string"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "corrupt-shared-strings.xlsx")
+            upsert_zip_member(
+                path,
+                "xl/sharedStrings.xml",
+                f"<sst><si>{sensitive_detail}".encode("utf-8"),
+            )
+
+            with mock.patch(
+                "open_tax_check.workbooks._open_binary_stream",
+                side_effect=AssertionError("openpyxl stream must not open"),
+            ) as stream_opener:
+                with self.assertRaisesRegex(
+                    WorkbookError,
+                    "^corrupt_workbook$",
+                ) as raised:
+                    open_workbook(path)
+
+        stream_opener.assert_not_called()
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+        self.assertNotIn(str(path), str(raised.exception))
+
+    def test_metadata_node_limit_matches_for_path_and_source_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "metadata-nodes.xlsx")
+            source_bytes = path.read_bytes()
+
+            with mock.patch(
+                "open_tax_check.workbooks._open_binary_stream",
+                side_effect=AssertionError("openpyxl stream must not open"),
+            ) as stream_opener:
+                for snapshot in (None, source_bytes):
+                    with self.subTest(source_bytes=snapshot is not None):
+                        with mock.patch.object(
+                            workbooks,
+                            "MAX_METADATA_TOTAL_NODES",
+                            1,
+                        ):
+                            with self.assertRaisesRegex(
+                                WorkbookSafetyError,
+                                "^ooxml_metadata_node_limit_exceeded$",
+                            ):
+                                open_workbook(path, source_bytes=snapshot)
+
+            stream_opener.assert_not_called()
+
     def test_unreferenced_worksheet_relationships_count_toward_limit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = make_xlsx(Path(temp_dir) / "extra-rel.xlsx")
