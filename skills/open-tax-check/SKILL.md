@@ -11,7 +11,7 @@ description: Use when checking Chinese enterprise tax materials from CSV or Exce
 
 - Phase 2A 支持 `.xlsx`、`.xlsm`、`.xls` 的安全盘点、候选识别、人工选表和资料覆盖矩阵。
 - 现有 CSV `run` 流程继续支持业务行标准化、数据质量检查、首批规则、语义候选、JSON/JSONL 和内部 Markdown 草稿。
-- Phase 2A 尚未标准化 Excel 业务行。Excel 勾稽、规则执行和正式报告属于 2B。
+- Phase 2B 支持已确认来源绑定映射的 Excel 业务行标准化、试算平衡表勾稽、确定性规则和内部 Markdown 草稿；映射提案在 `confirm-mapping` 前一律不生效。
 - PDF、图片 OCR 和联网企业数据尚未实现。
 - 不得把 `partial_scope_ready`、`calculated` 或“未触发”解释为无风险、完整或最终结论。
 - 不得自动选择隐藏工作表。含隐藏数据的可见工作表也必须人工确认。
@@ -40,11 +40,11 @@ python <skill-dir>/scripts/opentaxcheck.py inspect --case <case-dir>
 | --- | --- |
 | `needs_intake_review` | 按 `next_action` 补期间、移除不安全入口或处理输入问题。 |
 | `needs_sheet_selection` | 由复核人执行 `select-sheet`。 |
-| `partial_scope_ready`（`next_action=await_phase_2b_excel_normalization`） | Phase 2A 到此停止；等待 2B 标准化并披露未执行程序。 |
+| `partial_scope_ready`（`next_action=await_phase_2b_excel_normalization`） | 从 `work/mapping_review.json` 取得提案，由复核人执行 `confirm-mapping`；提案本身不生效。 |
 | `needs_intake_review`（`next_action=inspect_processing_error`） | 检查本次 `inspect` 失败；退出码为 `4`，不复用旧输出。 |
 
 Excel `inspect_case` 的处理异常使用上述契约；`blocked_processing_error` 与退出码 `5` 只属于下文 CSV `run_case`。
-`inspect` 的 `next_action` 只推进 Excel Phase 2A；CSV `run` 是独立流程，不能据此对未标准化 Excel 跑规则或出报告。
+`inspect` 的 `next_action` 只完成 Excel Phase 2A 输入门槛；Excel 只有在来源绑定映射经复核确认后才可运行，CSV `run` 仍是独立兼容流程。
 
 只有唯一、可见、高置信且 `has_hidden_data` 为 `false` 的候选才可自动选择。其他情况都按以下正向顺序处理：
 
@@ -59,7 +59,7 @@ python <skill-dir>/scripts/opentaxcheck.py select-sheet --case <case-dir> --role
 多行表头要重复传 `--header-row`。隐藏行必须明确写为 `--hidden-rows include` 或 `--hidden-rows exclude`。隐藏工作表只能人工确认，不得自动选择。
 
 4. 再次运行 `inspect`，再次读取 `state.json`。
-5. 达到 `partial_scope_ready` 后，不得继续标准化、勾稽、跑规则或生成正式报告。
+5. 达到 `partial_scope_ready` 后，读取 `work/mapping_review.json` 的提案；由复核人执行 `confirm-mapping` 后才可标准化、勾稽和跑规则，仍不得生成正式客户报告。
 
 资料覆盖矩阵必须保留 `missing`、`present_unparsed`、`not_performed_*` 等状态；缺失、未解析或未执行不等于“无风险”。人工决定必须与来源哈希、sheet、表头行、隐藏行决定、期间和 schema 版本绑定；来源变化后重新 `inspect`。
 
@@ -72,8 +72,19 @@ python <skill-dir>/scripts/opentaxcheck.py inspect --case <case-dir>
 # 读取盘点产物；由复核人填写 source_id、sheet_id、表头行和 include|exclude
 python <skill-dir>/scripts/opentaxcheck.py select-sheet --case <case-dir> --role journal --source <source_id> --sheet <sheet_id> --header-row <行号> --hidden-rows <include|exclude> --reviewer host:<复核人>
 python <skill-dir>/scripts/opentaxcheck.py inspect --case <case-dir>
-# STOP：`partial_scope_ready` 只完成 Phase 2A，不进入 2B
+# 从 mapping_review 读取真实来源绑定映射提案，由复核人执行 confirm-mapping 后才进入 2B
 ```
+
+## 2B 映射确认、标准化与勾稽
+
+`source_id`、sheet 和表头行必须从当前 `inspect` 产物读取，不能复用文档中的占位值。复核人以完整映射文件执行：
+
+```text
+python <skill-dir>/scripts/opentaxcheck.py confirm-mapping --case <case-dir> --mapping <mapping.json>
+python <skill-dir>/scripts/opentaxcheck.py run --case <case-dir> --ai-mode off
+```
+
+运行后检查 `work/normalized_journal.jsonl`、`work/normalized_trial_balance.jsonl`、`work/reconciliation.json` 和 `work/coverage_matrix.json`。勾稽通过不表示不存在税务风险；`needs_professional_review` 只表示结果进入专业复核。财务报表或纳税申报表为 `present_unparsed` 时，必须披露未执行程序，不能宣称完成完整基线健康检查。
 
 ## 3. CSV 走兼容流程
 

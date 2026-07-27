@@ -8,6 +8,24 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_skill_documents_confirmed_excel_mapping_and_reconciliation_boundaries(self):
+        """Removing a 2B activation gate or assurance boundary must fail the contract."""
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        schema = (SKILL / "references" / "canonical-schema.md").read_text(
+            encoding="utf-8"
+        )
+        methodology = (SKILL / "references" / "methodology.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("confirm-mapping", skill)
+        self.assertIn("normalized_trial_balance.jsonl", skill)
+        self.assertIn("reconciliation.json", skill)
+        self.assertIn("勾稽通过不表示不存在税务风险", skill)
+        self.assertIn("present_unparsed", schema)
+        self.assertIn("完整基线健康检查尚未完成", schema)
+        self.assertIn("勾稽通过不表示不存在税务风险", methodology)
+
     def test_skill_frontmatter_is_trigger_only_and_chinese_body_is_concise(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         frontmatter = text.split("---", 2)[1]
@@ -102,7 +120,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("2B", schema)
         self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", text)
 
-    def test_skill_application_contract_stops_at_phase_2a_boundary(self):
+    def test_skill_application_contract_requires_confirmed_mapping_for_phase_2b(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 
         expected_sequence = (
@@ -121,9 +139,11 @@ class SkillContractTests(unittest.TestCase):
             cursor = position + len(item)
         self.assertNotIn(-1, positions)
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("不得继续标准化、勾稽、跑规则或生成正式报告", text)
+        self.assertIn("confirm-mapping", text)
+        self.assertIn("映射提案在 `confirm-mapping` 前一律不生效", text)
+        self.assertNotIn("# STOP：`partial_scope_ready`", text)
 
-    def test_skill_treats_excel_next_action_as_phase_2b_wait_not_rule_execution(self):
+    def test_skill_treats_excel_next_action_as_mapping_confirmation_gate(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         excel = text.split("## 2. Excel / 工作簿走 Phase 2A", 1)[1].split(
             "## 3. CSV 走兼容流程",
@@ -135,7 +155,8 @@ class SkillContractTests(unittest.TestCase):
             "（`next_action=await_phase_2b_excel_normalization`） |",
             excel,
         )
-        self.assertIn("CSV `run` 是独立流程", excel)
+        self.assertIn("confirm-mapping", excel)
+        self.assertIn("来源绑定映射经复核确认后", excel)
         self.assertNotIn("run_available_checks", excel)
 
     def test_skill_gives_low_capability_agent_a_fixed_pressure_response_shape(self):
@@ -149,8 +170,8 @@ class SkillContractTests(unittest.TestCase):
         )[0]
         self.assertIn("opentaxcheck.py inspect --case <case-dir>", pressure)
         self.assertIn("opentaxcheck.py select-sheet", pressure)
-        self.assertIn("# STOP：`partial_scope_ready`", pressure)
-        self.assertIn("不进入 2B", pressure)
+        self.assertIn("confirm-mapping", pressure)
+        self.assertIn("映射提案", pressure)
 
     def test_skill_uses_only_portable_commands_and_ai_modes(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -166,7 +187,7 @@ class SkillContractTests(unittest.TestCase):
             r"python <skill-dir>/scripts/([^\s]+)", text
         )
         self.assertEqual(set(command_targets), {"opentaxcheck.py"})
-        self.assertEqual(len(command_targets), 7)
+        self.assertEqual(len(command_targets), 9)
 
         cli_modes = set(re.findall(r"--ai-mode ([a-z][a-z0-9-]*)", text))
         documented_modes = cli_modes | set(

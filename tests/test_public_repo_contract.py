@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROADMAP_MILESTONES = (
     "1. 阶段 1：仓库基础与确定性 CSV 核心 — 已完成",
     "2. 阶段 2A：Excel 安全盘点与人工选表 — 已完成",
-    "3. 阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 计划中",
+    "3. 阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 已完成",
     "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 计划中",
     "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 计划中",
     "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例与公开 v1 — 计划中",
@@ -42,11 +42,11 @@ def assert_changelog_is_unreleased(test_case, text):
 
 def assert_readme_phase_scope(test_case, text):
     scope = current_release_scope(text)
-    test_case.assertIn("当前仓库处于未发布的 **v0.1 / Phase 2A**", scope)
+    test_case.assertIn("当前仓库处于未发布的 **v0.1 / Phase 2B**", scope)
     test_case.assertIn("`.xlsx`、`.xlsm`、`.xls`", scope)
-    test_case.assertIn("现有 CSV `run` 流程保持兼容", scope)
-    test_case.assertIn("尚未标准化 Excel 业务行", scope)
-    test_case.assertIn("属于 Phase 2B", scope)
+    test_case.assertIn("CSV 和已确认映射的 Excel", scope)
+    test_case.assertIn("confirm-mapping", scope)
+    test_case.assertIn("present_unparsed", scope)
     test_case.assertIn("公开路线不代表已经交付的能力", scope)
     test_case.assertIn("[docs/roadmap.md](docs/roadmap.md)", scope)
     test_case.assertIn(UNSUPPORTED_SCOPE_SENTENCE, scope)
@@ -107,8 +107,8 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("微信：PosterNote；添加时请备注 GitHub。", text)
         self.assertIn("请勿通过 GitHub Issue、Discussion 或微信发送未经脱敏的客户资料。", text)
         current_scope = current_release_scope(text)
-        self.assertIn("v0.1 / Phase 2A", current_scope)
-        self.assertIn("CSV `run`", current_scope)
+        self.assertIn("v0.1 / Phase 2B", current_scope)
+        self.assertIn("CSV 和已确认映射的 Excel", current_scope)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", current_scope)
         self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", current_scope)
         self.assertIn("正式客户报告", current_scope)
@@ -133,21 +133,31 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("绝对金额总额", text)
         self.assertIn("ROUND_HALF_UP", text)
 
-    def test_readme_documents_excel_inspection_without_claiming_normalization(self):
+    def test_readme_documents_excel_inspection_and_confirmed_normalization(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn('pip install -e ".[excel]"', text)
         self.assertIn("opentaxcheck inspect", text)
         self.assertIn("opentaxcheck select-sheet", text)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", text)
-        self.assertIn("尚未标准化 Excel 业务行", text)
+        self.assertIn("confirm-mapping", text)
+        self.assertIn("normalized_trial_balance.jsonl", text)
         self.assertIn("隐藏工作表不得自动选择", text)
         self.assertIn("隐藏行必须明确选择 `include` 或 `exclude`", text)
         self.assertIn("资料覆盖矩阵", text)
-        self.assertIn("现有 CSV `run` 流程保持兼容", text)
+        self.assertIn("CSV 和已确认映射的 Excel", text)
         self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", text)
 
-    def test_phase_2a_public_docs_are_chinese_first_and_keep_2b_boundary(self):
+    def test_readme_documents_mapping_confirmation_and_reconciliation(self):
+        """Dropping a 2B gate or risk boundary from the public workflow is a regression."""
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("confirm-mapping", text)
+        self.assertIn("normalized_trial_balance.jsonl", text)
+        self.assertIn("reconciliation.json", text)
+        self.assertIn("勾稽通过不表示不存在税务风险", text)
+
+    def test_phase_2b_public_docs_are_chinese_first_and_keep_review_boundary(self):
         roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         example = (ROOT / "examples/fictional-company/README.md").read_text(
@@ -157,7 +167,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertTrue(roadmap.startswith("# 路线图\n"))
         self.assertIn("阶段 2A：Excel 安全盘点与人工选表 — 已完成", roadmap)
         self.assertIn(
-            "阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 计划中",
+            "阶段 2B：Excel 业务行标准化、勾稽、规则与正式报告 — 已完成",
             roadmap,
         )
         self.assertTrue(changelog.startswith("# 更新日志\n"))

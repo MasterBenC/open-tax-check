@@ -6,6 +6,10 @@
 
 人工选表决定必须绑定 `source_sha256`、`sheet_id`、工作表名称、角色、全部表头行、隐藏行 `include` / `exclude`、复核人、检查期间和 `schema_version`。任何绑定值变化都要使相应决定失效。
 
+## Phase 2B 的映射与勾稽边界
+
+Excel 映射提案必须由复核人通过 `confirm-mapping` 确认后才是活动映射；确认记录继续绑定实际 `source_id`、来源哈希、sheet、表头行、期间和 schema 版本。标准化输出为 `normalized_journal.jsonl` 和 `normalized_trial_balance.jsonl`，勾稽输出为 `reconciliation.json`。勾稽通过不表示不存在税务风险；财务报表和申报表若为 `present_unparsed`，完整基线健康检查尚未完成。
+
 ## 必填字段
 
 | 统一字段 | 含义 | 可接受的来源表头示例 |

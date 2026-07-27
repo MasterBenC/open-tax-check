@@ -4,22 +4,22 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎、AI 税务项目助理�
 
 ## 当前版本范围
 
-当前仓库处于未发布的 **v0.1 / Phase 2A**：
+当前仓库处于未发布的 **v0.1 / Phase 2B**：
 
 - `.xlsx`、`.xlsm`、`.xls` 可进入安全盘点层，程序会记录文件哈希、工作表结构、有限表头信号、候选角色、公式/合并/隐藏信息和资料覆盖矩阵；
 - 唯一、可见、高置信且不含隐藏数据的工作表才可自动选择；其他情况进入 `needs_sheet_selection`，由复核人运行 `select-sheet`；
 - 隐藏工作表不得自动选择；选择含隐藏数据的工作表时，隐藏行必须明确选择 `include` 或 `exclude`；
-- 现有 CSV `run` 流程保持兼容，继续支持字段映射、业务行标准化、凭证借贷平衡检查、首批确定性规则、语义候选和内部 Markdown 草稿。
+- CSV 和已确认映射的 Excel 都支持业务行标准化、凭证借贷平衡检查、试算平衡表勾稽、首批确定性规则、语义候选和内部 Markdown 草稿。
 
-Phase 2A 尚未标准化 Excel 业务行，也不会对 Excel 执行勾稽、税务规则或生成正式客户报告；这些属于 Phase 2B。PDF、图片 OCR 和联网企业数据尚未实现。专业 Excel 工作底稿、DOCX、PDF 报告和完整证据包也尚未实现。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
+Excel 映射提案在复核人明确执行 `confirm-mapping` 前始终不生效；`needs_professional_review` 也不是正式客户报告。财务报表和纳税申报表即使已提供但仍为 `present_unparsed`，也不能宣称已完成完整基线健康检查。PDF、图片 OCR 和联网企业数据尚未实现。专业 Excel 工作底稿、DOCX、PDF 报告和完整证据包也尚未实现。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 
 1. 初始化案件并明确实体和检查期间。
 2. `inspect` 安全盘点 Excel/CSV 输入，生成输入清单、工作簿清单、选表候选和资料覆盖矩阵。
 3. 仅在自动选择条件全部满足时接受工作表；否则按 `state.json` 的 `next_action` 人工选表，并记录来源哈希、sheet、表头行、隐藏行决定和 schema 版本。
-4. `partial_scope_ready` 只表示 Phase 2A 盘点已完成，不表示 Excel 已标准化、已勾稽、已跑规则或“无风险”。
-5. 对单一 CSV 序时账，仍可使用 `run` 进入既有确定性筛查与专业复核流程。
+4. 映射提案必须由复核人确认并绑定来源；随后才可运行标准化、勾稽和规则。
+5. 勾稽通过不表示不存在税务风险；所有 finding 仍须专业复核，且未解析资料会保留在覆盖矩阵中。
 
 ## 快速开始
 
@@ -36,7 +36,12 @@ opentaxcheck init --case .\cases\demo --entity "虚构科技有限公司" --peri
 
 ```powershell
 opentaxcheck inspect --case .\cases\demo
+opentaxcheck select-sheet --case .\cases\demo --role journal --source aaaaaaaaaaaaaaaa --sheet sheet-0001 --header-row 1 --hidden-rows exclude --reviewer host:user
+opentaxcheck confirm-mapping --case .\cases\demo --mapping .\mapping.json
+opentaxcheck run --case .\cases\demo --ai-mode off
 ```
+
+`aaaaaaaaaaaaaaaa` 仅是命令格式示例，绝不是可复用的真实 `source_id`。必须从当前案件的 `work/workbook_inventory.json` 或 `work/sheet_selection.json` 读取实际来源标识，并在来源变更后重新 `inspect`。
 
 若状态为 `needs_sheet_selection`，先从 `work/workbook_inventory.json` 和 `work/sheet_selection.json` 取得 `source_id`、`sheet_id` 和候选表头行，再由复核人执行：
 
@@ -57,14 +62,14 @@ macOS 或 Linux 使用 `source .venv/bin/activate` 激活虚拟环境；其余�
 opentaxcheck run --case .\cases\demo --ai-mode off
 ```
 
-Excel 文件不能交给当前 `run` 冒充 CSV 处理；完成 `inspect` 不代表可以运行 Phase 2B。
+Excel 文件不能交给 CSV 适配器冒充 CSV 处理；只有来源绑定映射经复核确认后，`run` 才会标准化 Excel、生成勾稽和规则结果。
 
 ## 运行虚构示例
 
-仓库保留一份完全虚构且借贷平衡的 CSV 文本作为可审查的示例源。runner 会在独立案件目录中运行时生成 `journal.xlsx`，仓库不提交 `.xlsx` 二进制。
+仓库保留一份完全虚构且借贷平衡的 CSV 文本作为可审查的示例源。runner 会在独立案件目录中生成 `journal.xlsx` 和 `trial-balance.xlsx`，从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构映射；仓库不提交 `.xlsx` 二进制。
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_fictional_example.py --output work\fictional-demo
+.\.venv\Scripts\python.exe scripts\run_fictional_example.py --output work\phase-2b-demo --format excel
 ```
 
 已激活虚拟环境时，也可运行：
@@ -73,11 +78,11 @@ Excel 文件不能交给当前 `run` 冒充 CSV 处理；完成 `inspect` 不代
 python scripts/run_fictional_example.py --output work/fictional-demo
 ```
 
-`--output` 必须指向不存在或空目录；runner 会拒绝非空目录，避免覆盖已有数据或混杂旧产物。成功后状态为 `partial_scope_ready`，主要产物是 `work/workbook_inventory.json`、`work/sheet_selection.json` 和 `work/coverage_matrix.json`。示例只演示 Phase 2A 安全盘点，不生成 `findings.json` 或正式报告。公司、交易、凭证、金额、人物和结论均为完全虚构。
+`--output` 必须指向不存在或空目录；runner 会拒绝非空目录，避免覆盖已有数据或混杂旧产物。Excel 和 CSV 示例的业务招待费发现及金额一致；Excel 的序时账与试算平衡表勾稽通过，状态为 `needs_professional_review`。主要产物包括 `work/normalized_journal.jsonl`、`work/normalized_trial_balance.jsonl`、`work/reconciliation.json`、`work/coverage_matrix.json`、`output/findings.json` 和内部 `output/report.md`。财务报表和纳税申报表相关程序仍是 `present_unparsed`，因此示例不构成完整基线健康检查。公司、交易、凭证、金额、人物和结论均为完全虚构。
 
 ## 输出
 
-### Phase 2A 盘点输出
+### Excel / Phase 2B 输出
 
 - `state.json`：当前状态和下一步动作；
 - `work/input_manifest.json`：输入清单、哈希与安全诊断；
@@ -85,8 +90,12 @@ python scripts/run_fictional_example.py --output work/fictional-demo
 - `work/sheet_selection.json`：自动选择或人工候选；
 - `work/coverage_matrix.json`：资料覆盖状态和未执行程序；
 - `reviews/sheet_selection.json`：存在人工选表时的来源绑定决定。
+- `reviews/mapping_review.json`：复核人确认的完整来源绑定字段映射；提案本身不生效。
+- `work/normalized_journal.jsonl`：标准化序时账；
+- `work/normalized_trial_balance.jsonl`：标准化试算平衡表；
+- `work/reconciliation.json`：试算平衡表自身和序时账至试算平衡表的勾稽结果；
 
-资料缺失、未解析或程序未执行时，覆盖矩阵会明确记录 `missing`、`present_unparsed` 或相应 `procedure_status`，不会描述为“无风险”。
+资料缺失、未解析或程序未执行时，覆盖矩阵会明确记录 `missing`、`present_unparsed` 或相应 `procedure_status`，不会描述为“无风险”。勾稽通过不表示不存在税务风险。
 
 ### 兼容的 CSV `run` 输出
 

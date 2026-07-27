@@ -41,7 +41,20 @@ class FictionalExampleTests(unittest.TestCase):
         self.assertIn("随本仓库按 Apache License 2.0 许可", text)
         self.assertIn("`--output` 必须指向不存在或空目录", text)
 
-    def test_example_generates_and_inspects_fictional_xlsx_without_running_rules(self):
+    def test_fictional_excel_and_csv_findings_match(self):
+        """Removing Excel mapping confirmation or changing its input changes results."""
+        from scripts.run_fictional_example import run_fictional_case
+
+        csv_result = run_fictional_case(format="csv")
+        excel_result = run_fictional_case(format="excel")
+
+        self.assertEqual(csv_result.rule_amounts, excel_result.rule_amounts)
+        self.assertEqual(csv_result.rule_amounts, {"CIT-BE-001": "15000.00"})
+        self.assertEqual(excel_result.status, "needs_professional_review")
+        self.assertTrue(excel_result.trial_balance_passed)
+        self.assertTrue(excel_result.journal_to_trial_balance_passed)
+
+    def test_example_generates_and_runs_fictional_xlsx_with_confirmed_mapping(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source_before = JOURNAL.read_bytes()
             proc = subprocess.run(
@@ -53,10 +66,11 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             generated = Path(temp_dir) / "input/journal.xlsx"
             self.assertTrue(generated.is_file())
+            self.assertTrue((Path(temp_dir) / "input/trial-balance.xlsx").is_file())
             state = json.loads(
                 (Path(temp_dir) / "state.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(state["status"], "partial_scope_ready")
+            self.assertEqual(state["status"], "needs_professional_review")
             self.assertTrue(
                 (Path(temp_dir) / "work/workbook_inventory.json").is_file()
             )
@@ -66,8 +80,11 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertTrue(
                 (Path(temp_dir) / "work/coverage_matrix.json").is_file()
             )
-            self.assertFalse((Path(temp_dir) / "output/findings.json").exists())
-            self.assertFalse((Path(temp_dir) / "output/report.md").exists())
+            self.assertTrue((Path(temp_dir) / "work/normalized_journal.jsonl").is_file())
+            self.assertTrue((Path(temp_dir) / "work/normalized_trial_balance.jsonl").is_file())
+            self.assertTrue((Path(temp_dir) / "work/reconciliation.json").is_file())
+            self.assertTrue((Path(temp_dir) / "output/findings.json").is_file())
+            self.assertTrue((Path(temp_dir) / "output/report.md").is_file())
             self.assertEqual(JOURNAL.read_bytes(), source_before)
 
     def test_example_emits_utf8_when_inherited_encoding_cannot_encode_chinese(self):
@@ -125,9 +142,10 @@ class FictionalExampleTests(unittest.TestCase):
 
         self.assertIn(r".\.venv\Scripts\python.exe scripts\run_fictional_example.py", section)
         self.assertIn("python scripts/run_fictional_example.py", section)
-        self.assertIn("workbook_inventory.json", section)
         self.assertIn("coverage_matrix.json", section)
-        self.assertIn("partial_scope_ready", section)
+        self.assertIn("normalized_trial_balance.jsonl", section)
+        self.assertIn("reconciliation.json", section)
+        self.assertIn("needs_professional_review", section)
         self.assertIn("`--output` 必须指向不存在或空目录", section)
         self.assertNotIn("尚未提供", section)
 
