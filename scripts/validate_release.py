@@ -334,14 +334,6 @@ def validate_pack_release_surface(root: Path) -> str | None:
     pack_root = root / "src" / "open_tax_check" / "tax_packs"
     if not pack_root.is_dir():
         return None
-
-
-def expected_package_data_members(root: Path, *, sdist: bool) -> tuple[str, ...]:
-    package_root = root / "src" / "open_tax_check" / "tax_packs"
-    if not package_root.is_dir():
-        return ()
-    prefix = "open_tax_check-0.1.0/src/open_tax_check/tax_packs/" if sdist else "open_tax_check/tax_packs/"
-    return tuple(prefix + path.name for path in sorted(package_root.glob("*.json"), key=lambda item: item.name))
     try:
         from open_tax_check.tax_prompts import validate_fact_catalog_payload
         from open_tax_check.tax_registry import TAX_DEFINITIONS, select_pack_segments, validate_pack_payload
@@ -404,6 +396,21 @@ def expected_package_data_members(root: Path, *, sdist: bool) -> tuple[str, ...]
     if "*.json" not in patterns:
         return "tax_pack_release_invalid:package_data_contract"
     return None
+
+
+def expected_package_data_members(root: Path, *, sdist: bool) -> tuple[str, ...]:
+    package_root = root / "src" / "open_tax_check" / "tax_packs"
+    if not package_root.is_dir():
+        return ()
+    prefix = (
+        "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+        if sdist
+        else "open_tax_check/tax_packs/"
+    )
+    return tuple(
+        prefix + path.name
+        for path in sorted(package_root.glob("*.json"), key=lambda item: item.name)
+    )
 
 
 def main() -> int:
