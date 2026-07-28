@@ -8,6 +8,19 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_seven_host_integration_contract_is_explicit(self):
+        text = (SKILL / "references" / "host-integrations.md").read_text(encoding="utf-8")
+        for host in ("Codex", "Hermes", "WorkBuddy", "扣子", "Qoder", "Claude Code", "OpenClaw"):
+            self.assertIn(host, text)
+        for route in ("Python / CLI / JSON 核心", "Agent Skills", "MCP / HTTP"):
+            self.assertIn(route, text)
+        self.assertIn("需按当前官方文档核验", text)
+        self.assertIn("远程传输前必须披露", text)
+        self.assertIn("租户隔离", text)
+        self.assertIn("question_zh", text)
+        self.assertIn("无风险", text)
+        self.assertTrue((ROOT / "tests" / "fixtures" / "tax-health-host-contract.json").is_file())
+
     def test_skill_documents_confirmed_excel_mapping_and_reconciliation_boundaries(self):
         """Removing a 2B activation gate or assurance boundary must fail the contract."""
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -302,6 +315,7 @@ class SkillContractTests(unittest.TestCase):
             "references/canonical-schema.md",
             "references/methodology.md",
             "references/rule-catalog.md",
+            "references/host-integrations.md",
             "scripts/opentaxcheck.py",
         }
         actual = {
