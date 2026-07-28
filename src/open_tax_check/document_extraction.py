@@ -155,7 +155,7 @@ class DocumentExtraction:
         if self.schema_version != DOCUMENT_EXTRACTION_SCHEMA_VERSION: raise ValueError("invalid_schema_version")
         if self.provider not in _PROVIDERS: raise ValueError("invalid_provider")
         if self.status not in _STATUSES: raise ValueError("invalid_status")
-        if self.status == "completed" and self.provider == "off": raise ValueError("invalid_completed_status")
+        if self.status == "completed" and (self.provider == "off" or any(issue.code in {"off", "provider_off"} for issue in self.issues)): raise ValueError("invalid_completed_status")
         object.__setattr__(self, "executed_at", _timestamp(self.executed_at))
         for name in ("pages", "blocks", "tables", "issues", "source_refs"): object.__setattr__(self, name, tuple(getattr(self, name)))
         if len(self.pages) > _MAX_PAGES or len(self.blocks) > _MAX_BLOCKS: raise ValueError("count_limit_exceeded")

@@ -54,7 +54,8 @@ def test_invalid_bounds_and_duplicate_pages_rejected():
     payload = document_extraction_to_dict(valid_result())
     payload["blocks"][0]["confidence"] = 2
     with pytest.raises(ValueError): document_extraction_from_dict(payload)
-    payload = document_extraction_to_dict(valid_result(pages=(valid_result().pages[0], valid_result().pages[0])))
+    payload = document_extraction_to_dict(valid_result())
+    payload["pages"].append(payload["pages"][0].copy())
     with pytest.raises(ValueError): document_extraction_from_dict(payload)
 
 
