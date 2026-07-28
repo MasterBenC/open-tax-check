@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 
 from .case import init_case, set_case_scope
+from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
+from .document_providers import HostProvider, LocalDocumentSource
 from .pipeline import inspect_case, run_case
 from .reviews import (
     MappingReviewError,
@@ -70,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--case", required=True, type=Path)
     run_parser.add_argument("--ai-mode", choices=["off", "assist", "deep"], default="assist")
+    validate_parser = subparsers.add_parser("validate-extraction", help="Validate document extraction JSON")
+    validate_parser.add_argument("--input", required=True, type=Path)
+    import_parser = subparsers.add_parser("import-extraction", help="Import host extraction JSON into a case")
+    import_parser.add_argument("--case", required=True, type=Path)
+    import_parser.add_argument("--source", required=True)
+    import_parser.add_argument("--input", required=True, type=Path)
     return parser
 
 
@@ -178,6 +186,32 @@ def main() -> int:
         code, result = run_case(args.case, args.ai_mode)
         print(json.dumps(result, ensure_ascii=False))
         return code
+    if args.command == "validate-extraction":
+        try:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+            value = document_extraction_from_dict(payload)
+        except Exception:
+            print(json.dumps({"valid": False, "error_code": "invalid_document_extraction"}, ensure_ascii=False))
+            return 2
+        print(json.dumps({"valid": True, "schema_version": value.schema_version}, ensure_ascii=False))
+        return 0
+    if args.command == "import-extraction":
+        try:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+            inventory = json.loads((args.case / "work" / "workbook_inventory.json").read_text(encoding="utf-8"))
+            source = next(item for item in inventory.get("sources", []) if item.get("source_id") == args.source)
+            extension = Path(source["filename"]).suffix.casefold()
+            media_type = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(extension, "application/octet-stream")
+            local = LocalDocumentSource(args.source, args.case / "input" / source["filename"], media_type, args.case / "input")
+            value = HostProvider().import_result(local, payload)
+            target = args.case / "work" / "document-extractions" / f"{args.source}.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(document_extraction_to_dict(value), ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+        except Exception:
+            print(json.dumps({"status": "failed", "error_code": "invalid_document_extraction_import"}, ensure_ascii=False))
+            return 2
+        print(json.dumps({"status": value.status, "path": str(target)}, ensure_ascii=False))
+        return 0
     return 2
 
 
