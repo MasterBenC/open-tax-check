@@ -5,6 +5,7 @@ import io
 import tempfile
 import types
 import unittest
+import warnings
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -507,6 +508,63 @@ class WorkbookReaderTests(unittest.TestCase):
                     package,
                     workbooks._defused_element_tree(),
                 )
+
+    def test_metadata_node_budget_parses_duplicate_zip_entries_by_exact_zipinfo(self):
+        payload = io.BytesIO()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with ZipFile(payload, "w") as package:
+                package.writestr(
+                    "docProps/duplicate.xml",
+                    b"<root><first/></root>",
+                )
+                package.writestr(
+                    "docProps/duplicate.xml",
+                    b"<root><second/><third/></root>",
+                )
+
+        payload.seek(0)
+        with ZipFile(payload) as package:
+            with mock.patch.object(workbooks, "MAX_METADATA_TOTAL_NODES", 5):
+                workbooks._validate_ooxml_metadata(
+                    package,
+                    workbooks._defused_element_tree(),
+                )
+
+    def test_dangerous_shared_strings_are_rejected_before_openpyxl_without_detail_leak(self):
+        sensitive_detail = "private-external-entity"
+        sensitive_reference = f"file:///private/{sensitive_detail}.xml"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = make_xlsx(Path(temp_dir) / "dangerous-shared-strings.xlsx")
+            upsert_zip_member(
+                path,
+                "xl/sharedStrings.xml",
+                (
+                    "<!DOCTYPE sst [<!ENTITY private SYSTEM "
+                    f'"{sensitive_reference}">]>'
+                    f"<sst><si><t>&private;</t></si></sst>"
+                ).encode("utf-8"),
+            )
+
+            with mock.patch(
+                "open_tax_check.workbooks._open_binary_stream",
+                side_effect=AssertionError("openpyxl stream must not open"),
+            ) as stream_opener:
+                with mock.patch(
+                    "openpyxl.load_workbook",
+                    side_effect=AssertionError("openpyxl must not load"),
+                ) as load_workbook:
+                    with self.assertRaisesRegex(
+                        WorkbookError,
+                        "^corrupt_workbook$",
+                    ) as raised:
+                        open_workbook(path)
+
+        stream_opener.assert_not_called()
+        load_workbook.assert_not_called()
+        self.assertNotIn(sensitive_detail, str(raised.exception))
+        self.assertNotIn(sensitive_reference, str(raised.exception))
+        self.assertNotIn(str(path), str(raised.exception))
 
     def test_corrupt_shared_strings_fail_before_openpyxl_without_detail_leak(self):
         sensitive_detail = "private-shared-string"
