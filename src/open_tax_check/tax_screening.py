@@ -58,9 +58,19 @@ def _selected_pack_details(selected_packs: tuple[TaxPack, ...]) -> tuple[tuple[s
     return pack_ids, sources
 
 
-def _fact_is_sufficient(requirement: FactRequirement, fact: TaxFact | None) -> bool:
+def _fact_is_sufficient(
+    requirement: FactRequirement,
+    fact: TaxFact | None,
+    *,
+    is_applicability_fact: bool = False,
+) -> bool:
     if fact is None or fact.value is None:
         return False
+    if is_applicability_fact:
+        return isinstance(fact.value, bool) and (
+            fact.state is FactState.CONFIRMED
+            or (fact.state is FactState.OBSERVED and bool(fact.evidence_refs))
+        )
     if not requirement.critical:
         return True
     if fact.state is FactState.CONFIRMED:
@@ -76,6 +86,11 @@ def _gaps_for_packs(
     exclude_keys: frozenset[str] = frozenset(),
 ) -> tuple[FactGap, ...]:
     gaps: list[FactGap] = []
+    applicability_fact_keys = frozenset(
+        fact_key
+        for pack in selected_packs
+        for fact_key in pack.applicability_fact_keys
+    )
     for pack in selected_packs:
         local_parameter_keys = frozenset(pack.local_parameter_keys)
         for requirement in pack.requirements:
@@ -85,7 +100,11 @@ def _gaps_for_packs(
             ):
                 continue
             fact = facts.get(requirement.fact_key)
-            if _fact_is_sufficient(requirement, fact):
+            if _fact_is_sufficient(
+                requirement,
+                fact,
+                is_applicability_fact=requirement.fact_key in applicability_fact_keys,
+            ):
                 continue
             gaps.append(FactGap(
                 fact_key=requirement.fact_key,
@@ -178,7 +197,11 @@ def _is_safe_evaluator_outcome(
     return (
         isinstance(outcome, EvaluationOutcome)
         and (
-            outcome.status in (TaxStatus.CALCULATED, TaxStatus.NOT_APPLICABLE)
+            outcome.status is TaxStatus.NOT_APPLICABLE
+            or (
+                outcome.status is TaxStatus.CALCULATED
+                and not any(pack.maturity is PackMaturity.SCREENING for pack in selected_packs)
+            )
             or screening_incomplete
         )
         and (outcome.status is not TaxStatus.NOT_APPLICABLE or bool(outcome.evidence_refs))

@@ -46,7 +46,7 @@ def tax_pack(
         tax_id=tax_id,
         jurisdiction="CN",
         effective_period=PERIOD,
-        maturity=PackMaturity.SCREENING,
+        maturity=PackMaturity.CALCULATION,
         requirements=(
             FactRequirement(fact_key, answer_type, ("record",), 90, True, True),
             FactRequirement("activity.screening_applies", "boolean", (), 1, False, False),

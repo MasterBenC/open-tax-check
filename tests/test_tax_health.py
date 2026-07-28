@@ -33,7 +33,7 @@ SOURCE = RuleSource("国家税务总局", "https://www.chinatax.gov.cn/example",
 
 def vat_pack() -> TaxPack:
     return TaxPack(
-        "vat-cn-2026", "vat", "CN", PERIOD, PackMaturity.SCREENING,
+        "vat-cn-2026", "vat", "CN", PERIOD, PackMaturity.CALCULATION,
         (
             FactRequirement("entity.vat_registration", "choice", ("营业执照",), 90, True, True),
             FactRequirement("activity.screening_applies", "boolean", (), 1, False, False),
@@ -81,7 +81,7 @@ def payload_keys(value: object) -> set[str]:
 
 
 class TaxHealthFacadeTests(unittest.TestCase):
-    def test_exact_generic_pack_uses_builtin_evaluator_without_caller_mapping(self) -> None:
+    def test_custom_generic_pack_without_evaluator_mapping_remains_unavailable(self) -> None:
         request = TaxCheckRequest(
             PERIOD,
             "CN",
@@ -103,7 +103,8 @@ class TaxHealthFacadeTests(unittest.TestCase):
         )
 
         vat = next(result for result in snapshot.results if result.tax_id == "vat")
-        self.assertEqual(vat.status, TaxStatus.NOT_APPLICABLE)
+        self.assertEqual(vat.status, TaxStatus.BLOCKED)
+        self.assertEqual(vat.diagnostics, ("rule_evaluator_unavailable",))
 
     def test_explicit_empty_evaluator_mapping_does_not_inject_builtin_generic(self) -> None:
         request = TaxCheckRequest(

@@ -61,13 +61,13 @@ def pack(
         tax_id,
         "CN",
         period,
-        PackMaturity.SCREENING,
+        PackMaturity.CALCULATION,
         all_requirements,
         local_parameter_keys,
         evaluator_id,
         (SOURCE,),
-        "2026.1",
-        "zh-CN.v1",
+        "1.0.0",
+        "",
         ("activity.screening_applies",),
     )
 
@@ -88,6 +88,7 @@ def calculated(context: object) -> EvaluationOutcome:
 def generic_pack(
     *extra_requirements: FactRequirement,
     local_parameter_keys: tuple[str, ...] = (),
+    applicability_critical: bool = True,
 ) -> TaxPack:
     applicability = FactRequirement(
         "activity.has_vat_taxable_transaction",
@@ -95,7 +96,7 @@ def generic_pack(
         ("customer_confirmation",),
         100,
         True,
-        True,
+        applicability_critical,
     )
     return TaxPack(
         "vat-cn-2026-screening-v1",
@@ -182,6 +183,31 @@ class TaxScreeningTests(unittest.TestCase):
             tuple(gap.fact_key for gap in result.gaps),
             ("activity.has_vat_taxable_transaction",),
         )
+
+    def test_inferred_noncritical_applicability_still_needs_evidence(self) -> None:
+        result = screen_tax_items(
+            applicability_request(False, FactState.INFERRED),
+            (generic_pack(applicability_critical=False),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+        self.assertEqual(
+            tuple(gap.fact_key for gap in result.gaps),
+            ("activity.has_vat_taxable_transaction",),
+        )
+
+    def test_screening_custom_evaluator_cannot_calculate(self) -> None:
+        result = screen_tax_items(
+            applicability_request(True, FactState.CONFIRMED),
+            (generic_pack(),),
+            {GENERIC_SCREENING_EVALUATOR_ID: calculated},
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("invalid_evaluator_outcome",))
 
     def test_confirmed_positive_without_calculation_pack_never_calculates(self) -> None:
         result = screen_tax_items(
@@ -295,7 +321,7 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.status, TaxStatus.BLOCKED)
         self.assertEqual(result.diagnostics, ("rule_evaluator_unavailable",))
 
-    def test_evidence_backed_evaluator_can_calculate(self) -> None:
+    def test_schema_1_0_calculation_evaluator_can_calculate(self) -> None:
         result = screen_tax_items(
             request(TaxFact("entity.registration", "general", FactState.OBSERVED, ("file-001",))),
             (pack(),),

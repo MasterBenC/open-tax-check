@@ -9,7 +9,6 @@ from .tax_models import Confirmation, TaxCheckRequest, TaxCheckSnapshot, TaxPack
 from .tax_prompts import load_builtin_fact_catalog
 from .tax_registry import load_builtin_tax_packs
 from .tax_screening import (
-    GENERIC_SCREENING_EVALUATOR_ID,
     RuleEvaluator,
     builtin_tax_evaluators,
 )
@@ -22,9 +21,7 @@ def _resolved_evaluators(
 ) -> Mapping[str, RuleEvaluator]:
     if evaluators is not None:
         return evaluators
-    if packs is None or any(
-        pack.evaluator_id == GENERIC_SCREENING_EVALUATOR_ID for pack in packs
-    ):
+    if packs is None:
         return builtin_tax_evaluators()
     return {}
 
