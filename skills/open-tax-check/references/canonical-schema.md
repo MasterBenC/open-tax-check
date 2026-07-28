@@ -1,43 +1,53 @@
-# Canonical journal schema
+# 统一序时账字段与输入边界
 
-## Required fields
+## Phase 2A 的 Excel 边界
 
-| Canonical field | Meaning | Examples of accepted source headers |
+`.xlsx`、`.xlsm`、`.xls` 在 Phase 2A 只进入安全盘点层。程序可以记录来源哈希、工作表结构、有限表头信号、候选角色、公式/合并/隐藏信息和表头候选；Phase 2A 自身止于安全盘点，不标准化 Excel 业务行、不勾稽、不跑规则，也不生成正式客户报告。当前 Phase 2B 在确认来源绑定映射后支持 Excel 行提取、统一字段映射、勾稽和规则执行，但仍不生成正式客户报告。
+
+人工选表决定必须绑定 `source_sha256`、`sheet_id`、工作表名称、角色、全部表头行、隐藏行 `include` / `exclude`、复核人、检查期间和 `schema_version`。任何绑定值变化都要使相应决定失效。
+
+## Phase 2B 的映射与勾稽边界
+
+Excel 映射提案必须由复核人通过 `confirm-mapping` 确认后才是活动映射；确认记录继续绑定实际 `source_id`、来源哈希、sheet、表头行、期间和 schema 版本。标准化输出为 `normalized_journal.jsonl` 和 `normalized_trial_balance.jsonl`，勾稽输出为 `reconciliation.json`。勾稽通过不表示不存在税务风险；财务报表和申报表若为 `present_unparsed`，完整基线健康检查尚未完成。
+
+## 必填字段
+
+| 统一字段 | 含义 | 可接受的来源表头示例 |
 | --- | --- | --- |
-| `voucher_no` | Voucher identifier | 凭证号, 凭证编号, 记账凭证号 |
-| `date` | Posting or voucher date | 日期, 凭证日期, 记账日期 |
-| `account_name` | Account or detailed account name | 科目名称, 会计科目, 科目 |
-| `debit` | Debit amount | 借方发生额, 借方金额, 借方 |
-| `credit` | Credit amount | 贷方发生额, 贷方金额, 贷方 |
+| `voucher_no` | 凭证标识 | 凭证号、凭证编号、记账凭证号 |
+| `date` | 记账或凭证日期 | 日期、凭证日期、记账日期 |
+| `account_name` | 科目或明细科目名称 | 科目名称、会计科目、科目 |
+| `debit` | 借方金额 | 借方发生额、借方金额、借方 |
+| `credit` | 贷方金额 | 贷方发生额、贷方金额、贷方 |
 
-## Optional fields
+## 可选字段
 
-| Canonical field | Meaning | Examples |
+| 统一字段 | 含义 | 示例 |
 | --- | --- | --- |
-| `account_code` | Account code | 科目代码, 科目编码 |
-| `summary` | Voucher narrative | 摘要, 业务说明, 凭证摘要 |
-| `counterparty` | Counterparty | 对方单位, 往来单位, 交易对手 |
+| `account_code` | 科目编码 | 科目代码、科目编码 |
+| `summary` | 凭证摘要 | 摘要、业务说明、凭证摘要 |
+| `counterparty` | 交易对手 | 对方单位、往来单位、交易对手 |
 
-## Mapping control
+## 映射控制
 
-Every source header must either map to a canonical field or be explicitly excluded by a reviewer. Missing required fields and unresolved headers block automatic calculation. Multiple source headers that resolve to the same canonical field are recorded in `conflicts` and block automatic calculation until a reviewer selects the intended source. Mapping output must include a mapping version and be retained with the case.
+每个来源表头必须映射到一个统一字段，或由复核人明确排除。缺少必填字段或存在未解决表头时，阻止自动计算。多个来源表头指向同一统一字段时，要记录到 `conflicts`，并阻止自动计算，直到复核人选择预期来源。映射结果必须包含版本并随案件保存。映射确认 JSON 继续以表头标签为键，但 `0.3.0` 绑定按物理列号和标签的有序对生成指纹；内部空白列不会改变后续字段读取位置，旧的仅标签 `0.2.0` 确认必须重新确认。
 
-## Source lineage
+## 来源血缘
 
-Normalized rows add `source_file`, `source_sheet`, `source_row`, and `mapping_version`. A valid posting date is normalized to ISO form and adds `period` (`YYYY-MM`) and `tax_year` (`YYYY`) before any hard rule runs. Later formats should also retain workbook cell ranges, OCR page and bounding box, extraction method, and confidence where applicable.
+标准化行增加 `source_file`、`source_sheet`、`source_row` 和 `mapping_version`。有效记账日期在任何硬规则运行前统一为 ISO 形式，并增加 `period`（`YYYY-MM`）和 `tax_year`（`YYYY`）。金额加方向拆分出的借贷字段在兼容的顶层金额单元格血缘之外，增加 `contributing_cells.amount` 和 `contributing_cells.direction`；两者仅保留来源、sheet、行列、A1 坐标、原类型、来源方式和映射版本，不包含原始单元格值，并原样进入勾稽序列化。未来格式还应保留工作簿单元格范围、OCR 页码与边界框、提取方法和置信度。
 
-## Date handling and row completeness
+## CSV 日期和行完整性
 
-The deterministic CSV adapter accepts `YYYY-MM-DD`, `YYYY/M/D`, and `YYYY.M.D`; month and day may be one or two digits for slash and dot forms. It rejects missing dates, invalid calendar dates, mixed separators, timestamps, and ambiguous localized forms instead of guessing a period.
+确定性 CSV 适配器接受 `YYYY-MM-DD`、`YYYY/M/D` 和 `YYYY.M.D`；斜杠和点号格式的月、日可以是一位或两位。缺失日期、无效公历日期、混合分隔符、时间戳和有歧义的本地格式一律拒绝，不猜测期间。
 
-An amount row is blocked when `voucher_no`, `date`, or `account_name` is blank. A blank debit or credit is treated as zero only when the other side is present; a row with both amounts blank is blocked. These diagnostics retain only field names and minimal source coordinates.
+有金额的行若 `voucher_no`、`date` 或 `account_name` 为空则阻断。只有另一侧金额存在时，空借方或空贷方才按零处理；借贷双方都空时阻断。诊断只保留字段名和最小来源坐标。
 
-## Numeric handling
+## CSV 金额
 
-Use decimal arithmetic for currency. Do not use binary floating point for tax calculations. Accepted values use ASCII digits with an optional ASCII `+` or `-`, and are ordinary integers or decimals with either no grouping or valid three-digit thousands grouping. Leading and trailing whitespace is ignored, and a blank amount is zero. Each Phase 1 amount allows at most 18 integer digits and 2 fractional digits.
+货币计算使用十进制，不使用二进制浮点。可接受值由 ASCII 数字、可选 ASCII `+` / `-` 和普通整数或小数组成；可以不分组，或使用合法三位千分位。忽略首尾空白，空金额为零。每个 Phase 1 金额最多 18 位整数和 2 位小数。
 
-The sum of the absolute values of all valid debit and credit amounts must not exceed `99,999,999,999,999,999,999.99` (20 integer digits). This aggregate is accumulated with an explicit 50-digit exact decimal context. Exceeding either the per-value or aggregate limit is blocking and prevents voucher balancing and tax rules.
+所有有效借贷金额绝对值之和不得超过 `99,999,999,999,999,999,999.99`（20 位整数）。使用明确的 50 位十进制精度精确累加。单值或总额越界都会阻断凭证平衡和税务规则。
 
-Calculations retain exact decimal values. Final displayed money is rounded to 2 fractional digits with `ROUND_HALF_UP`, independently of the host process's decimal context. This display convention does not decide a return-specific filing convention; professional review must confirm the applicable filing and statutory presentation rules.
+计算保留精确十进制值。最终展示金额独立于宿主进程的 decimal context，按 `ROUND_HALF_UP` 舍入到 2 位小数。该展示约定不决定申报表口径；专业复核仍要确认适用的申报和法定列示规则。
 
-Malformed grouping, non-finite values such as `NaN` or `Infinity`, scientific notation, Unicode digits, internal whitespace, currency symbols, and parenthesized negatives are blocking data-quality issues. Diagnostics identify only affected fields and source coordinates; they do not echo rejected values. Preserve source values separately if cleaning changes separators, signs, or blank values.
+畸形千分位、`NaN`、`Infinity` 等非有限值、科学计数法、Unicode 数字、内部空格、货币符号和括号负数均为阻断项。诊断只指出字段和来源坐标，不回显被拒绝的值。若清洗改变分隔符、符号或空值，另行保存原值。

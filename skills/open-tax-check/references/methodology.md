@@ -1,33 +1,54 @@
-# Methodology and control gates
+# 方法论与控制门槛
 
-## Purpose
+## 目的
 
-This skill performs a Chinese enterprise tax-risk screening designed for professional review. It separates deterministic processing from judgment so that a low-capability host agent can run the same core workflow.
+本 Skill 用于需要专业复核的中国企业税务风险筛查。它把确定性处理与判断分开，使低能力宿主 Agent 也能按固定门槛执行。
 
-## Processing layers
+## Phase 2A：安全盘点而非税务结论
 
-1. Intake: preserve originals and record entity, period, file inventory, and hashes when available.
-2. Normalization: map source headers to the canonical schema and retain source coordinates.
-3. Data quality: validate required row values and calendar dates, then reconcile debits and credits by voucher number within each accounting period before tax calculation.
-4. Hard rules: run versioned formulas on mapped, validated data.
-5. Semantic screening: create candidates from summaries and account mismatches; do not conclude.
-6. Professional review: obtain evidence, apply the law for the relevant period, and record reviewer rationale.
-7. Reporting: render only approved reviewed findings and disclose scope limitations.
+Phase 2A 接收 `.xlsx`、`.xlsm`、`.xls` 和 CSV，记录原始文件、哈希、大小、类型和安全诊断。工作簿盘点只读取受限的结构与表头信号，用于候选识别和人工选表；它不标准化 Excel 业务行、不勾稽、不跑税务规则、不生成正式报告。
 
-## Separation of duties
+只有唯一、可见、高置信且无隐藏数据的工作表可以自动选择。隐藏工作表不得自动选择；含隐藏行或其他隐藏数据时，由复核人明确选择工作表和 `include` / `exclude`。决定与来源和 schema 绑定，来源变化后选择性失效。
 
-Python owns arithmetic, deterministic matching, identifiers, lineage, rule versions, state, and repeatable rendering. AI may describe patterns, prioritize candidates, suggest evidence requests, or draft prose. A tax professional owns the conclusion, severity, exposure, recommendation, and release decision.
+## 资料覆盖矩阵
 
-Missing or invalid dates block hard rules. The engine derives the tax year and accounting period only from explicitly supported date forms; neither Python nor AI may infer a missing or ambiguous date. Blocking row diagnostics must not copy narratives or source amounts into the finding.
+资料覆盖矩阵按证据角色记录：
 
-## Finding lifecycle
+- `status`：`missing`、`present_unparsed`、已识别或其他实际状态；
+- `procedure_status`：已执行、因缺资料未执行、因未解析未执行或不适用；
+- `source_ids`：实际支持该判断的来源；
+- 风险触发资料的请求状态。
+
+缺失、未解析或未执行不得写成“无风险”。`partial_scope_ready` 只表示已完成当前盘点范围。
+
+## Phase 2B Excel 流程
+
+Excel 先安全盘点和选表；随后由人工复核确认完整、来源绑定的字段映射，才标准化序时账和试算平衡表并执行勾稽。勾稽通过不表示不存在税务风险；`reconciliation.json` 通过只证明指定数据集在已执行的勾稽中一致。财务报表和纳税申报表的 `present_unparsed` 必须保留为未执行程序，不能称为完整基线健康检查。
+
+## 兼容 CSV 流程
+
+1. 接收：保存原件，记录实体、期间、文件清单和哈希。
+2. 标准化：把 CSV 来源表头映射到统一字段，保留来源坐标。
+3. 数据质量：检查关键行值和公历日期，再按每个会计期间内的凭证号核对借贷。
+4. 硬规则：只对已映射、已验证的数据运行版本化公式。
+5. 语义筛查：从摘要和科目错配生成候选，不直接下结论。
+6. 专业复核：核验证据、期间法规和事实，记录复核理由。
+7. 报告：只呈现获批的已复核 finding，并披露范围限制。
+
+缺失或无效日期会阻止硬规则。引擎只从明确支持的日期格式推导税年和会计期间；Python 与 AI 都不得猜测。阻断诊断不得复制摘要或来源金额。
+
+## 职责分离
+
+Python 负责算术、确定性匹配、标识、血缘、规则版本、状态和可重复渲染。AI 可以解释模式、排序候选、建议证据或草拟文字。税务专业人员负责结论、严重程度、风险金额、建议和发布决定。
+
+## Finding 生命周期
 
 `candidate` → `suspected` / `confirmed` / `closed` / `insufficient_data`
 
-The transition requires a review record. Preserve the original engine result so later reviewers can distinguish source facts, system calculation, AI commentary, and professional judgment.
+状态转换必须有 review 记录。保留引擎原始结果，使后来复核人能区分来源事实、系统计算、AI 评论和专业判断。
 
-The review layer must record `report_status` separately from `review_status`. A finding is eligible for client-facing reporting only when `review_status` is `reviewed`, `report_status` is exactly `approved`, and its finding status is `suspected`, `confirmed`, or `insufficient_data`. A missing, draft, rejected, or any other report status is not approval; `candidate` and `closed` findings remain excluded even if marked approved.
+review 层分别记录 `review_status` 与 `report_status`。只有 `review_status` 为 `reviewed`、`report_status` 恰为 `approved`，且 finding 状态为 `suspected`、`confirmed` 或 `insufficient_data` 时，才具备进入客户报告的资格。缺失、草稿、拒绝或其他 report status 都不是批准；`candidate` 和 `closed` 即使标为 approved 也要排除。
 
-## Reporting boundary
+## 报告边界
 
-Version 0.1 produces screening findings and an internal Markdown draft; it does not generate a formal client report. Any later client-facing report is consulting advice based on documents supplied and procedures described. It is not a statutory audit, assurance engagement, legal opinion, tax filing, or binding interpretation by a tax authority. Never hide missing inputs behind a health score.
+当前 v0.1 只产生筛查 finding 和内部 Markdown 草稿，不生成正式客户报告。未来客户报告也是基于客户提供资料和已披露程序的咨询建议，不是法定审计、鉴证、法律意见、纳税申报或税务机关的约束性解释。不得用健康分掩盖缺失资料。

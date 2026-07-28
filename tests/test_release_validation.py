@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -27,11 +28,16 @@ class ReleaseValidationTests(unittest.TestCase):
         )
         return root
 
-    def run_validator(self, root):
+    def run_validator(self, root, *arguments):
         output = io.StringIO()
         with mock.patch.object(validate_release, "ROOT", root):
-            with contextlib.redirect_stdout(output):
-                result = validate_release.main()
+            with mock.patch.object(
+                sys,
+                "argv",
+                ["validate_release.py", *arguments],
+            ):
+                with contextlib.redirect_stdout(output):
+                    result = validate_release.main()
         return result, output.getvalue()
 
     def write_api_key_assignment(
@@ -59,6 +65,503 @@ class ReleaseValidationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("release validation passed", proc.stdout.lower())
+
+    def test_script_emits_utf8_when_inherited_encoding_cannot_encode_chinese(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "cp1252"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/validate_release.py")],
+            capture_output=True,
+            env=env,
+        )
+
+        self.assertEqual(
+            proc.returncode,
+            0,
+            proc.stderr.decode("utf-8", errors="replace"),
+        )
+        message = proc.stdout.decode("utf-8")
+        self.assertIn("Skill 公开文件：", message)
+        self.assertIn("release validation passed", message.lower())
+
+    def test_volume_limits_are_explicit_binary_byte_limits(self):
+        self.assertEqual(validate_release.SKILL_PUBLIC_LIMIT_BYTES, 250 * 1024)
+        self.assertEqual(
+            validate_release.PUBLIC_RELEASE_LIMIT_BYTES,
+            5 * 1024 * 1024,
+        )
+        self.assertEqual(
+            validate_release.DISTRIBUTION_FILE_LIMIT_BYTES,
+            1 * 1024 * 1024,
+        )
+
+    def test_ci_builds_before_strict_release_validation(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        build_step = "      - run: python -m build"
+        strict_validation_step = (
+            "      - run: python scripts/validate_release.py "
+            "--require-distributions"
+        )
+
+        self.assertIn(strict_validation_step, workflow)
+        self.assertLess(
+            workflow.index(build_step),
+            workflow.index(strict_validation_step),
+        )
+        self.assertNotIn(
+            "      - run: python scripts/validate_release.py\n",
+            workflow,
+        )
+
+    def test_require_distributions_rejects_missing_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+
+            result, message = self.run_validator(
+                root,
+                "--require-distributions",
+            )
+
+        self.assertEqual(result, 1, message)
+        self.assertIn(
+            "expected exactly one wheel and one sdist",
+            message,
+        )
+
+    def test_require_distributions_rejects_incomplete_or_ambiguous_sets(self):
+        cases = (
+            ("wheel_only", ("open_tax_check-0.1.0-py3-none-any.whl",)),
+            ("sdist_only", ("open_tax_check-0.1.0.tar.gz",)),
+            (
+                "duplicate_wheel",
+                (
+                    "open_tax_check-0.1.0-py3-none-any.whl",
+                    "open_tax_check-0.1.0-2-py3-none-any.whl",
+                    "open_tax_check-0.1.0.tar.gz",
+                ),
+            ),
+        )
+        for case, names in cases:
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / ".gitignore").write_text(
+                        "dist/\n",
+                        encoding="utf-8",
+                    )
+                    distribution = root / "dist"
+                    distribution.mkdir()
+                    for name in names:
+                        (distribution / name).write_bytes(b"safe")
+
+                    result, message = self.run_validator(
+                        root,
+                        "--require-distributions",
+                    )
+
+                self.assertEqual(result, 1, message)
+                self.assertIn(
+                    "expected exactly one wheel and one sdist",
+                    message,
+                )
+
+    def test_require_distributions_accepts_exact_wheel_and_sdist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+            distribution = root / "dist"
+            distribution.mkdir()
+            (distribution / "open_tax_check-0.1.0-py3-none-any.whl").write_bytes(
+                b"safe wheel"
+            )
+            (distribution / "open_tax_check-0.1.0.tar.gz").write_bytes(
+                b"safe sdist"
+            )
+
+            result, message = self.run_validator(
+                root,
+                "--require-distributions",
+            )
+
+        self.assertEqual(result, 0, message)
+        self.assertIn("release validation passed", message.lower())
+
+    def test_release_validator_reports_actual_byte_sizes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 0, message)
+        self.assertRegex(
+            message,
+            r"Skill 公开文件：\d+ 字节（上限 256000 字节）",
+        )
+        self.assertRegex(
+            message,
+            r"Git 公开发布内容：\d+ 字节（上限 5242880 字节）",
+        )
+
+    def test_oversized_skill_public_content_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / "skills/open-tax-check/SKILL.md").write_bytes(
+                b"x" * (250 * 1024 + 1)
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertIn("Skill 公开文件超过 256000 字节", message)
+
+    def test_oversized_git_public_release_content_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / "large-public.txt").write_bytes(b"x" * (5 * 1024 * 1024))
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertIn("Git 公开发布内容超过 5242880 字节", message)
+
+    def test_direct_text_symlink_to_oversized_external_file_is_rejected(self):
+        relative_path = Path("large-public.txt")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            external = temp_path / "external.txt"
+            external.write_bytes(
+                b"x" * (validate_release.PUBLIC_RELEASE_LIMIT_BYTES + 1)
+            )
+            link = root / relative_path
+            try:
+                link.symlink_to(external)
+            except OSError as error:
+                self.skipTest(f"file symlinks are unavailable: {error}")
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "unsafe public release path: "
+            f"{relative_path} (unsafe_public_path)\n",
+        )
+
+    @unittest.skipIf(os.name == "nt", "POSIX parent symlink test")
+    def test_text_file_under_parent_symlink_is_rejected(self):
+        relative_path = Path("public/large-public.txt")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            external = temp_path / "external"
+            external.mkdir()
+            (external / "large-public.txt").write_bytes(
+                b"x" * (validate_release.PUBLIC_RELEASE_LIMIT_BYTES + 1)
+            )
+            link = root / "public"
+            link.symlink_to(external, target_is_directory=True)
+            candidates = tuple(
+                Path(name) for name in validate_release.REQUIRED
+            ) + (relative_path,)
+            with mock.patch.object(
+                validate_release,
+                "public_paths",
+                return_value=candidates,
+            ):
+                result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "unsafe public release path: "
+            f"{relative_path} (unsafe_public_path)\n",
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows junctions are only available on Windows",
+    )
+    def test_text_file_under_parent_junction_is_rejected(self):
+        relative_path = Path("public/large-public.txt")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            external = temp_path / "external"
+            external.mkdir()
+            (external / "large-public.txt").write_bytes(
+                b"x" * (validate_release.PUBLIC_RELEASE_LIMIT_BYTES + 1)
+            )
+            link = root / "public"
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(external)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(
+                    f"junctions are unavailable: {result.stderr.strip()}"
+                )
+            try:
+                subprocess.run(
+                    ["git", "add", str(relative_path)],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
+                validation_result, message = self.run_validator(root)
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(link)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+        self.assertEqual(validation_result, 1, message)
+        self.assertEqual(
+            message,
+            "unsafe public release path: "
+            f"{relative_path} (unsafe_public_path)\n",
+        )
+
+    def test_oversized_distribution_artifacts_are_rejected(self):
+        for name in ("open_tax_check-0.1.0-py3-none-any.whl", "open-tax-check.tar.gz"):
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / ".gitignore").write_text(
+                        "dist/\n", encoding="utf-8"
+                    )
+                    artifact = root / "dist" / name
+                    artifact.parent.mkdir()
+                    artifact.write_bytes(b"x" * (1024 * 1024 + 1))
+
+                    result, message = self.run_validator(root)
+
+                self.assertEqual(result, 1, message)
+                self.assertIn(
+                    f"构建产物 {name} 超过 1048576 字节",
+                    message,
+                )
+
+    def test_only_exact_fictional_xls_fixture_is_allowed(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(fixture.read_bytes())
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 0, message)
+        self.assertIn("release validation passed", message.lower())
+
+    def test_tampered_fictional_xls_fixture_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tampered = bytearray(fixture.read_bytes())
+            tampered[-1] ^= 1
+            target.write_bytes(tampered)
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_wrong_sized_fictional_xls_fixture_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(fixture.read_bytes() + b"x")
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_exact_fictional_xls_bytes_at_other_path_are_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/copy.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(fixture.read_bytes())
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows junctions are only available on Windows",
+    )
+    def test_allowed_fixture_under_parent_junction_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            target = temp_path / "fixture-target"
+            target.mkdir()
+            (target / "fictional-journal.xls").write_bytes(
+                fixture.read_bytes()
+            )
+            link = root / "tests/fixtures"
+            link.parent.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if result.returncode != 0:
+                self.skipTest(
+                    f"junctions are unavailable: {result.stderr.strip()}"
+                )
+            try:
+                subprocess.run(
+                    ["git", "add", str(relative_path)],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
+                validation_result, message = self.run_validator(root)
+            finally:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(link)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+        self.assertEqual(validation_result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_allowed_fixture_symlink_to_exact_bytes_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(Path(directory) / "repository")
+            link = root / relative_path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                link.symlink_to(fixture)
+            except OSError as error:
+                self.skipTest(f"file symlinks are unavailable: {error}")
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    def test_dangling_excel_symlink_is_rejected(self):
+        relative_path = Path("tests/fixtures/dangling.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            link = root / relative_path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                link.symlink_to(temp_path / "missing.xls")
+            except OSError as error:
+                self.skipTest(f"file symlinks are unavailable: {error}")
+            subprocess.run(
+                ["git", "add", str(relative_path)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
+
+    @unittest.skipIf(
+        os.name == "nt",
+        "POSIX parent symlink test",
+    )
+    def test_allowed_fixture_under_parent_symlink_is_rejected(self):
+        fixture = ROOT / "tests/fixtures/fictional-journal.xls"
+        relative_path = Path("tests/fixtures/fictional-journal.xls")
+        with tempfile.TemporaryDirectory() as directory:
+            temp_path = Path(directory)
+            root = self.create_repository(temp_path / "repository")
+            target = temp_path / "fixture-target"
+            target.mkdir()
+            (target / "fictional-journal.xls").write_bytes(
+                fixture.read_bytes()
+            )
+            link = root / "tests/fixtures"
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target, target_is_directory=True)
+            candidates = tuple(
+                Path(name) for name in validate_release.REQUIRED
+            ) + (relative_path,)
+            with mock.patch.object(
+                validate_release,
+                "public_paths",
+                return_value=candidates,
+            ):
+                result, message = self.run_validator(root)
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            "forbidden public binary content in "
+            f"{relative_path}: binary_public_content\n",
+        )
 
     def test_missing_required_files_are_listed(self):
         missing = {"SECURITY.md", "skills/open-tax-check/agents/openai.yaml"}
@@ -193,7 +696,10 @@ class ReleaseValidationTests(unittest.TestCase):
                     result, message = self.run_validator(root)
 
                 self.assertEqual(result, 0, message)
-                self.assertEqual(message, "release validation passed\n")
+                self.assertTrue(
+                    message.endswith("release validation passed\n"),
+                    message,
+                )
 
     def test_extended_api_key_config_syntaxes_fail_without_echoing_values(self):
         secret = "synthetic" + "_config_value"
@@ -416,7 +922,10 @@ class ReleaseValidationTests(unittest.TestCase):
                         result, message = self.run_validator(root)
 
                     self.assertEqual(result, 0, message)
-                    self.assertEqual(message, "release validation passed\n")
+                    self.assertTrue(
+                        message.endswith("release validation passed\n"),
+                        message,
+                    )
                     self.assertNotIn(secret, message)
 
     def test_empty_and_regex_like_api_key_forms_remain_allowed(self):
@@ -458,7 +967,10 @@ class ReleaseValidationTests(unittest.TestCase):
                     result, message = self.run_validator(root)
 
                 self.assertEqual(result, 0, message)
-                self.assertEqual(message, "release validation passed\n")
+                self.assertTrue(
+                    message.endswith("release validation passed\n"),
+                    message,
+                )
 
     def test_existing_sensitive_patterns_keep_safe_fixed_categories(self):
         cases = (
@@ -549,6 +1061,19 @@ class ReleaseValidationTests(unittest.TestCase):
             ".tgz",
             ".xz",
             ".zip",
+            ".bin",
+            ".ckpt",
+            ".gguf",
+            ".h5",
+            ".hdf5",
+            ".keras",
+            ".model",
+            ".onnx",
+            ".ot",
+            ".pt",
+            ".pth",
+            ".safetensors",
+            ".tflite",
         )
         private_bytes = b"safe-looking-utf8-private-client-binary-contents"
 

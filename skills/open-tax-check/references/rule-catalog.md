@@ -1,38 +1,38 @@
-# Initial rule catalog
+# 初始规则目录
 
-Rules are period-sensitive. Confirm that each authority and threshold applies to the review period before release.
+规则对期间敏感。发布前确认法规依据和阈值适用于检查期间。下列规则只在兼容的 CSV `run` 流程中执行；Phase 2A 不对 Excel 业务行运行这些规则。
 
-## CIT-BE-001 — Business entertainment deduction
+## CIT-BE-001 — 业务招待费扣除
 
-- Current rule version `2026.2`.
-- Engine result: calculated, awaiting professional review.
-- Formula: deductible amount is the lower of 60% of actual business-entertainment expense and 0.5% of qualifying revenue; tax adjustment equals actual expense minus deductible amount.
-- Revenue-basis scope: recognized ledger main-business and other-business revenue accounts, identified by exact `营业收入`, names containing `主营业务收入` or `其他业务收入`, or standard account-code prefixes `6001` and `6051`. Do not include non-operating revenue merely because its name contains the word “revenue.”
-- Completeness boundary: basis completeness remains unconfirmed until the ledger basis is reconciled to the annual CIT return and deemed-sales revenue. A `calculated` result is not a final filed tax adjustment.
-- Period boundary: expense and qualifying revenue are calculated separately for each tax year. Each annual finding and its lineage must contain only that tax year.
-- Key controls: reconcile the expense ledger and revenue base to the annual CIT return; investigate entertainment disguised in other accounts separately.
-- Authority: [Enterprise Income Tax Law Implementing Regulations, Article 43](https://jdjc.mof.gov.cn/fgzd/202201/t20220125_3784682.htm) and [State Taxation Administration guidance](https://www.chinatax.gov.cn/chinatax/n810356/n3010387/c5240872/content.html).
+- 当前规则版本：`2026.2`。
+- 引擎结果：`calculated`，等待专业复核。
+- 公式：可扣除额取实际业务招待费的 60% 与合格收入的 0.5% 两者孰低；纳税调增额为实际费用减可扣除额。
+- 收入基数范围：识别账内主营业务和其他业务收入科目，包括精确名称 `营业收入`、名称含 `主营业务收入` / `其他业务收入`，或标准科目编码前缀 `6001` / `6051`。不能仅因名称含“收入”就纳入营业外收入。
+- 完整性边界：在与年度企业所得税申报表和视同销售收入勾稽前，基数完整性仍未确认。`calculated` 不是最终申报调整额。
+- 期间边界：费用和合格收入按税年分别计算；每个年度 finding 及其血缘只包含该税年。
+- 关键控制：把费用明细和收入基数与年度企业所得税申报表勾稽；另行调查藏在其他科目的招待费。
+- 依据：[企业所得税法实施条例第四十三条](https://jdjc.mof.gov.cn/fgzd/202201/t20220125_3784682.htm)及[国家税务总局指引](https://www.chinatax.gov.cn/chinatax/n810356/n3010387/c5240872/content.html)。
 
-## IIT-SHL-001 — Individual shareholder borrowing candidate
+## IIT-SHL-001 — 个人股东借款候选
 
-- Engine result: candidate only.
-- Trigger boundary: positive receivable from an identified individual shareholder, outstanding at year-end, with business purpose not confirmed.
-- The engine may calculate a 20% scenario exposure, but this is not an automatic conclusion or final liability.
-- Required evidence: shareholder identity, loan agreement, fund use, year-end repayment, subsequent repayment, and relevant corporate resolutions.
-- Authority: [Cai Shui (2003) No. 158](https://fgk.chinatax.gov.cn/zcfgk/c102416/c5202842/content.html).
+- 引擎结果：仅为 `candidate`。
+- 触发边界：已识别个人股东的应收款为正、年末未清、业务用途未确认。
+- 引擎可以计算 20% 情景风险金额，但不能自动形成结论或最终税负。
+- 所需证据：股东身份、借款协议、资金用途、年末归还、期后归还和相关公司决议。
+- 依据：[财税〔2003〕158号](https://fgk.chinatax.gov.cn/zcfgk/c102416/c5202842/content.html)。
 
-## SEM-EXP-001 — Expense description/account mismatch
+## SEM-EXP-001 — 费用摘要与科目不匹配
 
-- Engine result: unreviewed semantic candidate.
-- Example pattern: gift, tobacco, alcohol, tea, banquet, KTV, or golf language posted to office, travel, or meeting expense.
-- Required review: business purpose, recipient, invoice, approval, employee benefit or gift treatment, VAT treatment, and CIT classification.
+- 引擎结果：未复核语义候选。
+- 示例模式：礼品、烟、酒、茶、宴请、KTV 或高尔夫文字计入办公、差旅或会议费。
+- 必需复核：业务目的、收受人、发票、审批、员工福利/赠礼处理、增值税处理和企业所得税分类。
 
-## SEM-PAY-001 — Payroll/labor narrative with unusual counter-account
+## SEM-PAY-001 — 工资/劳务摘要对应异常科目
 
-- Engine result: unreviewed semantic candidate.
-- Example pattern: salary or labor-service narrative posted against an individual payable, advance, or other unusual account.
-- Required review: payroll register, IIT withholding return, bank payment trail, contracts, social insurance, and invoice or labor evidence.
+- 引擎结果：未复核语义候选。
+- 示例模式：工资或劳务摘要对应个人往来、备用金或其他异常科目。
+- 必需复核：工资表、个税扣缴申报、银行流水、合同、社保和发票或劳务证据。
 
-## Versioning
+## 版本控制
 
-Changing a formula, threshold, trigger, status boundary, or authority requires a new rule version and regression test. Wording-only changes that do not alter behavior may retain the version but should be documented.
+公式、阈值、触发条件、状态边界或法规依据变化时，必须提高规则版本并增加回归测试。仅修改措辞且不改变行为时可以保留版本，但仍应记录。
