@@ -296,16 +296,20 @@ def screen_tax_items(
     packs: tuple[TaxPack, ...],
     evaluators: Mapping[str, RuleEvaluator],
     tax_ids: tuple[str, ...] | None = None,
+    unavailable_tax_ids: frozenset[str] = frozenset(),
 ) -> tuple[TaxResult, ...]:
     """Screen selected taxes using formal packs only, in stable registry order."""
     selected_tax_ids = (
         tuple(item.tax_id for item in TAX_DEFINITIONS) if tax_ids is None else tuple(tax_ids)
     )
     facts: Mapping[str, TaxFact] = MappingProxyType({fact.key: fact for fact in request.facts})
-    return tuple(
-        _screen_one_tax(tax_id, request, tuple(packs), evaluators, facts)
-        for tax_id in selected_tax_ids
-    )
+    results = []
+    for tax_id in selected_tax_ids:
+        if tax_id in unavailable_tax_ids:
+            results.append(TaxResult(tax_id, TaxStatus.BLOCKED, diagnostics=("rule_pack_invalid",)))
+        else:
+            results.append(_screen_one_tax(tax_id, request, tuple(packs), evaluators, facts))
+    return tuple(results)
 
 
 def build_question_queue(

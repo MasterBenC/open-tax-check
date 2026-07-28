@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from dataclasses import dataclass
 import json
 from importlib.resources import files
 import re
@@ -61,6 +62,18 @@ class TaxPackError(ValueError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+@dataclass(frozen=True, slots=True)
+class TaxPackIssue:
+    tax_id: str
+    code: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaxPackBundle:
+    packs: tuple[TaxPack, ...]
+    issues: tuple[TaxPackIssue, ...]
 
 
 def _required_string(value: object, code: str) -> str:
@@ -255,6 +268,23 @@ def load_builtin_tax_packs() -> tuple[TaxPack, ...]:
     return result
 
 
+def load_builtin_tax_pack_bundle() -> TaxPackBundle:
+    """Load valid built-ins while isolating one malformed manifest by tax ID."""
+    package = files("open_tax_check.tax_packs")
+    packs: list[TaxPack] = []
+    issues: list[TaxPackIssue] = []
+    for manifest in sorted(
+        (entry for entry in package.iterdir() if entry.name.endswith(".json") and not entry.name.startswith("fact-catalog")),
+        key=lambda entry: entry.name,
+    ):
+        try:
+            packs.append(validate_pack_payload(json.loads(manifest.read_text(encoding="utf-8"))))
+        except Exception:
+            tax_id = next((item.tax_id for item in TAX_DEFINITIONS if item.tax_id.replace("_", "-") in manifest.name), "unknown")
+            issues.append(TaxPackIssue(tax_id, "invalid_pack_json"))
+    return TaxPackBundle(tuple(packs), tuple(issues))
+
+
 def _merge_periods(periods: list[DateRange]) -> tuple[DateRange, ...]:
     merged: list[DateRange] = []
     for period in periods:
@@ -294,6 +324,10 @@ def select_pack_segments(
         exact = [pack for pack in active if pack.jurisdiction == jurisdiction]
         national = [pack for pack in active if pack.jurisdiction == "CN"]
         choices = exact or national
+        if include_prototypes:
+            prototypes = [pack for pack in choices if pack.maturity is PackMaturity.PROTOTYPE]
+            if prototypes:
+                choices = prototypes
         if len(choices) > 1:
             raise TaxPackError("overlapping_tax_packs")
         if choices:

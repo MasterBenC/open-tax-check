@@ -167,8 +167,11 @@ class TaxRegistryTests(unittest.TestCase):
             packs, tax_id="vat", jurisdiction="CN", period=period, include_prototypes=True
         )
 
-        self.assertEqual(excluded.segments, ())
-        self.assertEqual(excluded.uncovered_periods, (period,))
+        self.assertEqual(
+            tuple(segment.pack.pack_id for segment in excluded.segments),
+            ("vat-cn-2023-2025-screening-v1", "vat-cn-2026-screening-v1"),
+        )
+        self.assertEqual(excluded.uncovered_periods, ())
         self.assertEqual(included.segments[0].pack.pack_id, "vat-cn-2023-2026-prototype")
         self.assertEqual(included.segments[0].period, period)
 
