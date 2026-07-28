@@ -10,6 +10,10 @@
       "answer_type": "boolean",
       "choices": [{"value": true, "label_zh": "是"}, {"value": false, "label_zh": "否"}],
       "evidence_help_zh": "如有，请提供相关申报表、合同、发票或海关资料；如无，请由客户明确确认。"
-    }
+    },
+    {"fact_key":"activity.has_consumption_tax_goods","question_zh":"2023至2026年是否生产、委托加工或销售应税消费品？","help_zh":"请按实际业务回答，不要仅凭科目余额判断。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"如有，请提供申报表、生产或销售台账。"},
+    {"fact_key":"entity.has_enterprise_income_tax_scope","question_zh":"企业在2023至2026年是否属于企业所得税纳税范围？","help_zh":"请依据企业实际登记和经营情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供申报表、财务报表或登记资料。"},
+    {"fact_key":"activity.has_individual_income_tax_duty","question_zh":"2023至2026年是否发生需要代扣代缴个人所得税的收入或支付？","help_zh":"请结合工资、劳务、分红等实际支付回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供申报表、工资或付款记录。"},
+    {"fact_key":"tax.has_vat_or_consumption_tax_payable","question_zh":"2023至2026年是否存在应缴增值税或消费税？","help_zh":"请按申报和实际业务确认。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供相关申报表和缴款记录。"}
   ]
 }
