@@ -26,6 +26,13 @@ def _resolved_evaluators(
     return {}
 
 
+def _builtin_prompts():
+    try:
+        return load_builtin_fact_catalog()
+    except Exception as error:
+        raise ValueError("invalid_fact_catalog") from error
+
+
 def run_tax_health_check(
     request: TaxCheckRequest,
     *,
@@ -39,7 +46,7 @@ def run_tax_health_check(
         request,
         packs=bundle.packs if bundle is not None else tuple(packs),
         evaluators=_resolved_evaluators(packs, evaluators),
-        prompts=load_builtin_fact_catalog() if packs is None else {},
+        prompts=_builtin_prompts() if packs is None else {},
         unavailable_tax_ids=frozenset(issue.tax_id for issue in bundle.issues) if bundle is not None else frozenset(),
         occurred_at=datetime.now(timezone.utc).isoformat() if occurred_at is None else occurred_at,
     )
@@ -59,6 +66,6 @@ def continue_tax_health_check(
         tuple(confirmations),
         packs=bundle.packs if bundle is not None else tuple(packs),
         evaluators=_resolved_evaluators(packs, evaluators),
-        prompts=load_builtin_fact_catalog() if packs is None else {},
+        prompts=_builtin_prompts() if packs is None else {},
         unavailable_tax_ids=frozenset(issue.tax_id for issue in bundle.issues) if bundle is not None else frozenset(),
     )

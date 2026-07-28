@@ -9,6 +9,7 @@ from open_tax_check.tax_models import DateRange
 from open_tax_check.tax_registry import (
     TAX_DEFINITIONS,
     TaxPackError,
+    load_builtin_tax_pack_bundle,
     load_builtin_tax_packs,
     select_pack_segments,
     validate_pack_payload,
@@ -119,6 +120,11 @@ def screening_payload(**overrides: object) -> dict[str, object]:
 
 
 class TaxRegistryTests(unittest.TestCase):
+    def test_builtin_pack_bundle_has_explicit_issue_contract(self) -> None:
+        bundle = load_builtin_tax_pack_bundle()
+        self.assertTrue(bundle.packs)
+        self.assertEqual(bundle.issues, ())
+
     def test_manifest_limits_are_checked_before_json_parsing(self):
         oversized = _Entry("vat.json", 256 * 1024 + 1, "not json")
         with patch("open_tax_check.tax_registry.files", return_value=_Package([oversized])):

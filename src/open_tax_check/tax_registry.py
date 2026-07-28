@@ -268,6 +268,32 @@ def load_builtin_tax_packs() -> tuple[TaxPack, ...]:
     return result
 
 
+_PACK_FILENAME_TAX_IDS = {
+    "vat-cn-2023-2025.screening.json": "vat",
+    "vat-cn-2026.screening.json": "vat",
+    "vat-cn-2023-2026.prototype.json": "vat",
+    "consumption-tax-cn-2023-2026.screening.json": "consumption_tax",
+    "enterprise-income-tax-cn-2023-2026.screening.json": "enterprise_income_tax",
+    "individual-income-tax-cn-2023-2026.screening.json": "individual_income_tax",
+    "resource-tax-cn-2023-2026.screening.json": "resource_tax",
+    "urban-maintenance-construction-tax-cn-2023-2026.screening.json": "urban_maintenance_construction_tax",
+    "house-property-tax-cn-2023-2026.screening.json": "house_property_tax",
+    "stamp-tax-cn-2023-2026.screening.json": "stamp_tax",
+    "urban-land-use-tax-cn-2023-2026.screening.json": "urban_land_use_tax",
+    "land-appreciation-tax-cn-2023-2026.screening.json": "land_appreciation_tax",
+    "vehicle-purchase-tax-cn-2023-2026.screening.json": "vehicle_purchase_tax",
+    "vehicle-vessel-tax-cn-2023-2026.screening.json": "vehicle_vessel_tax",
+    "vessel-tonnage-tax-cn-2023-2026.screening.json": "vessel_tonnage_tax",
+    "cultivated-land-occupation-tax-cn-2023-2026.screening.json": "cultivated_land_occupation_tax",
+    "deed-tax-cn-2023-2026.screening.json": "deed_tax",
+    "tobacco-tax-cn-2023-2026.screening.json": "tobacco_tax",
+    "environmental-protection-tax-cn-2023-2026.screening.json": "environmental_protection_tax",
+    "customs-duty-cn-2023-2026.screening.json": "customs_duty",
+    "education-surcharge-cn-2023-2026.screening.json": "education_surcharge",
+    "local-education-surcharge-cn-2023-2026.screening.json": "local_education_surcharge",
+}
+
+
 def load_builtin_tax_pack_bundle() -> TaxPackBundle:
     """Load valid built-ins while isolating one malformed manifest by tax ID."""
     package = files("open_tax_check.tax_packs")
@@ -280,7 +306,7 @@ def load_builtin_tax_pack_bundle() -> TaxPackBundle:
         try:
             packs.append(validate_pack_payload(json.loads(manifest.read_text(encoding="utf-8"))))
         except Exception:
-            tax_id = next((item.tax_id for item in TAX_DEFINITIONS if item.tax_id.replace("_", "-") in manifest.name), "unknown")
+            tax_id = _PACK_FILENAME_TAX_IDS.get(manifest.name, "unknown")
             issues.append(TaxPackIssue(tax_id, "invalid_pack_json"))
     return TaxPackBundle(tuple(packs), tuple(issues))
 
