@@ -20,6 +20,28 @@ from open_tax_check.tax_reporting import render_tax_health_report
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
 SOURCE = RuleSource("国家税务总局", "https://www.chinatax.gov.cn/example", date(2026, 1, 1))
+EXPECTED_TAX_HEADINGS = (
+    ("vat", "增值税"),
+    ("consumption_tax", "消费税"),
+    ("enterprise_income_tax", "企业所得税"),
+    ("individual_income_tax", "个人所得税"),
+    ("resource_tax", "资源税"),
+    ("urban_maintenance_construction_tax", "城市维护建设税"),
+    ("house_property_tax", "房产税"),
+    ("stamp_tax", "印花税"),
+    ("urban_land_use_tax", "城镇土地使用税"),
+    ("land_appreciation_tax", "土地增值税"),
+    ("vehicle_purchase_tax", "车辆购置税"),
+    ("vehicle_vessel_tax", "车船税"),
+    ("vessel_tonnage_tax", "船舶吨税"),
+    ("cultivated_land_occupation_tax", "耕地占用税"),
+    ("deed_tax", "契税"),
+    ("tobacco_tax", "烟叶税"),
+    ("environmental_protection_tax", "环境保护税"),
+    ("customs_duty", "关税"),
+    ("education_surcharge", "教育费附加"),
+    ("local_education_surcharge", "地方教育附加"),
+)
 
 
 def snapshot_with_every_status() -> TaxCheckSnapshot:
@@ -62,6 +84,13 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
 
 
 class TaxHealthReportingTests(unittest.TestCase):
+    def test_report_uses_the_public_chinese_names_for_all_twenty_items(self) -> None:
+        report = render_tax_health_report(snapshot_with_every_status())
+
+        for tax_id, name_zh in EXPECTED_TAX_HEADINGS:
+            with self.subTest(tax_id=tax_id):
+                self.assertIn(f"### {name_zh}（`{tax_id}`）", report)
+
     def test_report_exposes_progressive_states_and_safe_boundaries(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
 
