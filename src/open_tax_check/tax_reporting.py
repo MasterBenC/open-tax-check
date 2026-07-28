@@ -10,11 +10,11 @@ from .tax_registry import TAX_DEFINITIONS
 
 
 _STATUS_LABELS = {
-    TaxStatus.CALCULATED: "已按当前规则完成计算",
-    TaxStatus.NOT_APPLICABLE: "当前资料显示不适用",
-    TaxStatus.NEEDS_EVIDENCE: "尚需资料",
-    TaxStatus.NEEDS_LOCAL_POLICY: "尚缺地方政策参数",
-    TaxStatus.BLOCKED: "当前无法完成检查",
+    TaxStatus.CALCULATED: "已完成计算",
+    TaxStatus.NOT_APPLICABLE: "经资料确认不适用",
+    TaxStatus.NEEDS_EVIDENCE: "待补充资料",
+    TaxStatus.NEEDS_LOCAL_POLICY: "待确认当地政策",
+    TaxStatus.BLOCKED: "暂时无法判断",
 }
 
 _FIXED_DISCLAIMER = (
@@ -27,6 +27,21 @@ _FIXED_DISCLAIMER = (
 
 def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
     """Return an allowlisted, JSON-friendly snapshot without customer facts."""
+    result_payloads = []
+    for result in snapshot.results:
+        payload = to_dict(result)
+        payload["status_label_zh"] = _STATUS_LABELS[result.status]
+        result_payloads.append(payload)
+    question_payloads = []
+    for question in snapshot.questions:
+        payload = to_dict(question)
+        payload.update({
+            "question_zh": question.question_zh,
+            "help_zh": question.help_zh,
+            "evidence_help_zh": question.evidence_help_zh,
+            "choices": to_dict(question.choices),
+        })
+        question_payloads.append(payload)
     return {
         "schema_version": snapshot.schema_version,
         "revision": snapshot.revision,
@@ -35,8 +50,8 @@ def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
             "jurisdiction": snapshot.request.jurisdiction,
             "input_hashes": list(snapshot.request.input_hashes),
         },
-        "results": to_dict(snapshot.results),
-        "questions": to_dict(snapshot.questions),
+        "results": result_payloads,
+        "questions": question_payloads,
         "audit_events": [
             {
                 "event_type": event.event_type,
@@ -60,36 +75,28 @@ def _sources(results: Iterable[TaxResult]) -> tuple[RuleSource, ...]:
 
 def _result_lines(result: TaxResult) -> list[str]:
     lines = [
-        f"- 机器状态: `{result.status.value}`",
-        f"- 检查进度: {_STATUS_LABELS[result.status]}",
+        f"- 检查结果: {_STATUS_LABELS[result.status]}",
     ]
     for gap in result.gaps:
         if gap.reason_code == "missing_local_policy":
-            lines.append(f"- 尚缺地方政策参数: `{gap.fact_key}`")
+            lines.append("- 需要补充适用的当地政策参数")
         else:
-            lines.append(f"- 缺少资料: `{gap.fact_key}`")
-        if gap.evidence_types:
-            lines.append(f"- 所需佐证类型: {', '.join(gap.evidence_types)}")
-    if result.rule_pack_ids:
-        lines.append(f"- 规则包: {', '.join(f'`{pack_id}`' for pack_id in result.rule_pack_ids)}")
-    if result.status is TaxStatus.BLOCKED and result.diagnostics:
-        lines.append(f"- 阻断诊断: {', '.join(f'`{diagnostic}`' for diagnostic in result.diagnostics)}")
+            lines.append("- 需要补充与该事项相关的资料")
     for source in result.rule_sources:
         lines.append(f"- 适用规则来源: [{source.title}]({source.url})（{source.published_on.isoformat()}）")
     return lines
 
 
 def _question_lines(question: Question) -> list[str]:
+    tax_names = {definition.tax_id: definition.name_zh for definition in TAX_DEFINITIONS}
     lines = [
-        f"### `{question.question_id}`",
-        f"- 待确认事实: `{question.fact_key}`",
-        f"- 涉及税种: {', '.join(f'`{tax_id}`' for tax_id in question.tax_ids)}",
-        f"- 原因: {', '.join(f'`{reason}`' for reason in question.reason_codes)}",
-        f"- 优先级: {question.priority}",
-        f"- 是否阻断: {'是' if question.blocking else '否'}",
+        f"### {question.question_zh or '请补充相关资料'}",
+        f"- 涉及税种: {', '.join(tax_names.get(tax_id, '相关税种') for tax_id in question.tax_ids)}",
     ]
-    if question.evidence_types:
-        lines.append(f"- 所需佐证类型: {', '.join(question.evidence_types)}")
+    if question.help_zh:
+        lines.append(f"- 说明: {question.help_zh}")
+    if question.evidence_help_zh:
+        lines.append(f"- 资料提示: {question.evidence_help_zh}")
     return lines
 
 
@@ -105,19 +112,19 @@ def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
         "",
         "## 检查范围",
         f"- 检查期间: {request.period.start.isoformat()} 至 {request.period.end.isoformat()}",
-        f"- 适用辖区: {request.jurisdiction}",
+        f"- 适用地区: {'中国大陆' if request.jurisdiction == 'CN' else request.jurisdiction}",
         f"- 修订版本: {snapshot.revision}",
         f"- 输入哈希数量: {len(request.input_hashes)}",
         "",
         "## 状态汇总",
     ]
-    lines.extend(f"- `{status.value}`: {counts[status]}" for status in TaxStatus)
+    lines.extend(f"- {_STATUS_LABELS[status]}: {counts[status]}" for status in TaxStatus)
     lines.extend(("", "## 税种检查结果"))
     for definition in TAX_DEFINITIONS:
-        lines.extend(("", f"### {definition.name_zh}（`{definition.tax_id}`）"))
+        lines.extend(("", f"### {definition.name_zh}"))
         result = results_by_tax_id.get(definition.tax_id)
         if result is None:
-            lines.extend(("- 机器状态: `blocked`", "- 检查进度: 当前无法完成检查", "- 阻断诊断: `result_unavailable`"))
+            lines.append("- 检查结果: 暂时无法判断")
         else:
             lines.extend(_result_lines(result))
 

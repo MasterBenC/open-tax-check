@@ -112,6 +112,8 @@ python <skill-dir>/scripts/opentaxcheck.py run --case <case-dir> --ai-mode off
 
 ## 参考资料
 
+- 调用宿主 Agent 时，读取 [references/host-integrations.md](references/host-integrations.md)；只展示 `question_zh`，不得编造确认或把未解决状态说成“无风险”。
+
 - 调整阶段门槛、覆盖矩阵或报告措辞前，读取 [references/methodology.md](references/methodology.md)。
 - 调整输入格式、字段别名、日期或金额口径前，读取 [references/canonical-schema.md](references/canonical-schema.md)。
 - 调整税务逻辑、阈值、法规或版本前，读取 [references/rule-catalog.md](references/rule-catalog.md)。

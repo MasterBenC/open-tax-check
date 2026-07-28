@@ -39,13 +39,16 @@ def _set_formula_cached_value(
             for item in source.infolist():
                 content = source.read(item)
                 if item.filename == sheet_member:
-                    content = content.replace(
-                        f'<c r="{coordinate}"><f>1+1</f><v /></c>'.encode(
-                            "ascii"
-                        ),
-                        replacement,
-                        1,
-                    )
+                    for empty_value in (b"<v />", b"<v></v>"):
+                        content = content.replace(
+                            (
+                                f'<c r="{coordinate}"><f>1+1</f>'.encode("ascii")
+                                + empty_value
+                                + b"</c>"
+                            ),
+                            replacement,
+                            1,
+                        )
                 target.writestr(item, content)
     temporary_path.replace(path)
 

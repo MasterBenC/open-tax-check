@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0.0",
+  "catalog_version": "zh-CN.v1",
+  "locale": "zh-CN",
+  "prompts": [
+    {"fact_key":"activity.has_vat_taxable_transaction","question_zh":"2023至2026年是否发生过销售货物、服务、无形资产、不动产或者进口货物？","help_zh":"请按实际业务回答；仅凭账套未发现相关科目不能自动视为没有发生。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"如有，请提供相关申报表、合同、发票或海关资料；如无，请由客户明确确认。"},
+    {"fact_key":"activity.has_consumption_tax_goods","question_zh":"2023至2026年是否生产、委托加工或销售应税消费品？","help_zh":"请按实际业务回答，不要仅凭科目余额判断。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"如有，请提供申报表、生产或销售台账。"},
+    {"fact_key":"entity.has_enterprise_income_tax_scope","question_zh":"企业在2023至2026年是否属于企业所得税纳税范围？","help_zh":"请依据企业实际登记和经营情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供申报表、财务报表或登记资料。"},
+    {"fact_key":"activity.has_individual_income_tax_duty","question_zh":"2023至2026年是否发生需要代扣代缴个人所得税的收入或支付？","help_zh":"请结合工资、劳务、分红等实际支付回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供申报表、工资或付款记录。"},
+    {"fact_key":"tax.has_vat_or_consumption_tax_payable","question_zh":"2023至2026年是否存在应缴增值税或消费税？","help_zh":"请按申报和实际业务确认。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供相关申报表和缴款记录。"},
+    {"fact_key":"assets.has_owned_taxable_house","question_zh":"是否拥有应纳房产税的房屋？","help_zh":"请结合房屋登记和实际使用情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供房产登记和资产台账。"},
+    {"fact_key":"activity.has_stamp_taxable_instrument_or_securities_transaction","question_zh":"是否签订应税合同、取得应税凭证或发生证券交易？","help_zh":"请按实际合同和交易回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供合同、凭证或交易记录。"},
+    {"fact_key":"assets.uses_urban_taxable_land","question_zh":"是否在城市、县城等范围内使用应税土地？","help_zh":"请结合土地权属和使用情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供土地权属和资产台账。"},
+    {"fact_key":"activity.has_real_estate_transfer","question_zh":"是否发生房地产转让？","help_zh":"请按合同和收付款事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供转让合同、付款和申报资料。"},
+    {"fact_key":"activity.acquired_taxable_vehicle","question_zh":"是否购置应税车辆？","help_zh":"请按车辆购置事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供车辆登记、发票和付款资料。"},
+    {"fact_key":"assets.owns_or_manages_taxable_vehicle_or_vessel","question_zh":"是否拥有或管理应税车辆、船舶？","help_zh":"请按登记和实际管理情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供车辆船舶登记和台账。"},
+    {"fact_key":"activity.occupies_cultivated_land_for_construction","question_zh":"是否占用耕地进行建设？","help_zh":"请按审批和实际建设情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供用地审批和土地资料。"},
+    {"fact_key":"activity.acquired_land_or_building_rights","question_zh":"是否取得土地、房屋权属？","help_zh":"请按合同和权属变更事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供权属、合同和付款资料。"},
+    {"fact_key":"activity.extracts_or_sells_taxable_resources","question_zh":"是否开采或销售应税自然资源？","help_zh":"请按许可、生产和销售事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供资源许可、生产和销售台账。"},
+    {"fact_key":"activity.directly_discharges_taxable_pollutants","question_zh":"是否直接向环境排放应税污染物？","help_zh":"请按排放监测和环保资料回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供监测记录和环保申报资料。"},
+    {"fact_key":"activity.purchases_tobacco_leaves","question_zh":"是否收购烟叶？","help_zh":"请按实际收购业务回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供收购和付款记录。"},
+    {"fact_key":"activity.has_foreign_vessel_entering_china_port","question_zh":"是否有外国籍船舶进入中国港口？","help_zh":"请按港口进出记录回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供港口记录和船舶证书。"},
+    {"fact_key":"activity.imports_or_exports_dutiable_goods","question_zh":"是否进出口应税货物？","help_zh":"请按报关和合同事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供报关单、合同和付款记录。"},
+    {"fact_key":"policy.house_property_tax_local_rule","question_zh":"请提供房产税适用的地方政策参数。","help_zh":"请提供当地关于适用范围、计税标准或税率的官方文件。","answer_type":"text","choices":[],"evidence_help_zh":"请提供政策文件及其有效期间。"},
+    {"fact_key":"policy.urban_land_use_tax_local_rule","question_zh":"请提供城镇土地使用税适用的地方政策参数。","help_zh":"请提供当地关于适用地区和计税标准的官方文件。","answer_type":"text","choices":[],"evidence_help_zh":"请提供地方政府或税务机关发布的有效政策。"},
+    {"fact_key":"policy.vehicle_vessel_tax_local_rule","question_zh":"请提供车船税适用的地方政策参数。","help_zh":"请提供当地对车辆或船舶税额标准的官方文件。","answer_type":"text","choices":[],"evidence_help_zh":"请提供政策文件及其有效期间。"},
+    {"fact_key":"policy.cultivated_land_occupation_tax_local_rule","question_zh":"请提供耕地占用税适用的地方政策参数。","help_zh":"请提供当地对占用耕地的征收标准或减免规定。","answer_type":"text","choices":[],"evidence_help_zh":"请提供有效期间内的地方政策文件。"},
+    {"fact_key":"policy.deed_tax_local_rule","question_zh":"请提供契税适用的地方政策参数。","help_zh":"请提供当地设定的契税适用条件和税率文件。","answer_type":"text","choices":[],"evidence_help_zh":"请提供政策发布机关和文件有效期。"},
+    {"fact_key":"policy.resource_tax_local_rule","question_zh":"请提供资源税适用的地方政策参数。","help_zh":"请提供税目、征税对象或地方政策规定。","answer_type":"text","choices":[],"evidence_help_zh":"请提供有效期间内的官方文件。"},
+    {"fact_key":"policy.environmental_protection_tax_local_rule","question_zh":"请提供环境保护税适用的地方政策参数。","help_zh":"请提供当地对应税污染物和应纳税额的政策依据。","answer_type":"text","choices":[],"evidence_help_zh":"请提供地方政策或税务机关文件。"},
+    {"fact_key":"policy.local_education_surcharge_rule","question_zh":"请提供地方教育费附加适用的政策参数。","help_zh":"请提供当地对费率或减免条件的规定。","answer_type":"text","choices":[],"evidence_help_zh":"请提供当地税务机关或政策发布文件。"}
+  ]
+}

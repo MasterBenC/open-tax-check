@@ -16,12 +16,14 @@ from open_tax_check.tax_models import (
     PackMaturity,
     RuleSource,
     TaxCheckRequest,
+    TaxFact,
     TaxPack,
     TaxStatus,
 )
 from open_tax_check.tax_registry import TAX_DEFINITIONS
 from open_tax_check.tax_workflow import (
     ConfirmationError,
+    _confirmation_value_is_valid,
     apply_confirmations,
     start_tax_health_check,
 )
@@ -45,15 +47,25 @@ def tax_pack(
         tax_id=tax_id,
         jurisdiction="CN",
         effective_period=PERIOD,
-        maturity=PackMaturity.SCREENING,
-        requirements=(FactRequirement(fact_key, answer_type, ("record",), 90, True, True),),
+        maturity=PackMaturity.CALCULATION,
+        requirements=(
+            FactRequirement(fact_key, answer_type, ("record",), 90, True, True),
+            FactRequirement("activity.screening_applies", "boolean", (), 1, False, False),
+        ),
         local_parameter_keys=(),
         evaluator_id=evaluator_id,
         sources=(SOURCE,),
+        rule_version="2026.1",
+        fact_catalog_version="zh-CN.v1",
+        applicability_fact_keys=("activity.screening_applies",),
     )
 
 
 class TaxWorkflowTests(unittest.TestCase):
+    def test_choice_confirmation_requires_declared_machine_value(self) -> None:
+        self.assertTrue(_confirmation_value_is_valid("choice", "yes", ("yes", "no")))
+        self.assertFalse(_confirmation_value_is_valid("choice", "maybe", ("yes", "no")))
+
     def setUp(self) -> None:
         self.packs = (
             tax_pack("vat", "entity.vat_registration", "vat.screening"),
@@ -62,6 +74,7 @@ class TaxWorkflowTests(unittest.TestCase):
         self.request = TaxCheckRequest(
             PERIOD,
             "CN",
+            facts=(TaxFact("activity.screening_applies", True, FactState.OBSERVED, ("source-001",)),),
             input_hashes=(SOURCE_HASH,),
         )
 
@@ -86,6 +99,7 @@ class TaxWorkflowTests(unittest.TestCase):
 
     def test_confirmation_reruns_only_affected_tax_and_audits_digest(self) -> None:
         calls = {"vat": 0, "eit": 0}
+        prompts = {}
 
         def vat_evaluator(context: object) -> EvaluationOutcome:
             calls["vat"] += 1
@@ -98,6 +112,7 @@ class TaxWorkflowTests(unittest.TestCase):
         initial = start_tax_health_check(
             self.request, packs=self.packs,
             evaluators={"vat.screening": vat_evaluator, "eit.screening": eit_evaluator},
+            prompts=prompts,
             occurred_at=OCCURRED_AT,
         )
         vat_question = next(question for question in initial.questions if question.fact_key == "entity.vat_registration")
@@ -110,11 +125,13 @@ class TaxWorkflowTests(unittest.TestCase):
         updated = apply_confirmations(
             initial, (confirmation,), packs=self.packs,
             evaluators={"vat.screening": vat_evaluator, "eit.screening": eit_evaluator},
+            prompts=prompts,
         )
 
         self.assertEqual(calls, {"vat": 1, "eit": 0})
         self.assertEqual(next(result for result in updated.results if result.tax_id == "enterprise_income_tax"), old_eit_result)
-        self.assertEqual(updated.request.facts[0].state, FactState.CONFIRMED)
+        confirmed_fact = next(fact for fact in updated.request.facts if fact.key == vat_question.fact_key)
+        self.assertEqual(confirmed_fact.state, FactState.CONFIRMED)
         self.assertNotIn(vat_question.question_id, {question.question_id for question in updated.questions})
         self.assertEqual(updated.revision, 2)
         digest = hashlib.sha256(b'"general"').hexdigest()
@@ -172,7 +189,7 @@ class TaxWorkflowTests(unittest.TestCase):
                     answer_type=answer_type,
                 )
                 initial = start_tax_health_check(
-                    TaxCheckRequest(PERIOD, "CN"),
+                    self.request,
                     packs=(pack,),
                     evaluators={},
                     occurred_at=OCCURRED_AT,
@@ -222,7 +239,7 @@ class TaxWorkflowTests(unittest.TestCase):
                     answer_type=answer_type,
                 )
                 initial = start_tax_health_check(
-                    TaxCheckRequest(PERIOD, "CN"),
+                    self.request,
                     packs=(pack,),
                     evaluators={},
                     occurred_at=OCCURRED_AT,
@@ -340,7 +357,10 @@ class TaxWorkflowTests(unittest.TestCase):
             )
 
         self.assertEqual(calls, {"vat": 0, "eit": 0})
-        self.assertEqual(initial.request.facts, ())
+        self.assertEqual(
+            initial.request.facts,
+            (TaxFact("activity.screening_applies", True, FactState.OBSERVED, ("source-001",)),),
+        )
         self.assertEqual(initial.revision, 1)
         self.assertEqual(len(initial.audit_events), 1)
 
@@ -506,7 +526,8 @@ class TaxWorkflowTests(unittest.TestCase):
 
         updated = apply_confirmations(confirmed, (conflict,), packs=self.packs, evaluators={})
 
-        self.assertEqual(updated.request.facts[0].value, "general")
+        confirmed_fact = next(fact for fact in updated.request.facts if fact.key == question.fact_key)
+        self.assertEqual(confirmed_fact.value, "general")
         vat_result = next(result for result in updated.results if result.tax_id == "vat")
         self.assertEqual(vat_result.status, TaxStatus.BLOCKED)
         self.assertEqual(vat_result.diagnostics, ("confirmation_conflict",))
