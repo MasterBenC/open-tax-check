@@ -80,6 +80,16 @@ def _validate_timestamp(value: str) -> None:
         raise ValueError("invalid_timestamp")
 
 
+class _EvaluationOutcomeValidationError(ValueError):
+    """Identifies stable collection-validation failures for evaluator dispatch."""
+
+
+def _canonical_evaluation_collection(value: object, code: str) -> tuple[object, ...]:
+    if not isinstance(value, tuple | list):
+        raise _EvaluationOutcomeValidationError(code)
+    return tuple(value)
+
+
 @dataclass(frozen=True, slots=True)
 class TaxDefinition:
     tax_id: str
@@ -210,8 +220,16 @@ class EvaluationOutcome:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", _coerce_tax_status(self.status))
-        object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
-        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        object.__setattr__(
+            self,
+            "diagnostics",
+            _canonical_evaluation_collection(self.diagnostics, "invalid_evaluation_diagnostics"),
+        )
+        object.__setattr__(
+            self,
+            "evidence_refs",
+            _canonical_evaluation_collection(self.evidence_refs, "invalid_evaluation_evidence_refs"),
+        )
 
 
 @dataclass(frozen=True, slots=True)

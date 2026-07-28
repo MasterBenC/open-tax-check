@@ -8,6 +8,7 @@ from open_tax_check.tax_models import (
     AuditEvent,
     Confirmation,
     DateRange,
+    EvaluationOutcome,
     FactRequirement,
     FactState,
     PackMaturity,
@@ -87,6 +88,28 @@ class TaxModelTests(unittest.TestCase):
     def test_not_applicable_status_string_requires_evidence(self):
         with self.assertRaisesRegex(ValueError, "not_applicable_without_evidence"):
             TaxResult(tax_id="vat", status="not_applicable")
+
+    def test_evaluation_outcome_canonicalizes_list_collections(self):
+        outcome = EvaluationOutcome(
+            TaxStatus.CALCULATED,
+            diagnostics=["demo_check_complete"],
+            evidence_refs=["source-001"],
+        )
+
+        self.assertEqual(outcome.diagnostics, ("demo_check_complete",))
+        self.assertEqual(outcome.evidence_refs, ("source-001",))
+
+    def test_evaluation_outcome_rejects_scalar_and_non_sequence_diagnostics(self):
+        for invalid_value in ("customersecret", b"customersecret", 1):
+            with self.subTest(value_type=type(invalid_value).__name__):
+                with self.assertRaisesRegex(ValueError, "^invalid_evaluation_diagnostics$"):
+                    EvaluationOutcome(TaxStatus.CALCULATED, diagnostics=invalid_value)
+
+    def test_evaluation_outcome_rejects_scalar_and_non_sequence_evidence_references(self):
+        for invalid_value in ("customerref", b"customerref", 1):
+            with self.subTest(value_type=type(invalid_value).__name__):
+                with self.assertRaisesRegex(ValueError, "^invalid_evaluation_evidence_refs$"):
+                    EvaluationOutcome(TaxStatus.CALCULATED, evidence_refs=invalid_value)
 
     def test_tax_fact_rejects_invalid_deserialized_state(self):
         with self.assertRaisesRegex(ValueError, "invalid_fact_state"):

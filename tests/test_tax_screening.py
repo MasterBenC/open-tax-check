@@ -2,8 +2,10 @@
 
 from datetime import date
 import hashlib
+import json
 import unittest
 
+from open_tax_check.schemas import to_dict
 from open_tax_check.tax_models import (
     DateRange,
     EvaluationOutcome,
@@ -258,6 +260,44 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.status, TaxStatus.BLOCKED)
         self.assertEqual(result.diagnostics, ("invalid_evaluator_outcome",))
         self.assertNotIn("customer/file", repr(result))
+
+    def test_scalar_diagnostic_validation_error_becomes_safe_invalid_outcome(self) -> None:
+        def scalar_diagnostic(context: object) -> EvaluationOutcome:
+            return EvaluationOutcome(
+                TaxStatus.CALCULATED,
+                diagnostics="customersecret",
+                evidence_refs=("source-001",),
+            )
+
+        result = screen_tax_items(
+            request(TaxFact("entity.registration", "general", FactState.OBSERVED, ("file-001",))),
+            (pack(),),
+            {"vat.screening": scalar_diagnostic},
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("invalid_evaluator_outcome",))
+        self.assertNotIn("customersecret", json.dumps(to_dict(result)))
+
+    def test_scalar_evidence_validation_error_becomes_safe_invalid_outcome(self) -> None:
+        def scalar_evidence(context: object) -> EvaluationOutcome:
+            return EvaluationOutcome(
+                TaxStatus.CALCULATED,
+                diagnostics=("demo_check_complete",),
+                evidence_refs="customerref",
+            )
+
+        result = screen_tax_items(
+            request(TaxFact("entity.registration", "general", FactState.OBSERVED, ("file-001",))),
+            (pack(),),
+            {"vat.screening": scalar_evidence},
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("invalid_evaluator_outcome",))
+        self.assertNotIn("customerref", json.dumps(to_dict(result)))
 
 
 class QuestionQueueTests(unittest.TestCase):

@@ -20,6 +20,7 @@ from .tax_models import (
     TaxPack,
     TaxResult,
     TaxStatus,
+    _EvaluationOutcomeValidationError,
 )
 from .tax_registry import TAX_DEFINITIONS, select_pack_segments
 
@@ -156,6 +157,8 @@ def _screen_one_tax(
     context = TaxEvaluationContext(tax_id, request, selected_packs, facts)
     try:
         outcome = evaluator(context)
+    except _EvaluationOutcomeValidationError:
+        return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
     except Exception:
         return _blocked_result(tax_id, "rule_evaluator_failed", pack_ids, sources)
     if not _is_safe_evaluator_outcome(outcome):
