@@ -3,8 +3,10 @@ import io
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -39,6 +41,27 @@ class ReleaseValidationTests(unittest.TestCase):
                 with contextlib.redirect_stdout(output):
                     result = validate_release.main()
         return result, output.getvalue()
+
+    def write_distribution_archives(
+        self,
+        root,
+        *,
+        wheel_members=(),
+        sdist_members=(),
+    ):
+        distribution = root / "dist"
+        distribution.mkdir()
+        wheel = distribution / "open_tax_check-0.1.0-py3-none-any.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            for member in wheel_members:
+                archive.writestr(member, b"{}\n")
+        sdist = distribution / "open_tax_check-0.1.0.tar.gz"
+        with tarfile.open(sdist, "w:gz") as archive:
+            for member in sdist_members:
+                payload = b"{}\n"
+                metadata = tarfile.TarInfo(member)
+                metadata.size = len(payload)
+                archive.addfile(metadata, io.BytesIO(payload))
 
     def write_api_key_assignment(
         self, path, variable_name, value, separator="=", quote="", spacing=""
@@ -171,13 +194,16 @@ class ReleaseValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = self.create_repository(directory)
             (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
-            distribution = root / "dist"
-            distribution.mkdir()
-            (distribution / "open_tax_check-0.1.0-py3-none-any.whl").write_bytes(
-                b"safe wheel"
-            )
-            (distribution / "open_tax_check-0.1.0.tar.gz").write_bytes(
-                b"safe sdist"
+            self.write_distribution_archives(
+                root,
+                wheel_members=(
+                    "open_tax_check/tax_packs/"
+                    "vat-cn-2023-2026.prototype.json",
+                ),
+                sdist_members=(
+                    "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+                    "vat-cn-2023-2026.prototype.json",
+                ),
             )
 
             result, message = self.run_validator(
@@ -187,6 +213,60 @@ class ReleaseValidationTests(unittest.TestCase):
 
         self.assertEqual(result, 0, message)
         self.assertIn("release validation passed", message.lower())
+
+    def test_require_distributions_rejects_wheel_missing_tax_pack_manifest(self):
+        required_wheel_member = (
+            "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json"
+        )
+        required_sdist_member = (
+            "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+            "vat-cn-2023-2026.prototype.json"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+            self.write_distribution_archives(
+                root,
+                sdist_members=(required_sdist_member,),
+            )
+
+            result, message = self.run_validator(
+                root,
+                "--require-distributions",
+            )
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            f"missing required package data: {required_wheel_member}\n",
+        )
+
+    def test_require_distributions_rejects_sdist_missing_tax_pack_manifest(self):
+        required_wheel_member = (
+            "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json"
+        )
+        required_sdist_member = (
+            "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+            "vat-cn-2023-2026.prototype.json"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+            self.write_distribution_archives(
+                root,
+                wheel_members=(required_wheel_member,),
+            )
+
+            result, message = self.run_validator(
+                root,
+                "--require-distributions",
+            )
+
+        self.assertEqual(result, 1, message)
+        self.assertEqual(
+            message,
+            f"missing required package data: {required_sdist_member}\n",
+        )
 
     def test_release_validator_reports_actual_byte_sizes(self):
         with tempfile.TemporaryDirectory() as directory:

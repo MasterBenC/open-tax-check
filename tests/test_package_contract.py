@@ -1,5 +1,6 @@
 import json
 import os
+from importlib.resources import files
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,16 @@ class PackageContractTests(unittest.TestCase):
         import open_tax_check
 
         self.assertEqual(open_tax_check.__version__, "0.1.0")
+
+    def test_packaged_tax_pack_prototype_is_available_as_a_resource(self):
+        manifest = files("open_tax_check.tax_packs").joinpath(
+            "vat-cn-2023-2026.prototype.json"
+        )
+
+        self.assertTrue(manifest.is_file())
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(payload["pack_id"], "vat-cn-2023-2026-prototype")
+        self.assertEqual(payload["maturity"], "prototype")
 
     def test_module_help_is_available(self):
         proc = subprocess.run(

@@ -19,6 +19,22 @@ def current_release_scope(text):
     return text.split("## 当前版本范围", 1)[1].split("## 工作方式", 1)[0]
 
 
+def experimental_report_scope(text):
+    _, separator, remainder = text.partition("### 实验性的客户内部自查 API")
+    if not separator:
+        return ""
+    return remainder.split(
+        "## 隐私与云端授权", 1
+    )[0]
+
+
+def experimental_disclaimer_scope(text):
+    _, separator, remainder = text.partition(
+        "## 实验性《税务健康检查报告》的内部自用边界"
+    )
+    return remainder if separator else ""
+
+
 def assert_roadmap_milestones(test_case, text):
     lines = [line for line in text.splitlines() if line.strip()]
     test_case.assertEqual(lines[0], "# 路线图")
@@ -159,6 +175,54 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("normalized_trial_balance.jsonl", text)
         self.assertIn("reconciliation.json", text)
         self.assertIn("勾稽通过不表示不存在税务风险", text)
+
+    def test_readme_documents_experimental_tax_health_report_api(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        report_scope = experimental_report_scope(text)
+
+        self.assertIn("《税务健康检查报告》", report_scope)
+        self.assertIn(
+            "from open_tax_check.tax_health import (\n"
+            "    continue_tax_health_check,\n"
+            "    run_tax_health_check,\n"
+            ")",
+            report_scope,
+        )
+        self.assertIn(
+            "from open_tax_check.tax_reporting import render_tax_health_report",
+            report_scope,
+        )
+        self.assertIn(
+            "没有完整的 2023–2026 年税务规则覆盖",
+            report_scope,
+        )
+        self.assertIn("宿主 Agent", report_scope)
+        self.assertIn("结构化确认", report_scope)
+        self.assertIn("Python 核心不依赖任何模型", report_scope)
+        self.assertIn("未解决项目", report_scope)
+        self.assertIn("渐进式报告", report_scope)
+        self.assertIn("注册表和框架验证覆盖", report_scope)
+
+    def test_experimental_report_has_self_use_boundary_without_approval_gate(self):
+        readme = experimental_report_scope(
+            (ROOT / "README.md").read_text(encoding="utf-8")
+        )
+        disclaimer = experimental_disclaimer_scope(
+            (ROOT / "DISCLAIMER.md").read_text(encoding="utf-8")
+        )
+        boundary = (
+            "该报告仅供客户内部自查，不属于涉税鉴证、"
+            "专业税务意见或纳税申报结论。"
+        )
+
+        for document in (readme, disclaimer):
+            with self.subTest(document=document[:20]):
+                self.assertIn(boundary, document)
+                self.assertIn(
+                    "不以税务专业人员复核、签字或盖章作为生成条件",
+                    document,
+                )
+                self.assertNotIn("必须由税务专业人员批准", document)
 
     def test_phase_2b_public_docs_are_chinese_first_and_keep_review_boundary(self):
         roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")

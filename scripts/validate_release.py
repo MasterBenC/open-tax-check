@@ -6,14 +6,23 @@ import os
 import re
 import stat
 import subprocess
+import tarfile
 from pathlib import Path
 import sys
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_PUBLIC_LIMIT_BYTES = 250 * 1024
 PUBLIC_RELEASE_LIMIT_BYTES = 5 * 1024 * 1024
 DISTRIBUTION_FILE_LIMIT_BYTES = 1 * 1024 * 1024
+REQUIRED_WHEEL_MEMBER = (
+    "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json"
+)
+REQUIRED_SDIST_MEMBER = (
+    "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+    "vat-cn-2023-2026.prototype.json"
+)
 REQUIRED = (
     "README.md",
     "LICENSE",
@@ -242,6 +251,17 @@ def distribution_artifacts(root: Path) -> tuple[Path, ...]:
     )
 
 
+def distribution_member_names(artifact: Path) -> set[str] | None:
+    try:
+        if artifact.name.casefold().endswith(".whl"):
+            with zipfile.ZipFile(artifact) as archive:
+                return set(archive.namelist())
+        with tarfile.open(artifact, mode="r:gz") as archive:
+            return set(archive.getnames())
+    except (OSError, tarfile.TarError, zipfile.BadZipFile):
+        return None
+
+
 def _indent_width(prefix: str) -> int:
     return len(prefix.expandtabs(8))
 
@@ -356,6 +376,17 @@ def main() -> int:
                 f"sdists={len(sdists)})"
             )
             return 1
+        for artifact, required_member in (
+            (wheels[0], REQUIRED_WHEEL_MEMBER),
+            (sdists[0], REQUIRED_SDIST_MEMBER),
+        ):
+            member_names = distribution_member_names(artifact)
+            if member_names is None:
+                print(f"unable to inspect distribution artifact: {artifact.name}")
+                return 1
+            if required_member not in member_names:
+                print(f"missing required package data: {required_member}")
+                return 1
     measured_artifacts = []
     for artifact in artifacts:
         try:
