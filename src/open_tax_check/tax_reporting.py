@@ -26,11 +26,19 @@ _FIXED_DISCLAIMER = (
 
 
 def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
-    """Return the stable, JSON-friendly snapshot contract without model metadata."""
-    payload = to_dict(snapshot)
-    if not isinstance(payload, dict):  # pragma: no cover - TaxCheckSnapshot is a dataclass.
-        raise TypeError("invalid_tax_snapshot")
-    return payload
+    """Return an allowlisted, JSON-friendly snapshot without customer facts."""
+    return {
+        "schema_version": snapshot.schema_version,
+        "revision": snapshot.revision,
+        "request": {
+            "period": to_dict(snapshot.request.period),
+            "jurisdiction": snapshot.request.jurisdiction,
+            "input_hashes": list(snapshot.request.input_hashes),
+        },
+        "results": to_dict(snapshot.results),
+        "questions": to_dict(snapshot.questions),
+        "audit_events": to_dict(snapshot.audit_events),
+    }
 
 
 def _sources(results: Iterable[TaxResult]) -> tuple[RuleSource, ...]:

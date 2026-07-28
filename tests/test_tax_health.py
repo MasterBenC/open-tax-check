@@ -6,13 +6,18 @@ import unittest
 
 from open_tax_check.tax_health import continue_tax_health_check, run_tax_health_check
 from open_tax_check.tax_models import (
+    AuditEvent,
     Confirmation,
     DateRange,
     EvaluationOutcome,
     FactRequirement,
+    FactState,
     PackMaturity,
+    Question,
     RuleSource,
     TaxCheckRequest,
+    TaxCheckSnapshot,
+    TaxFact,
     TaxPack,
     TaxStatus,
 )
@@ -46,6 +51,50 @@ def payload_keys(value: object) -> set[str]:
 
 
 class TaxHealthFacadeTests(unittest.TestCase):
+    def test_payload_excludes_confirmation_and_question_history_but_preserves_active_safety_metadata(self) -> None:
+        active_question = Question(
+            "active-question", "entity.active_fact", ("vat",), ("missing_fact",),
+            "choice", ("record",), 90, True,
+        )
+        historical_question = Question(
+            "history-question", "entity.historical_fact", ("vat",), ("missing_fact",),
+            "choice", ("record",), 80, True,
+        )
+        snapshot = TaxCheckSnapshot(
+            request=TaxCheckRequest(
+                PERIOD,
+                "CN",
+                facts=(TaxFact(
+                    "entity.confirmed_fact", "hostile-confirmation-value", FactState.CONFIRMED,
+                    confirmed_by="hostile-confirmed-by",
+                    confirmed_at="2026-07-28T10:04:03+08:00",
+                ),),
+                input_hashes=("sha256:input-a",),
+            ),
+            results=(),
+            questions=(active_question,),
+            audit_events=(AuditEvent(
+                "fact_confirmed", "2026-07-28T10:05:00+08:00",
+                confirmation_digest="safe-confirmation-digest",
+            ),),
+            revision=2,
+            question_history=(historical_question,),
+        )
+
+        payload = tax_snapshot_payload(snapshot)
+        serialized = json.dumps(payload, ensure_ascii=False)
+
+        self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
+        self.assertEqual(set(payload["request"]), {"period", "jurisdiction", "input_hashes"})
+        self.assertIn("active-question", serialized)
+        self.assertIn("safe-confirmation-digest", serialized)
+        for prohibited in (
+            "facts", "question_history", "hostile-confirmation-value",
+            "hostile-confirmed-by", "2026-07-28T10:04:03+08:00", "history-question",
+        ):
+            self.assertNotIn(prohibited, payload_keys(payload))
+            self.assertNotIn(prohibited, serialized)
+
     def test_default_facade_returns_all_taxes_with_prototype_excluded(self) -> None:
         snapshot = run_tax_health_check(
             TaxCheckRequest(PERIOD, "CN"), occurred_at=OCCURRED_AT
