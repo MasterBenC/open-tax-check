@@ -93,6 +93,8 @@ def _parse_requirement(value: object) -> FactRequirement:
             critical=value["critical"],
         )
     except ValueError as error:
+        if str(error) == "unsupported_answer_type":
+            raise TaxPackError("unsupported_answer_type") from error
         raise TaxPackError("invalid_requirement") from error
 
 

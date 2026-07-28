@@ -157,6 +157,44 @@ class TaxModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate_fact_key"):
             TaxCheckRequest(DateRange(date(2026, 1, 1), date(2026, 1, 31)), "CN", [fact, fact])
 
+    def test_request_accepts_only_lowercase_sha256_input_hashes(self):
+        valid_hashes = ("0" * 64, "abcdef0123456789" * 4)
+
+        request = TaxCheckRequest(
+            DateRange(date(2026, 1, 1), date(2026, 1, 31)),
+            "CN",
+            input_hashes=list(valid_hashes),
+        )
+
+        self.assertEqual(request.input_hashes, valid_hashes)
+        self.assertEqual(to_dict(request)["input_hashes"], list(valid_hashes))
+        for unsafe_value in (
+            "A" * 64,
+            "f" * 63,
+            "f" * 65,
+            "sha256:" + "f" * 64,
+            r"C:\customer\source.xlsx",
+            "/customer/source.xlsx",
+            "customer source contents",
+        ):
+            with self.subTest(unsafe_value=unsafe_value):
+                with self.assertRaisesRegex(ValueError, "^invalid_input_hash$"):
+                    TaxCheckRequest(
+                        DateRange(date(2026, 1, 1), date(2026, 1, 31)),
+                        "CN",
+                        input_hashes=(unsafe_value,),
+                    )
+
+    def test_request_accepts_only_supported_china_jurisdictions(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 1, 31))
+
+        self.assertEqual(TaxCheckRequest(period, "CN").jurisdiction, "CN")
+        self.assertEqual(TaxCheckRequest(period, "CN-11").jurisdiction, "CN-11")
+        for unsafe_value in ("", "cn", "CN-1", "CN-111", "CN-AA", "US", "CN/11"):
+            with self.subTest(unsafe_value=unsafe_value):
+                with self.assertRaisesRegex(ValueError, "^invalid_jurisdiction$"):
+                    TaxCheckRequest(period, unsafe_value)
+
     def test_snapshot_rejects_duplicate_result_tax_ids(self):
         request = TaxCheckRequest(DateRange(date(2026, 1, 1), date(2026, 1, 31)), "CN")
         result = TaxResult("vat", TaxStatus.CALCULATED)
@@ -174,6 +212,87 @@ class TaxModelTests(unittest.TestCase):
         self.assertEqual(confirmation.evidence_refs, ("source-001",))
         self.assertEqual(event.tax_ids, ("vat",))
         self.assertEqual(event.fact_keys, ("entity.type",))
+
+    def test_confirmation_accepts_only_safe_sequence_evidence_references(self):
+        confirmed = Confirmation(
+            "q-001",
+            "entity.type",
+            "company",
+            "customer",
+            "2026-07-28T10:00:00+08:00",
+            ["source:vat_2026.01-abc"],
+        )
+
+        self.assertEqual(confirmed.evidence_refs, ("source:vat_2026.01-abc",))
+        for unsafe_collection in (
+            r"C:\customer\source.xlsx",
+            b"source-001",
+            1,
+            {"source-001"},
+        ):
+            with self.subTest(collection_type=type(unsafe_collection).__name__):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "^invalid_confirmation_evidence_refs$",
+                ):
+                    Confirmation(
+                        "q-001",
+                        "entity.type",
+                        "company",
+                        "customer",
+                        "2026-07-28T10:00:00+08:00",
+                        unsafe_collection,
+                    )
+
+        for unsafe_reference in (
+            "",
+            "_source",
+            "/customer/source.xlsx",
+            r"C:\customer\source.xlsx",
+            "customer source",
+            "a" * 129,
+            1,
+        ):
+            with self.subTest(reference=unsafe_reference):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "^invalid_confirmation_evidence_ref$",
+                ):
+                    Confirmation(
+                        "q-001",
+                        "entity.type",
+                        "company",
+                        "customer",
+                        "2026-07-28T10:00:00+08:00",
+                        (unsafe_reference,),
+                    )
+
+    def test_fact_requirement_accepts_only_supported_answer_types(self):
+        supported = ("text", "choice", "integer", "boolean", "date", "decimal")
+
+        for answer_type in supported:
+            with self.subTest(answer_type=answer_type):
+                requirement = FactRequirement(
+                    "entity.type",
+                    answer_type,
+                    (),
+                    10,
+                    True,
+                    True,
+                )
+                self.assertEqual(requirement.answer_type, answer_type)
+
+        for answer_type in ("", "currency", "Text", None, ["text"]):
+            with self.subTest(answer_type=answer_type):
+                with self.assertRaisesRegex(ValueError, "^unsupported_answer_type$"):
+                    FactRequirement(
+                        "entity.type",
+                        answer_type,
+                        (),
+                        10,
+                        True,
+                        True,
+                    )
 
     def test_snapshot_canonicalizes_question_history(self):
         request = TaxCheckRequest(DateRange(date(2026, 1, 1), date(2026, 1, 31)), "CN")

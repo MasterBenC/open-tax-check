@@ -3,9 +3,18 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
+import re
 
 
 TAX_SCHEMA_VERSION = "1.0.0"
+_INPUT_HASH = re.compile(r"[0-9a-f]{64}")
+_JURISDICTION = re.compile(r"CN(?:-\d{2})?")
+_CONFIRMATION_EVIDENCE_REFERENCE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
+)
+_SUPPORTED_ANSWER_TYPES = frozenset(
+    {"text", "choice", "integer", "boolean", "date", "decimal"}
+)
 
 
 class FactState(StrEnum):
@@ -118,6 +127,11 @@ class FactRequirement:
 
     def __post_init__(self) -> None:
         _require_identifier(self.fact_key)
+        if (
+            not isinstance(self.answer_type, str)
+            or self.answer_type not in _SUPPORTED_ANSWER_TYPES
+        ):
+            raise ValueError("unsupported_answer_type")
         _validate_priority(self.priority)
         object.__setattr__(self, "evidence_types", tuple(self.evidence_types))
 
@@ -292,7 +306,16 @@ class Confirmation:
         if not isinstance(self.confirmed_by, str) or not self.confirmed_by.strip():
             raise ValueError("invalid_confirmation")
         _validate_timestamp(self.confirmed_at)
-        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        if not isinstance(self.evidence_refs, tuple | list):
+            raise ValueError("invalid_confirmation_evidence_refs")
+        evidence_refs = tuple(self.evidence_refs)
+        if any(
+            not isinstance(reference, str)
+            or _CONFIRMATION_EVIDENCE_REFERENCE.fullmatch(reference) is None
+            for reference in evidence_refs
+        ):
+            raise ValueError("invalid_confirmation_evidence_ref")
+        object.__setattr__(self, "evidence_refs", evidence_refs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,9 +343,19 @@ class TaxCheckRequest:
     input_hashes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _require_identifier(self.jurisdiction)
+        if (
+            not isinstance(self.jurisdiction, str)
+            or _JURISDICTION.fullmatch(self.jurisdiction) is None
+        ):
+            raise ValueError("invalid_jurisdiction")
         object.__setattr__(self, "facts", tuple(self.facts))
         object.__setattr__(self, "input_hashes", tuple(self.input_hashes))
+        if any(
+            not isinstance(input_hash, str)
+            or _INPUT_HASH.fullmatch(input_hash) is None
+            for input_hash in self.input_hashes
+        ):
+            raise ValueError("invalid_input_hash")
         if len({fact.key for fact in self.facts}) != len(self.facts):
             raise ValueError("duplicate_fact_key")
 

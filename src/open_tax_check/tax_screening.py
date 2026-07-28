@@ -201,12 +201,15 @@ def build_question_queue(results: tuple[TaxResult, ...]) -> tuple[Question, ...]
     for fact_key, entries in grouped.items():
         tax_ids = tuple(sorted({tax_id for tax_id, _ in entries}))
         gaps = tuple(gap for _, gap in entries)
+        answer_types = {gap.answer_type for gap in gaps}
+        if len(answer_types) != 1:
+            raise ValueError("incompatible_question_answer_types")
         questions.append(Question(
             question_id="question-" + hashlib.sha256(fact_key.encode("utf-8")).hexdigest()[:16],
             fact_key=fact_key,
             tax_ids=tax_ids,
             reason_codes=tuple(sorted({gap.reason_code for gap in gaps})),
-            answer_type=min(gap.answer_type for gap in gaps),
+            answer_type=next(iter(answer_types)),
             evidence_types=tuple(sorted({item for gap in gaps for item in gap.evidence_types})),
             priority=max(gap.priority for gap in gaps),
             blocking=any(gap.blocking for gap in gaps),

@@ -162,6 +162,36 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.evidence_refs, ("source-001",))
         self.assertEqual(result.diagnostics, ("demo_check_complete",))
 
+    def test_invalid_request_jurisdiction_cannot_reach_cn_evaluator(self) -> None:
+        calls = 0
+
+        def cn_evaluator(context: object) -> EvaluationOutcome:
+            nonlocal calls
+            calls += 1
+            return calculated(context)
+
+        with self.assertRaisesRegex(ValueError, "^invalid_jurisdiction$"):
+            invalid_request = TaxCheckRequest(
+                PERIOD,
+                "US",
+                (
+                    TaxFact(
+                        "entity.registration",
+                        "general",
+                        FactState.OBSERVED,
+                        ("file-001",),
+                    ),
+                ),
+            )
+            screen_tax_items(
+                invalid_request,
+                (pack(),),
+                {"vat.screening": cn_evaluator},
+                tax_ids=("vat",),
+            )
+
+        self.assertEqual(calls, 0)
+
     def test_not_applicable_without_evidence_becomes_blocked(self) -> None:
         def unsupported(context: object) -> EvaluationOutcome:
             return EvaluationOutcome(TaxStatus.NOT_APPLICABLE)
@@ -336,6 +366,22 @@ class QuestionQueueTests(unittest.TestCase):
         questions = build_question_queue(results)
 
         self.assertEqual([question.fact_key for question in questions], ["beta", "alpha", "zeta"])
+
+    def test_question_queue_rejects_incompatible_answer_types_for_one_fact(self) -> None:
+        results = (
+            TaxResult("vat", TaxStatus.NEEDS_EVIDENCE, gaps=(
+                FactGap("entity.registration", "missing_fact", "choice", (), 90, True),
+            )),
+            TaxResult("enterprise_income_tax", TaxStatus.NEEDS_EVIDENCE, gaps=(
+                FactGap("entity.registration", "missing_fact", "integer", (), 90, True),
+            )),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "^incompatible_question_answer_types$",
+        ):
+            build_question_queue(results)
 
 
 if __name__ == "__main__":

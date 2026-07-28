@@ -1,5 +1,6 @@
 """Behavioral tests for customer confirmation workflow snapshots."""
 
+from dataclasses import replace
 from datetime import date
 import hashlib
 import json
@@ -29,16 +30,23 @@ from open_tax_check.tax_workflow import (
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
 OCCURRED_AT = "2026-07-28T10:00:00+08:00"
 SOURCE = RuleSource("Official source", "https://example.test/source", date(2026, 1, 1))
+SOURCE_HASH = "a" * 64
 
 
-def tax_pack(tax_id: str, fact_key: str, evaluator_id: str) -> TaxPack:
+def tax_pack(
+    tax_id: str,
+    fact_key: str,
+    evaluator_id: str,
+    *,
+    answer_type: str = "choice",
+) -> TaxPack:
     return TaxPack(
         pack_id=f"{tax_id}-cn-2026",
         tax_id=tax_id,
         jurisdiction="CN",
         effective_period=PERIOD,
         maturity=PackMaturity.SCREENING,
-        requirements=(FactRequirement(fact_key, "choice", ("record",), 90, True, True),),
+        requirements=(FactRequirement(fact_key, answer_type, ("record",), 90, True, True),),
         local_parameter_keys=(),
         evaluator_id=evaluator_id,
         sources=(SOURCE,),
@@ -54,7 +62,7 @@ class TaxWorkflowTests(unittest.TestCase):
         self.request = TaxCheckRequest(
             PERIOD,
             "CN",
-            input_hashes=("sha256:source-a",),
+            input_hashes=(SOURCE_HASH,),
         )
 
     def test_start_creates_registry_ordered_snapshot_with_private_safe_audit(self) -> None:
@@ -72,7 +80,7 @@ class TaxWorkflowTests(unittest.TestCase):
         self.assertEqual(snapshot.audit_events[0].event_type, "check_started")
         self.assertEqual(snapshot.audit_events[0].occurred_at, OCCURRED_AT)
         serialized = json.dumps(to_dict(snapshot), ensure_ascii=False)
-        self.assertIn("sha256:source-a", serialized)
+        self.assertIn(SOURCE_HASH, serialized)
         self.assertNotIn("customer/source/path.xlsx", serialized)
         self.assertNotIn("customer-source-contents", serialized)
 
@@ -145,6 +153,197 @@ class TaxWorkflowTests(unittest.TestCase):
             Confirmation(question.question_id, question.fact_key, "yes", "customer", "2026-07-28T10:05:00")
         self.assertEqual(initial.revision, 1)
 
+    def test_confirmation_values_match_each_supported_question_answer_type(self) -> None:
+        cases = (
+            ("text", "customer explanation"),
+            ("choice", "general"),
+            ("integer", 3),
+            ("boolean", False),
+            ("date", "2026-02-28"),
+            ("decimal", "-1200.50"),
+        )
+
+        for answer_type, value in cases:
+            with self.subTest(answer_type=answer_type):
+                pack = tax_pack(
+                    "vat",
+                    f"entity.{answer_type}",
+                    "vat.screening",
+                    answer_type=answer_type,
+                )
+                initial = start_tax_health_check(
+                    TaxCheckRequest(PERIOD, "CN"),
+                    packs=(pack,),
+                    evaluators={},
+                    occurred_at=OCCURRED_AT,
+                )
+                question = initial.questions[0]
+                confirmation = Confirmation(
+                    question.question_id,
+                    question.fact_key,
+                    value,
+                    "customer",
+                    "2026-07-28T10:05:00+08:00",
+                )
+
+                updated = apply_confirmations(
+                    initial,
+                    (confirmation,),
+                    packs=(pack,),
+                    evaluators={},
+                )
+
+                fact = next(
+                    item
+                    for item in updated.request.facts
+                    if item.key == question.fact_key
+                )
+                self.assertEqual(fact.value, value)
+                self.assertEqual(updated.revision, 2)
+
+    def test_confirmation_rejects_values_that_mismatch_question_answer_type(self) -> None:
+        cases = (
+            ("text", ""),
+            ("choice", 1),
+            ("integer", True),
+            ("boolean", "true"),
+            ("date", "2026-02-30"),
+            ("date", "20260228"),
+            ("decimal", "not-a-decimal"),
+            ("decimal", ""),
+        )
+
+        for answer_type, value in cases:
+            with self.subTest(answer_type=answer_type, value=value):
+                pack = tax_pack(
+                    "vat",
+                    f"entity.{answer_type}",
+                    "vat.screening",
+                    answer_type=answer_type,
+                )
+                initial = start_tax_health_check(
+                    TaxCheckRequest(PERIOD, "CN"),
+                    packs=(pack,),
+                    evaluators={},
+                    occurred_at=OCCURRED_AT,
+                )
+                question = initial.questions[0]
+                confirmation = Confirmation(
+                    question.question_id,
+                    question.fact_key,
+                    value,
+                    "customer",
+                    "2026-07-28T10:05:00+08:00",
+                )
+
+                with self.assertRaisesRegex(
+                    ConfirmationError,
+                    "^invalid_confirmation_value$",
+                ):
+                    apply_confirmations(
+                        initial,
+                        (confirmation,),
+                        packs=(pack,),
+                        evaluators={},
+                    )
+
+                self.assertEqual(initial.revision, 1)
+
+    def test_confirmation_rejects_unknown_question_answer_type(self) -> None:
+        initial = start_tax_health_check(
+            self.request,
+            packs=self.packs,
+            evaluators={},
+            occurred_at=OCCURRED_AT,
+        )
+        original = initial.questions[0]
+        unsupported = replace(original, answer_type="currency")
+        hostile_snapshot = replace(
+            initial,
+            questions=(unsupported,),
+            question_history=(unsupported,),
+        )
+        confirmation = Confirmation(
+            unsupported.question_id,
+            unsupported.fact_key,
+            "12.00",
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+        )
+
+        with self.assertRaisesRegex(
+            ConfirmationError,
+            "^invalid_confirmation_value$",
+        ):
+            apply_confirmations(
+                hostile_snapshot,
+                (confirmation,),
+                packs=self.packs,
+                evaluators={},
+            )
+
+    def test_invalid_confirmation_value_keeps_entire_batch_atomic(self) -> None:
+        calls = {"vat": 0, "eit": 0}
+
+        def vat_evaluator(context: object) -> EvaluationOutcome:
+            calls["vat"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-001",))
+
+        def eit_evaluator(context: object) -> EvaluationOutcome:
+            calls["eit"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-002",))
+
+        evaluators = {
+            "vat.screening": vat_evaluator,
+            "eit.screening": eit_evaluator,
+        }
+        initial = start_tax_health_check(
+            self.request,
+            packs=self.packs,
+            evaluators=evaluators,
+            occurred_at=OCCURRED_AT,
+        )
+        vat_question = next(
+            item
+            for item in initial.questions
+            if item.fact_key == "entity.vat_registration"
+        )
+        eit_question = next(
+            item
+            for item in initial.questions
+            if item.fact_key == "entity.eit_status"
+        )
+        valid = Confirmation(
+            vat_question.question_id,
+            vat_question.fact_key,
+            "general",
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+        )
+        invalid = Confirmation(
+            eit_question.question_id,
+            eit_question.fact_key,
+            1,
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+        )
+
+        with self.assertRaisesRegex(
+            ConfirmationError,
+            "^invalid_confirmation_value$",
+        ):
+            apply_confirmations(
+                initial,
+                (valid, invalid),
+                packs=self.packs,
+                evaluators=evaluators,
+            )
+
+        self.assertEqual(calls, {"vat": 0, "eit": 0})
+        self.assertEqual(initial.request.facts, ())
+        self.assertEqual(initial.revision, 1)
+        self.assertEqual(len(initial.audit_events), 1)
+
     def test_repeated_identical_confirmation_is_idempotent(self) -> None:
         calls = {"vat": 0}
 
@@ -154,13 +353,149 @@ class TaxWorkflowTests(unittest.TestCase):
 
         initial = start_tax_health_check(self.request, packs=self.packs, evaluators={"vat.screening": vat_evaluator}, occurred_at=OCCURRED_AT)
         question = next(question for question in initial.questions if question.fact_key == "entity.vat_registration")
-        confirmation = Confirmation(question.question_id, question.fact_key, "general", "customer", "2026-07-28T10:05:00+08:00")
+        confirmation = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "general",
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+            ("source-old",),
+        )
         confirmed = apply_confirmations(initial, (confirmation,), packs=self.packs, evaluators={"vat.screening": vat_evaluator})
 
         repeated = apply_confirmations(confirmed, (confirmation,), packs=self.packs, evaluators={"vat.screening": vat_evaluator})
 
         self.assertEqual(calls["vat"], 1)
         self.assertEqual(repeated, confirmed)
+
+    def test_same_value_with_supplemental_evidence_updates_fact_and_reruns(self) -> None:
+        calls = {"vat": 0, "eit": 0}
+
+        def vat_evaluator(context: object) -> EvaluationOutcome:
+            calls["vat"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-001",))
+
+        def eit_evaluator(context: object) -> EvaluationOutcome:
+            calls["eit"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-002",))
+
+        evaluators = {
+            "vat.screening": vat_evaluator,
+            "eit.screening": eit_evaluator,
+        }
+        initial = start_tax_health_check(
+            self.request,
+            packs=self.packs,
+            evaluators=evaluators,
+            occurred_at=OCCURRED_AT,
+        )
+        question = next(
+            item
+            for item in initial.questions
+            if item.fact_key == "entity.vat_registration"
+        )
+        first = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "general",
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+            ("source-old",),
+        )
+        confirmed = apply_confirmations(
+            initial,
+            (first,),
+            packs=self.packs,
+            evaluators=evaluators,
+        )
+        supplemental = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "general",
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+            ("source-new",),
+        )
+
+        updated = apply_confirmations(
+            confirmed,
+            (supplemental,),
+            packs=self.packs,
+            evaluators=evaluators,
+        )
+
+        fact = next(
+            item
+            for item in updated.request.facts
+            if item.key == question.fact_key
+        )
+        self.assertEqual(fact.evidence_refs, ("source-old", "source-new"))
+        self.assertEqual(fact.confirmed_by, "customer")
+        self.assertEqual(fact.confirmed_at, "2026-07-28T10:05:00+08:00")
+        self.assertEqual(calls, {"vat": 2, "eit": 0})
+        self.assertEqual(updated.audit_events[-1].event_type, "confirmation_updated")
+        self.assertEqual(updated.revision, confirmed.revision + 1)
+
+    def test_same_value_with_new_confirmation_metadata_updates_and_reruns(self) -> None:
+        calls = {"vat": 0}
+
+        def vat_evaluator(context: object) -> EvaluationOutcome:
+            calls["vat"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-001",))
+
+        evaluators = {"vat.screening": vat_evaluator}
+        initial = start_tax_health_check(
+            self.request,
+            packs=self.packs,
+            evaluators=evaluators,
+            occurred_at=OCCURRED_AT,
+        )
+        question = next(
+            item
+            for item in initial.questions
+            if item.fact_key == "entity.vat_registration"
+        )
+        first = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "general",
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+            ("source-old",),
+        )
+        confirmed = apply_confirmations(
+            initial,
+            (first,),
+            packs=self.packs,
+            evaluators=evaluators,
+        )
+        metadata_update = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "general",
+            "finance-director",
+            "2026-07-28T10:07:00+08:00",
+            ("source-old",),
+        )
+
+        updated = apply_confirmations(
+            confirmed,
+            (metadata_update,),
+            packs=self.packs,
+            evaluators=evaluators,
+        )
+
+        fact = next(
+            item
+            for item in updated.request.facts
+            if item.key == question.fact_key
+        )
+        self.assertEqual(fact.evidence_refs, ("source-old",))
+        self.assertEqual(fact.confirmed_by, "finance-director")
+        self.assertEqual(fact.confirmed_at, "2026-07-28T10:07:00+08:00")
+        self.assertEqual(calls, {"vat": 2})
+        self.assertEqual(updated.audit_events[-1].event_type, "confirmation_updated")
+        self.assertEqual(updated.revision, confirmed.revision + 1)
 
     def test_conflicting_confirmation_preserves_fact_and_retains_corrective_question(self) -> None:
         initial = start_tax_health_check(self.request, packs=self.packs, evaluators={}, occurred_at=OCCURRED_AT)
@@ -183,6 +518,101 @@ class TaxWorkflowTests(unittest.TestCase):
         self.assertEqual(corrective.blocking, question.blocking)
         self.assertEqual(updated.audit_events[-1].event_type, "confirmation_conflict")
         self.assertEqual(updated.revision, 3)
+
+    def test_preserved_value_reaffirms_active_conflict_and_clears_question(self) -> None:
+        calls = {"vat": 0, "eit": 0}
+
+        def vat_evaluator(context: object) -> EvaluationOutcome:
+            calls["vat"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-001",))
+
+        def eit_evaluator(context: object) -> EvaluationOutcome:
+            calls["eit"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-002",))
+
+        evaluators = {
+            "vat.screening": vat_evaluator,
+            "eit.screening": eit_evaluator,
+        }
+        initial = start_tax_health_check(
+            self.request,
+            packs=self.packs,
+            evaluators=evaluators,
+            occurred_at=OCCURRED_AT,
+        )
+        question = next(
+            item
+            for item in initial.questions
+            if item.fact_key == "entity.vat_registration"
+        )
+        first = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "general",
+            "customer",
+            "2026-07-28T10:05:00+08:00",
+            ("source-old",),
+        )
+        confirmed = apply_confirmations(
+            initial,
+            (first,),
+            packs=self.packs,
+            evaluators=evaluators,
+        )
+        conflict = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "small_scale",
+            "customer",
+            "2026-07-28T10:06:00+08:00",
+            ("source-rejected",),
+        )
+        conflicted = apply_confirmations(
+            confirmed,
+            (conflict,),
+            packs=self.packs,
+            evaluators=evaluators,
+        )
+        reaffirmation = Confirmation(
+            question.question_id,
+            question.fact_key,
+            "general",
+            "finance-director",
+            "2026-07-28T10:07:00+08:00",
+            ("source-new",),
+        )
+
+        reaffirmed = apply_confirmations(
+            conflicted,
+            (reaffirmation,),
+            packs=self.packs,
+            evaluators=evaluators,
+        )
+
+        fact = next(
+            item
+            for item in reaffirmed.request.facts
+            if item.key == question.fact_key
+        )
+        self.assertEqual(fact.value, "general")
+        self.assertEqual(fact.evidence_refs, ("source-old", "source-new"))
+        self.assertEqual(fact.confirmed_by, "finance-director")
+        self.assertEqual(fact.confirmed_at, "2026-07-28T10:07:00+08:00")
+        self.assertEqual(calls, {"vat": 2, "eit": 0})
+        vat_result = next(
+            item for item in reaffirmed.results if item.tax_id == "vat"
+        )
+        self.assertEqual(vat_result.status, TaxStatus.CALCULATED)
+        self.assertNotIn("confirmation_conflict", vat_result.diagnostics)
+        self.assertNotIn(
+            question.question_id,
+            {item.question_id for item in reaffirmed.questions},
+        )
+        self.assertEqual(
+            reaffirmed.audit_events[-1].event_type,
+            "confirmation_reaffirmed",
+        )
+        self.assertEqual(reaffirmed.revision, conflicted.revision + 1)
 
     def test_conflict_uses_stored_question_after_packs_change_and_replay_is_idempotent(self) -> None:
         calls = {"vat": 0}

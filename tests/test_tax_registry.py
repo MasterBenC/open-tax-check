@@ -188,6 +188,16 @@ class TaxRegistryTests(unittest.TestCase):
         self.assertIsInstance(pack.requirements[0].evidence_types, tuple)
         self.assertIsInstance(pack.sources, tuple)
 
+    def test_manifest_rejects_unsupported_requirement_answer_type_safely(self) -> None:
+        invalid_payload = payload()
+        invalid_payload["requirements"][0]["answer_type"] = "customer/private/path"
+
+        with self.assertRaisesRegex(TaxPackError, "^unsupported_answer_type$") as raised:
+            validate_pack_payload(invalid_payload)
+
+        self.assertEqual(raised.exception.code, "unsupported_answer_type")
+        self.assertNotIn("customer/private/path", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

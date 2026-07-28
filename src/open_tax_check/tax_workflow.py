@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
+from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from .tax_models import (
     AuditEvent,
@@ -31,11 +34,43 @@ class ConfirmationError(ValueError):
         super().__init__(code)
 
 
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def _confirmation_digest(value: str | int | bool | None) -> str:
     canonical_value = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     return hashlib.sha256(canonical_value.encode("utf-8")).hexdigest()
+
+
+def _confirmation_value_is_valid(answer_type: str, value: object) -> bool:
+    if answer_type in ("text", "choice"):
+        return isinstance(value, str) and bool(value)
+    if answer_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if answer_type == "boolean":
+        return isinstance(value, bool)
+    if answer_type == "date":
+        if (
+            not isinstance(value, str)
+            or _ISO_DATE.fullmatch(value) is None
+        ):
+            return False
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            return False
+        return True
+    if answer_type == "decimal":
+        if not isinstance(value, str) or not value:
+            return False
+        try:
+            Decimal(value)
+        except InvalidOperation:
+            return False
+        return True
+    return False
 
 
 def _updated_request(request: TaxCheckRequest, facts: Mapping[str, TaxFact]) -> TaxCheckRequest:
@@ -73,6 +108,20 @@ def _has_recorded_conflict(
         and event.confirmation_digest == digest
         for event in snapshot.audit_events
     )
+
+
+def _active_conflict_fact_keys(snapshot: TaxCheckSnapshot) -> frozenset[str]:
+    return frozenset(
+        question.fact_key
+        for question in snapshot.questions
+        if "confirmation_conflict" in question.reason_codes
+    )
+
+
+def _merge_evidence_refs(
+    existing: tuple[str, ...], supplemental: tuple[str, ...]
+) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(existing + supplemental))
 
 
 def _merge_results(
@@ -141,9 +190,12 @@ def apply_confirmations(
             raise ConfirmationError("unknown_question")
         if question.fact_key != confirmation.fact_key:
             raise ConfirmationError("confirmation_fact_mismatch")
+        if not _confirmation_value_is_valid(question.answer_type, confirmation.value):
+            raise ConfirmationError("invalid_confirmation_value")
         resolved.append((confirmation, question))
 
     facts = {fact.key: fact for fact in snapshot.request.facts}
+    active_conflicts = _active_conflict_fact_keys(snapshot)
     pending: list[tuple[Confirmation, Question]] = []
     for confirmation, question in resolved:
         existing = facts.get(confirmation.fact_key)
@@ -165,6 +217,37 @@ def apply_confirmations(
         digest = _confirmation_digest(confirmation.value)
         if existing is not None and existing.state is FactState.CONFIRMED:
             if existing.value == confirmation.value:
+                active_conflict = confirmation.fact_key in active_conflicts
+                exact_replay = (
+                    existing.confirmed_by == confirmation.confirmed_by
+                    and existing.confirmed_at == confirmation.confirmed_at
+                    and existing.evidence_refs == confirmation.evidence_refs
+                )
+                if exact_replay and not active_conflict:
+                    continue
+                facts[confirmation.fact_key] = TaxFact(
+                    key=confirmation.fact_key,
+                    value=existing.value,
+                    state=FactState.CONFIRMED,
+                    evidence_refs=_merge_evidence_refs(
+                        existing.evidence_refs,
+                        confirmation.evidence_refs,
+                    ),
+                    confirmed_by=confirmation.confirmed_by,
+                    confirmed_at=confirmation.confirmed_at,
+                )
+                changed_tax_ids.extend(question.tax_ids)
+                audit_events.append(AuditEvent(
+                    (
+                        "confirmation_reaffirmed"
+                        if active_conflict
+                        else "confirmation_updated"
+                    ),
+                    confirmation.confirmed_at,
+                    tax_ids=question.tax_ids,
+                    fact_keys=(confirmation.fact_key,),
+                    confirmation_digest=digest,
+                ))
                 continue
             conflicts.append((confirmation, question))
             audit_events.append(AuditEvent(

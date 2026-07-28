@@ -69,7 +69,7 @@ class TaxHealthFacadeTests(unittest.TestCase):
                     confirmed_by="hostile-confirmed-by",
                     confirmed_at="2026-07-28T10:05:00+08:00",
                 ),),
-                input_hashes=("sha256:input-a",),
+                input_hashes=("a" * 64,),
             ),
             results=(),
             questions=(active_question,),
@@ -86,6 +86,7 @@ class TaxHealthFacadeTests(unittest.TestCase):
 
         self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
         self.assertEqual(set(payload["request"]), {"period", "jurisdiction", "input_hashes"})
+        self.assertEqual(payload["request"]["input_hashes"], ["a" * 64])
         self.assertEqual(
             set(payload["audit_events"][0]),
             {"event_type", "tax_ids", "fact_keys", "confirmation_digest"},

@@ -67,7 +67,7 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
         results.append(TaxResult(
             definition.tax_id, status, pack_ids, diagnostics, gaps, evidence_refs, sources
         ))
-    request = TaxCheckRequest(PERIOD, "CN", input_hashes=("sha256:input-a", "sha256:input-b"))
+    request = TaxCheckRequest(PERIOD, "CN", input_hashes=("a" * 64, "b" * 64))
     questions = (
         Question(
             "question-registration", "entity.registration", ("vat",), ("missing_fact",),
