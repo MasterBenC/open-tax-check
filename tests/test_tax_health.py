@@ -3,6 +3,7 @@
 from datetime import date
 import json
 import unittest
+from unittest.mock import patch
 
 from open_tax_check.tax_health import continue_tax_health_check, run_tax_health_check
 from open_tax_check.tax_models import (
@@ -81,6 +82,14 @@ def payload_keys(value: object) -> set[str]:
 
 
 class TaxHealthFacadeTests(unittest.TestCase):
+    def test_invalid_builtin_fact_catalog_has_stable_customer_safe_error(self) -> None:
+        with patch(
+            "open_tax_check.tax_health.load_builtin_fact_catalog",
+            side_effect=ValueError("unexpected details"),
+        ):
+            with self.assertRaisesRegex(ValueError, "^invalid_fact_catalog$"):
+                run_tax_health_check(TaxCheckRequest(PERIOD, "CN"), occurred_at=OCCURRED_AT)
+
     def test_custom_generic_pack_without_evaluator_mapping_remains_unavailable(self) -> None:
         request = TaxCheckRequest(
             PERIOD,

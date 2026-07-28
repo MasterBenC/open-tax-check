@@ -2,12 +2,14 @@
 
 from copy import deepcopy
 from datetime import date
+import json
 import unittest
 from unittest.mock import patch
 
 from open_tax_check.tax_models import DateRange
 from open_tax_check.tax_registry import (
     TAX_DEFINITIONS,
+    TaxPackIssue,
     TaxPackError,
     load_builtin_tax_pack_bundle,
     load_builtin_tax_packs,
@@ -124,6 +126,26 @@ class TaxRegistryTests(unittest.TestCase):
         bundle = load_builtin_tax_pack_bundle()
         self.assertTrue(bundle.packs)
         self.assertEqual(bundle.issues, ())
+
+    def test_bundle_isolates_corrupt_manifest_by_filename_tax_id(self) -> None:
+        valid = _Entry(
+            "vat-cn-2026.screening.json",
+            text=json.dumps(screening_payload()),
+        )
+        corrupt = _Entry("deed-tax-cn-2023-2026.screening.json", text="not json")
+        with patch("open_tax_check.tax_registry.files", return_value=_Package([valid, corrupt])):
+            bundle = load_builtin_tax_pack_bundle()
+
+        self.assertEqual(tuple(pack.tax_id for pack in bundle.packs), ("vat",))
+        self.assertEqual(bundle.issues, (TaxPackIssue("deed_tax", "invalid_pack_json"),))
+
+    def test_bundle_handles_unknown_manifest_without_exposing_filename(self) -> None:
+        unknown = _Entry("unexpected.json", text="not json")
+        with patch("open_tax_check.tax_registry.files", return_value=_Package([unknown])):
+            bundle = load_builtin_tax_pack_bundle()
+
+        self.assertEqual(bundle.packs, ())
+        self.assertEqual(bundle.issues, (TaxPackIssue("unknown", "invalid_pack_json"),))
 
     def test_manifest_limits_are_checked_before_json_parsing(self):
         oversized = _Entry("vat.json", 256 * 1024 + 1, "not json")

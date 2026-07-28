@@ -28,6 +28,17 @@ class PackageContractTests(unittest.TestCase):
         self.assertEqual(payload["pack_id"], "vat-cn-2023-2026-prototype")
         self.assertEqual(payload["maturity"], "prototype")
 
+    def test_packaged_tax_packs_include_catalog_and_all_formal_manifests(self):
+        from open_tax_check.tax_registry import TAX_DEFINITIONS, load_builtin_tax_packs
+
+        package = files("open_tax_check.tax_packs")
+        names = {entry.name for entry in package.iterdir() if entry.name.endswith(".json")}
+        self.assertIn("fact-catalog.zh-CN.v1.json", names)
+        formal_ids = {
+            pack.tax_id for pack in load_builtin_tax_packs() if pack.maturity.value == "screening"
+        }
+        self.assertEqual(formal_ids, {item.tax_id for item in TAX_DEFINITIONS})
+
     def test_module_help_is_available(self):
         proc = subprocess.run(
             [sys.executable, "-m", "open_tax_check.cli", "--help"],
