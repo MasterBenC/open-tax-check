@@ -188,6 +188,17 @@ class TaxModelTests(unittest.TestCase):
 
         self.assertEqual(snapshot.question_history, (question,))
 
+    def test_snapshot_preserves_schema_version_as_sixth_positional_argument(self):
+        request = TaxCheckRequest(DateRange(date(2026, 1, 1), date(2026, 1, 31)), "CN")
+
+        snapshot = TaxCheckSnapshot(
+            request, (TaxResult("vat", TaxStatus.CALCULATED),), (), (), 1,
+            "custom-schema",
+        )
+
+        self.assertEqual(snapshot.schema_version, "custom-schema")
+        self.assertEqual(snapshot.question_history, ())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -221,6 +221,38 @@ class TaxWorkflowTests(unittest.TestCase):
         self.assertEqual(len(replayed.audit_events), len(conflicted.audit_events))
         self.assertEqual(replayed.revision, conflicted.revision)
 
+    def test_replayed_conflict_in_a_mixed_batch_does_not_discard_new_confirmation(self) -> None:
+        calls = {"vat": 0, "eit": 0}
+
+        def vat_evaluator(context: object) -> EvaluationOutcome:
+            calls["vat"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-001",))
+
+        def eit_evaluator(context: object) -> EvaluationOutcome:
+            calls["eit"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-002",))
+
+        evaluators = {"vat.screening": vat_evaluator, "eit.screening": eit_evaluator}
+        initial = start_tax_health_check(self.request, packs=self.packs, evaluators=evaluators, occurred_at=OCCURRED_AT)
+        vat_question = next(item for item in initial.questions if item.fact_key == "entity.vat_registration")
+        eit_question = next(item for item in initial.questions if item.fact_key == "entity.eit_status")
+        first = Confirmation(vat_question.question_id, vat_question.fact_key, "general", "customer", "2026-07-28T10:05:00+08:00")
+        confirmed = apply_confirmations(initial, (first,), packs=self.packs, evaluators=evaluators)
+        conflict = Confirmation(vat_question.question_id, vat_question.fact_key, "small_scale", "customer", "2026-07-28T10:06:00+08:00")
+        conflicted = apply_confirmations(confirmed, (conflict,), packs=self.packs, evaluators=evaluators)
+        eit_confirmation = Confirmation(eit_question.question_id, eit_question.fact_key, "standard", "customer", "2026-07-28T10:07:00+08:00")
+
+        updated = apply_confirmations(
+            conflicted, (conflict, eit_confirmation), packs=self.packs, evaluators=evaluators
+        )
+
+        self.assertEqual(calls, {"vat": 1, "eit": 1})
+        self.assertEqual(updated.revision, conflicted.revision + 1)
+        self.assertEqual(len(updated.audit_events), len(conflicted.audit_events) + 1)
+        self.assertEqual(updated.audit_events[-1].fact_keys, ("entity.eit_status",))
+        self.assertEqual(next(result for result in updated.results if result.tax_id == "vat").status, TaxStatus.BLOCKED)
+        self.assertEqual(next(result for result in updated.results if result.tax_id == "enterprise_income_tax").status, TaxStatus.CALCULATED)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -334,8 +334,8 @@ class TaxCheckSnapshot:
     questions: tuple[Question, ...]
     audit_events: tuple[AuditEvent, ...]
     revision: int
-    question_history: tuple[Question, ...] = ()
     schema_version: str = TAX_SCHEMA_VERSION
+    question_history: tuple[Question, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "results", tuple(self.results))

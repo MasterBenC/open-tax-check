@@ -144,6 +144,7 @@ def apply_confirmations(
         resolved.append((confirmation, question))
 
     facts = {fact.key: fact for fact in snapshot.request.facts}
+    pending: list[tuple[Confirmation, Question]] = []
     for confirmation, question in resolved:
         existing = facts.get(confirmation.fact_key)
         digest = _confirmation_digest(confirmation.value)
@@ -153,12 +154,13 @@ def apply_confirmations(
             and existing.value != confirmation.value
             and _has_recorded_conflict(snapshot, question.fact_key, digest)
         ):
-            return snapshot
+            continue
+        pending.append((confirmation, question))
 
     changed_tax_ids: list[str] = []
     conflicts: list[tuple[Confirmation, Question]] = []
     audit_events: list[AuditEvent] = []
-    for confirmation, question in resolved:
+    for confirmation, question in pending:
         existing = facts.get(confirmation.fact_key)
         digest = _confirmation_digest(confirmation.value)
         if existing is not None and existing.state is FactState.CONFIRMED:
