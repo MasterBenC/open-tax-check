@@ -1,6 +1,8 @@
 """Versioned, immutable metadata records for the Excel intake boundary."""
 
 from dataclasses import dataclass, fields, is_dataclass
+from datetime import date
+from enum import Enum
 from typing import Any
 
 
@@ -109,6 +111,10 @@ class CoverageItem:
 def to_dict(value: Any) -> Any:
     """Recursively convert record metadata into JSON-friendly built-in values."""
 
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, date):
+        return value.isoformat()
     if is_dataclass(value) and not isinstance(value, type):
         return {field.name: to_dict(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, tuple | list):

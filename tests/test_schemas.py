@@ -1,6 +1,8 @@
 import json
 import unittest
 from dataclasses import FrozenInstanceError
+from datetime import date
+from enum import Enum
 
 from open_tax_check.schemas import CoverageItem, RoleScore, SheetRecord, SourceRecord, to_dict
 
@@ -94,6 +96,15 @@ class VersionedSchemaTests(unittest.TestCase):
             ],
         )
         json.dumps(serialized)
+
+    def test_to_dict_serializes_enums_and_dates(self):
+        class SampleState(Enum):
+            READY = "ready"
+
+        self.assertEqual(
+            to_dict({"state": SampleState.READY, "published_on": date(2026, 7, 28)}),
+            {"state": "ready", "published_on": "2026-07-28"},
+        )
 
 
 if __name__ == "__main__":
