@@ -3,6 +3,7 @@
 from copy import deepcopy
 from datetime import date
 import unittest
+from unittest.mock import patch
 
 from open_tax_check.tax_models import DateRange
 from open_tax_check.tax_registry import (
@@ -13,6 +14,27 @@ from open_tax_check.tax_registry import (
     validate_pack_payload,
     validate_pack_set,
 )
+
+
+class _Entry:
+    def __init__(self, name, size=1, text="{}"):
+        self.name = name
+        self._size = size
+        self._text = text
+
+    def stat(self):
+        return type("Stat", (), {"st_size": self._size})()
+
+    def read_text(self, *, encoding):
+        return self._text
+
+
+class _Package:
+    def __init__(self, entries):
+        self._entries = entries
+
+    def iterdir(self):
+        return iter(self._entries)
 
 
 EXPECTED = {
@@ -68,7 +90,64 @@ def payload(**overrides: object) -> dict[str, object]:
     return result
 
 
+def screening_payload(**overrides: object) -> dict[str, object]:
+    result = payload(
+        schema_version="1.1.0",
+        pack_id="vat-cn-screening-v1",
+        requirements=[{
+            "fact_key": "activity.acquired_land_or_building_rights",
+            "answer_type": "boolean",
+            "evidence_types": ["contract"],
+            "priority": 100,
+            "blocking": True,
+            "critical": True,
+        }],
+        evaluator_id="generic.applicability.screening.v1",
+        sources=[{
+            "title": "中华人民共和国契税法", "url": "https://www.gov.cn/",
+            "published_on": "2020-08-11", "issuer": "全国人民代表大会常务委员会",
+            "document_number": "中华人民共和国主席令第五十二号", "article_refs": ["第一条"],
+            "verified_on": "2026-07-28",
+        }],
+        rule_version="2026.1",
+        fact_catalog_version="zh-CN.v1",
+        applicability_fact_keys=["activity.acquired_land_or_building_rights"],
+    )
+    result.update(overrides)
+    return result
+
+
 class TaxRegistryTests(unittest.TestCase):
+    def test_manifest_limits_are_checked_before_json_parsing(self):
+        oversized = _Entry("vat.json", 256 * 1024 + 1, "not json")
+        with patch("open_tax_check.tax_registry.files", return_value=_Package([oversized])):
+            with self.assertRaisesRegex(TaxPackError, "^pack_manifest_too_large$"):
+                load_builtin_tax_packs()
+        manifests = [_Entry(f"pack-{index}.json", text="not json") for index in range(65)]
+        with patch("open_tax_check.tax_registry.files", return_value=_Package(manifests)):
+            with self.assertRaisesRegex(TaxPackError, "^too_many_pack_manifests$"):
+                load_builtin_tax_packs()
+    def test_screening_manifest_returns_versioned_contract(self):
+        pack = validate_pack_payload(screening_payload())
+        self.assertEqual(pack.rule_version, "2026.1")
+        self.assertEqual(pack.fact_catalog_version, "zh-CN.v1")
+        self.assertEqual(pack.applicability_fact_keys, ("activity.acquired_land_or_building_rights",))
+
+    def test_screening_manifest_rejects_stable_contract_errors(self):
+        cases = [
+            (payload(schema_version="2.0.0"), "unsupported_schema_version"),
+            (screening_payload(rule_version=""), "missing_rule_version"),
+            (screening_payload(fact_catalog_version=""), "missing_fact_catalog_version"),
+            (screening_payload(applicability_fact_keys=[]), "invalid_applicability_fact_keys"),
+            (screening_payload(applicability_fact_keys=["activity.unknown"]), "unknown_applicability_fact_key"),
+            (screening_payload(requirements=[{**screening_payload()["requirements"][0], "answer_type": "text"}]), "non_boolean_applicability_fact"),
+            (screening_payload(evaluator_id="vat.screening"), "invalid_screening_evaluator"),
+            (screening_payload(sources=[{**screening_payload()["sources"][0], "issuer": ""}]), "invalid_source_metadata"),
+        ]
+        for invalid_payload, code in cases:
+            with self.subTest(code=code):
+                with self.assertRaisesRegex(TaxPackError, f"^{code}$"):
+                    validate_pack_payload(invalid_payload)
     def test_registry_has_the_exact_twenty_tax_definitions(self) -> None:
         self.assertEqual(len(TAX_DEFINITIONS), 20)
         self.assertEqual({item.tax_id: item.name_zh for item in TAX_DEFINITIONS}, EXPECTED)

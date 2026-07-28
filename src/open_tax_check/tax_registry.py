@@ -42,10 +42,15 @@ TAX_DEFINITIONS: tuple[TaxDefinition, ...] = (
     TaxDefinition("local_education_surcharge", "地方教育附加", "surcharge"),
 )
 
-_PACK_KEYS = frozenset({
+_PACK_V1_KEYS = frozenset({
     "schema_version", "pack_id", "tax_id", "jurisdiction", "effective_from",
     "effective_to", "maturity", "requirements", "local_parameter_keys", "evaluator_id", "sources",
 })
+_PACK_V1_1_KEYS = _PACK_V1_KEYS | frozenset({
+    "rule_version", "fact_catalog_version", "applicability_fact_keys",
+})
+_MAX_PACK_MANIFEST_BYTES = 256 * 1024
+_MAX_PACK_MANIFESTS = 64
 _TAX_IDS = frozenset(item.tax_id for item in TAX_DEFINITIONS)
 _JURISDICTION = re.compile(r"CN(?:-\d{2})?$")
 
@@ -98,25 +103,44 @@ def _parse_requirement(value: object) -> FactRequirement:
         raise TaxPackError("invalid_requirement") from error
 
 
-def _parse_source(value: object) -> RuleSource:
-    if not isinstance(value, dict) or set(value) != {"title", "url", "published_on"}:
-        raise TaxPackError("invalid_source")
-    url = _required_string(value["url"], "invalid_source_url")
+def _parse_source(value: object, *, schema_version: str) -> RuleSource:
+    required = {"title", "url", "published_on"}
+    if schema_version == "1.1.0":
+        required |= {"issuer", "document_number", "article_refs", "verified_on"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise TaxPackError("invalid_source_metadata" if schema_version == "1.1.0" else "invalid_source")
+    metadata_code = "invalid_source_metadata" if schema_version == "1.1.0" else "invalid_source_url"
+    url = _required_string(value["url"], metadata_code)
     if not url.startswith("https://"):
-        raise TaxPackError("invalid_source_url")
-    return RuleSource(
-        title=_required_string(value["title"], "invalid_source"),
-        url=url,
-        published_on=_parse_date(value["published_on"], "invalid_source_date"),
-    )
+        raise TaxPackError(metadata_code)
+    if schema_version == "1.0.0":
+        return RuleSource(_required_string(value["title"], "invalid_source"), url, _parse_date(value["published_on"], "invalid_source_date"))
+    refs = value["article_refs"]
+    if not isinstance(refs, list) or not refs or not all(isinstance(ref, str) and ref.strip() for ref in refs):
+        raise TaxPackError("invalid_source_metadata")
+    try:
+        return RuleSource(
+            title=_required_string(value["title"], "invalid_source_metadata"), url=url,
+            published_on=_parse_date(value["published_on"], "invalid_source_metadata"),
+            issuer=_required_string(value["issuer"], "invalid_source_metadata"),
+            document_number=_required_string(value["document_number"], "invalid_source_metadata"),
+            article_refs=tuple(refs), verified_on=_parse_date(value["verified_on"], "invalid_source_metadata"),
+        )
+    except TaxPackError:
+        raise
+    except ValueError as error:
+        raise TaxPackError("invalid_source_metadata") from error
 
 
 def validate_pack_payload(payload: object) -> TaxPack:
-    """Strictly parse one version 1.0.0 JSON manifest into a TaxPack."""
-    if not isinstance(payload, dict) or set(payload) != _PACK_KEYS:
-        raise TaxPackError("invalid_pack_keys")
-    if payload["schema_version"] != "1.0.0":
+    """Strictly parse one schema 1.0.0 or 1.1.0 JSON manifest into a TaxPack."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("schema_version"), str):
         raise TaxPackError("unsupported_schema_version")
+    schema_version = payload["schema_version"]
+    if schema_version not in {"1.0.0", "1.1.0"}:
+        raise TaxPackError("unsupported_schema_version")
+    if set(payload) != (_PACK_V1_KEYS if schema_version == "1.0.0" else _PACK_V1_1_KEYS):
+        raise TaxPackError("invalid_pack_keys")
     tax_id = _required_string(payload["tax_id"], "invalid_tax_id")
     if tax_id not in _TAX_IDS:
         raise TaxPackError("unknown_tax_id")
@@ -152,7 +176,26 @@ def validate_pack_payload(payload: object) -> TaxPack:
     raw_sources = payload["sources"]
     if not isinstance(raw_sources, list) or not raw_sources:
         raise TaxPackError("missing_sources")
-    sources = tuple(_parse_source(item) for item in raw_sources)
+    sources = tuple(_parse_source(item, schema_version=schema_version) for item in raw_sources)
+    rule_version = "1.0.0"
+    fact_catalog_version = ""
+    applicability_fact_keys: tuple[str, ...] = ()
+    if schema_version == "1.1.0":
+        rule_version = _required_string(payload["rule_version"], "missing_rule_version")
+        fact_catalog_version = _required_string(payload["fact_catalog_version"], "missing_fact_catalog_version")
+        raw_applicability = payload["applicability_fact_keys"]
+        if not isinstance(raw_applicability, list) or not raw_applicability or not all(isinstance(item, str) and item.strip() for item in raw_applicability):
+            raise TaxPackError("invalid_applicability_fact_keys")
+        applicability_fact_keys = tuple(raw_applicability)
+        requirements_by_key = {item.fact_key: item for item in requirements}
+        for key in applicability_fact_keys:
+            requirement = requirements_by_key.get(key)
+            if requirement is None:
+                raise TaxPackError("unknown_applicability_fact_key")
+            if requirement.answer_type != "boolean":
+                raise TaxPackError("non_boolean_applicability_fact")
+        if maturity is PackMaturity.SCREENING and evaluator_id != "generic.applicability.screening.v1":
+            raise TaxPackError("invalid_screening_evaluator")
     try:
         return TaxPack(
             pack_id=_required_string(payload["pack_id"], "invalid_pack_id"),
@@ -164,6 +207,9 @@ def validate_pack_payload(payload: object) -> TaxPack:
             local_parameter_keys=local_parameter_keys,
             evaluator_id=evaluator_id,
             sources=sources,
+            rule_version=rule_version,
+            fact_catalog_version=fact_catalog_version,
+            applicability_fact_keys=applicability_fact_keys,
         )
     except ValueError as error:
         raise TaxPackError("invalid_tax_pack") from error
@@ -190,11 +236,17 @@ def validate_pack_set(packs: tuple[TaxPack, ...]) -> None:
 def load_builtin_tax_packs() -> tuple[TaxPack, ...]:
     """Load every packaged JSON manifest in deterministic filename order."""
     package = files("open_tax_check.tax_packs")
-    manifests = sorted((entry for entry in package.iterdir() if entry.name.endswith(".json")), key=lambda entry: entry.name)
+    manifests = sorted((entry for entry in package.iterdir() if entry.name.endswith(".json") and not entry.name.startswith("fact-catalog")), key=lambda entry: entry.name)
+    if len(manifests) > _MAX_PACK_MANIFESTS:
+        raise TaxPackError("too_many_pack_manifests")
     packs: list[TaxPack] = []
     for manifest in manifests:
         try:
+            if manifest.stat().st_size > _MAX_PACK_MANIFEST_BYTES:
+                raise TaxPackError("pack_manifest_too_large")
             payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except TaxPackError:
+            raise
         except (OSError, json.JSONDecodeError) as error:
             raise TaxPackError("invalid_pack_json") from error
         packs.append(validate_pack_payload(payload))

@@ -12,17 +12,71 @@ from open_tax_check.tax_models import (
     FactRequirement,
     FactState,
     PackMaturity,
+    PromptChoice,
     Question,
+    RuleSource,
     TaxCheckRequest,
     TaxCheckSnapshot,
     TaxFact,
     TaxPack,
     TaxResult,
     TaxStatus,
+    FactPrompt,
 )
 
 
 class TaxModelTests(unittest.TestCase):
+    def test_screening_pack_carries_versioned_applicability_contract(self):
+        requirement = FactRequirement(
+            "activity.acquired_land_or_building_rights", "boolean", (), 100, True, True
+        )
+        pack = TaxPack(
+            pack_id="deed-tax-cn-2023-2026-screening-v1",
+            tax_id="deed_tax",
+            jurisdiction="CN",
+            effective_period=DateRange(date(2023, 1, 1), date(2026, 12, 31)),
+            maturity=PackMaturity.SCREENING,
+            requirements=(requirement,),
+            local_parameter_keys=(),
+            evaluator_id="generic.applicability.screening.v1",
+            sources=(RuleSource("契税法", "https://www.gov.cn/", date(2020, 8, 11)),),
+            rule_version="2026.1",
+            fact_catalog_version="zh-CN.v1",
+            applicability_fact_keys=("activity.acquired_land_or_building_rights",),
+        )
+        self.assertEqual(pack.applicability_fact_keys, ("activity.acquired_land_or_building_rights",))
+
+    def test_question_presentation_defaults_preserve_existing_callers(self):
+        question = Question(
+            "question-1", "entity.registration", ("vat",), ("missing_fact",),
+            "boolean", (), 100, True,
+        )
+        self.assertEqual(question.question_zh, "")
+
+    def test_prompt_contracts_validate_presentation_and_choices(self):
+        prompt = FactPrompt(
+            "activity.has_vat_taxable_transaction", "是否发生应税交易？", "按实际业务回答。",
+            "boolean", [PromptChoice(True, "是"), PromptChoice(False, "否")], "请提供申报表。",
+        )
+        self.assertEqual(prompt.choices, (PromptChoice(True, "是"), PromptChoice(False, "否")))
+        with self.assertRaisesRegex(ValueError, "^invalid_prompt_choices$"):
+            FactPrompt("fact", "问题", "帮助", "boolean", (), "证据")
+        with self.assertRaisesRegex(ValueError, "^invalid_prompt_choices$"):
+            FactPrompt("fact", "问题", "帮助", "choice", ("not-a-choice",), "证据")
+
+    def test_rule_source_extended_metadata_is_immutable(self):
+        source = RuleSource(
+            title="中华人民共和国契税法",
+            url="https://www.gov.cn/",
+            published_on=date(2020, 8, 11),
+            issuer="全国人民代表大会常务委员会",
+            document_number="中华人民共和国主席令第五十二号",
+            article_refs=["第一条"],
+            verified_on=date(2026, 7, 28),
+        )
+        self.assertEqual(source.article_refs, ("第一条",))
+        with self.assertRaises(FrozenInstanceError):
+            source.issuer = "other"
     def test_tax_status_contract_is_exact(self):
         self.assertEqual(
             {item.value for item in TaxStatus},

@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0.0",
+  "catalog_version": "zh-CN.v1",
+  "locale": "zh-CN",
+  "prompts": [
+    {
+      "fact_key": "activity.has_vat_taxable_transaction",
+      "question_zh": "2023至2026年是否发生过销售货物、服务、无形资产、不动产或者进口货物？",
+      "help_zh": "请按实际业务回答；仅凭账套未发现相关科目不能自动视为没有发生。",
+      "answer_type": "boolean",
+      "choices": [{"value": true, "label_zh": "是"}, {"value": false, "label_zh": "否"}],
+      "evidence_help_zh": "如有，请提供相关申报表、合同、发票或海关资料；如无，请由客户明确确认。"
+    }
+  ]
+}
