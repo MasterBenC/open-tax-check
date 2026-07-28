@@ -23,6 +23,7 @@ from open_tax_check.tax_models import (
 from open_tax_check.tax_registry import TAX_DEFINITIONS
 from open_tax_check.tax_workflow import (
     ConfirmationError,
+    _confirmation_value_is_valid,
     apply_confirmations,
     start_tax_health_check,
 )
@@ -61,6 +62,10 @@ def tax_pack(
 
 
 class TaxWorkflowTests(unittest.TestCase):
+    def test_choice_confirmation_requires_declared_machine_value(self) -> None:
+        self.assertTrue(_confirmation_value_is_valid("choice", "yes", ("yes", "no")))
+        self.assertFalse(_confirmation_value_is_valid("choice", "maybe", ("yes", "no")))
+
     def setUp(self) -> None:
         self.packs = (
             tax_pack("vat", "entity.vat_registration", "vat.screening"),

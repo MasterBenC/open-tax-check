@@ -45,8 +45,14 @@ def _confirmation_digest(value: str | int | bool | None) -> str:
     return hashlib.sha256(canonical_value.encode("utf-8")).hexdigest()
 
 
-def _confirmation_value_is_valid(answer_type: str, value: object) -> bool:
-    if answer_type in ("text", "choice"):
+def _confirmation_value_is_valid(
+    answer_type: str, value: object, choices: tuple[object, ...] = ()
+) -> bool:
+    if answer_type == "choice":
+        return isinstance(value, str) and bool(value) and (
+            not choices or value in choices
+        )
+    if answer_type == "text":
         return isinstance(value, str) and bool(value)
     if answer_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
@@ -193,7 +199,11 @@ def apply_confirmations(
             raise ConfirmationError("unknown_question")
         if question.fact_key != confirmation.fact_key:
             raise ConfirmationError("confirmation_fact_mismatch")
-        if not _confirmation_value_is_valid(question.answer_type, confirmation.value):
+        if not _confirmation_value_is_valid(
+            question.answer_type,
+            confirmation.value,
+            tuple(choice.value for choice in question.choices),
+        ):
             raise ConfirmationError("invalid_confirmation_value")
         resolved.append((confirmation, question))
 

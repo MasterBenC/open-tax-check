@@ -12,7 +12,9 @@ from open_tax_check.tax_models import (
     FactGap,
     FactRequirement,
     FactState,
+    FactPrompt,
     PackMaturity,
+    PromptChoice,
     Question,
     RuleSource,
     TaxCheckRequest,
@@ -502,6 +504,46 @@ class TaxScreeningTests(unittest.TestCase):
 
 
 class QuestionQueueTests(unittest.TestCase):
+    def test_question_queue_uses_shared_chinese_prompt(self) -> None:
+        results = (
+            TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, gaps=(
+                FactGap("activity.shared", "missing_fact", "boolean", (), 70, False),
+            )),
+            TaxResult("stamp_tax", TaxStatus.NEEDS_EVIDENCE, gaps=(
+                FactGap("activity.shared", "missing_fact", "boolean", (), 80, True),
+            )),
+        )
+        prompt = FactPrompt(
+            "activity.shared", "是否发生相关交易？", "请按实际业务回答。", "boolean",
+            (PromptChoice(True, "是"), PromptChoice(False, "否")), "请提供合同或发票。",
+        )
+
+        question = build_question_queue(results, {"activity.shared": prompt})[0]
+
+        self.assertEqual(question.tax_ids, ("deed_tax", "stamp_tax"))
+        self.assertEqual(question.question_zh, prompt.question_zh)
+        self.assertEqual(question.help_zh, prompt.help_zh)
+        self.assertEqual(question.evidence_help_zh, prompt.evidence_help_zh)
+        self.assertEqual(question.choices, prompt.choices)
+
+    def test_formal_question_requires_prompt(self) -> None:
+        result = TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",), gaps=(
+            FactGap("activity.shared", "missing_fact", "choice", (), 70, False),
+        ))
+        with self.assertRaisesRegex(ValueError, "^missing_fact_prompt$"):
+            build_question_queue((result,), {})
+
+    def test_question_prompt_answer_type_must_match_gap(self) -> None:
+        result = TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",), gaps=(
+            FactGap("activity.shared", "missing_fact", "choice", (), 70, False),
+        ))
+        prompt = FactPrompt(
+            "activity.shared", "问题", "帮助", "boolean",
+            (PromptChoice(True, "是"), PromptChoice(False, "否")), "证据",
+        )
+        with self.assertRaisesRegex(ValueError, "^incompatible_prompt_answer_type$"):
+            build_question_queue((result,), {"activity.shared": prompt})
+
     def test_question_queue_merges_same_fact_key_deterministically(self) -> None:
         results = (
             TaxResult("vat", TaxStatus.NEEDS_EVIDENCE, gaps=(

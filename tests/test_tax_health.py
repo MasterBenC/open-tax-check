@@ -194,6 +194,8 @@ class TaxHealthFacadeTests(unittest.TestCase):
         serialized = json.dumps(payload, ensure_ascii=False)
         self.assertIsInstance(payload, dict)
         self.assertIn("rule_pack_unavailable", serialized)
+        self.assertIn("status_label_zh", payload["results"][0])
+        self.assertIsInstance(payload["results"][0]["status_label_zh"], str)
         self.assertTrue(payload_keys(payload).isdisjoint({"model", "token", "prompt", "hidden_reasoning"}))
 
     def test_continue_facade_applies_confirmation_and_updates_report(self) -> None:

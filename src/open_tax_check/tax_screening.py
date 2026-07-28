@@ -325,6 +325,17 @@ def build_question_queue(
         answer_types = {gap.answer_type for gap in gaps}
         if len(answer_types) != 1:
             raise ValueError("incompatible_question_answer_types")
+        prompt = (prompts or {}).get(fact_key)
+        if prompt is None and prompts is not None and any(
+            pack_id.endswith("-screening") or "-screening-" in pack_id
+            for tax_id, _ in entries
+            for result in results
+            if result.tax_id == tax_id
+            for pack_id in result.rule_pack_ids
+        ):
+            raise ValueError("missing_fact_prompt")
+        if prompt is not None and prompt.answer_type != next(iter(answer_types)):
+            raise ValueError("incompatible_prompt_answer_type")
         questions.append(Question(
             question_id="question-" + hashlib.sha256(fact_key.encode("utf-8")).hexdigest()[:16],
             fact_key=fact_key,
@@ -334,5 +345,9 @@ def build_question_queue(
             evidence_types=tuple(sorted({item for gap in gaps for item in gap.evidence_types})),
             priority=max(gap.priority for gap in gaps),
             blocking=any(gap.blocking for gap in gaps),
+            question_zh=prompt.question_zh if prompt is not None else "",
+            help_zh=prompt.help_zh if prompt is not None else "",
+            evidence_help_zh=prompt.evidence_help_zh if prompt is not None else "",
+            choices=prompt.choices if prompt is not None else (),
         ))
     return tuple(sorted(questions, key=lambda question: (-question.priority, question.fact_key)))
