@@ -37,7 +37,15 @@ def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
         },
         "results": to_dict(snapshot.results),
         "questions": to_dict(snapshot.questions),
-        "audit_events": to_dict(snapshot.audit_events),
+        "audit_events": [
+            {
+                "event_type": event.event_type,
+                "tax_ids": list(event.tax_ids),
+                "fact_keys": list(event.fact_keys),
+                "confirmation_digest": event.confirmation_digest,
+            }
+            for event in snapshot.audit_events
+        ],
     }
 
 

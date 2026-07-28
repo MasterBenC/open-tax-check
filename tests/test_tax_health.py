@@ -67,7 +67,7 @@ class TaxHealthFacadeTests(unittest.TestCase):
                 facts=(TaxFact(
                     "entity.confirmed_fact", "hostile-confirmation-value", FactState.CONFIRMED,
                     confirmed_by="hostile-confirmed-by",
-                    confirmed_at="2026-07-28T10:04:03+08:00",
+                    confirmed_at="2026-07-28T10:05:00+08:00",
                 ),),
                 input_hashes=("sha256:input-a",),
             ),
@@ -86,11 +86,15 @@ class TaxHealthFacadeTests(unittest.TestCase):
 
         self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
         self.assertEqual(set(payload["request"]), {"period", "jurisdiction", "input_hashes"})
+        self.assertEqual(
+            set(payload["audit_events"][0]),
+            {"event_type", "tax_ids", "fact_keys", "confirmation_digest"},
+        )
         self.assertIn("active-question", serialized)
         self.assertIn("safe-confirmation-digest", serialized)
         for prohibited in (
             "facts", "question_history", "hostile-confirmation-value",
-            "hostile-confirmed-by", "2026-07-28T10:04:03+08:00", "history-question",
+            "hostile-confirmed-by", "2026-07-28T10:05:00+08:00", "history-question", "occurred_at",
         ):
             self.assertNotIn(prohibited, payload_keys(payload))
             self.assertNotIn(prohibited, serialized)
