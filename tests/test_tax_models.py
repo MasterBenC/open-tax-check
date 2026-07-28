@@ -26,6 +26,47 @@ from open_tax_check.tax_models import (
 
 
 class TaxModelTests(unittest.TestCase):
+    def test_screening_pack_requires_complete_versioned_applicability_contract(self):
+        requirement = FactRequirement("activity.applies", "boolean", (), 100, True, True)
+        base = dict(
+            pack_id="screening-pack",
+            tax_id="vat",
+            jurisdiction="CN",
+            effective_period=DateRange(date(2026, 1, 1), date(2026, 1, 31)),
+            maturity=PackMaturity.SCREENING,
+            requirements=(requirement,),
+            local_parameter_keys=(),
+            evaluator_id="generic.applicability.screening.v1",
+            sources=(RuleSource("source", "https://example.test", date(2026, 1, 1)),),
+        )
+        cases = (
+            ({}, "empty_identifier"),
+            ({"rule_version": "", "fact_catalog_version": "zh-CN.v1", "applicability_fact_keys": ("activity.applies",)}, "empty_identifier"),
+            ({"rule_version": "2026.1", "fact_catalog_version": "", "applicability_fact_keys": ("activity.applies",)}, "empty_identifier"),
+            ({"rule_version": "2026.1", "fact_catalog_version": "zh-CN.v1", "applicability_fact_keys": ()}, "invalid_applicability_fact_keys"),
+        )
+        for overrides, code in cases:
+            with self.subTest(overrides=overrides):
+                with self.assertRaisesRegex(ValueError, f"^{code}$"):
+                    TaxPack(**base, **overrides)
+
+    def test_prototype_and_calculation_packs_preserve_default_contract_fields(self):
+        requirement = FactRequirement("entity.registration", "choice", (), 10, True, True)
+        base = dict(
+            pack_id="legacy-pack",
+            tax_id="vat",
+            jurisdiction="CN",
+            effective_period=DateRange(date(2026, 1, 1), date(2026, 1, 31)),
+            requirements=(requirement,),
+            local_parameter_keys=(),
+            evaluator_id="legacy.evaluator",
+            sources=(RuleSource("source", "https://example.test", date(2026, 1, 1)),),
+        )
+        for maturity in (PackMaturity.PROTOTYPE, PackMaturity.CALCULATION):
+            with self.subTest(maturity=maturity):
+                pack = TaxPack(maturity=maturity, **base)
+                self.assertEqual((pack.rule_version, pack.fact_catalog_version, pack.applicability_fact_keys), ("1.0.0", "", ()))
+
     def test_screening_pack_carries_versioned_applicability_contract(self):
         requirement = FactRequirement(
             "activity.acquired_land_or_building_rights", "boolean", (), 100, True, True

@@ -16,6 +16,7 @@ from open_tax_check.tax_models import (
     PackMaturity,
     RuleSource,
     TaxCheckRequest,
+    TaxFact,
     TaxPack,
     TaxStatus,
 )
@@ -46,10 +47,16 @@ def tax_pack(
         jurisdiction="CN",
         effective_period=PERIOD,
         maturity=PackMaturity.SCREENING,
-        requirements=(FactRequirement(fact_key, answer_type, ("record",), 90, True, True),),
+        requirements=(
+            FactRequirement(fact_key, answer_type, ("record",), 90, True, True),
+            FactRequirement("activity.screening_applies", "boolean", (), 1, False, False),
+        ),
         local_parameter_keys=(),
         evaluator_id=evaluator_id,
         sources=(SOURCE,),
+        rule_version="2026.1",
+        fact_catalog_version="zh-CN.v1",
+        applicability_fact_keys=("activity.screening_applies",),
     )
 
 
@@ -62,6 +69,7 @@ class TaxWorkflowTests(unittest.TestCase):
         self.request = TaxCheckRequest(
             PERIOD,
             "CN",
+            facts=(TaxFact("activity.screening_applies", True, FactState.OBSERVED, ("source-001",)),),
             input_hashes=(SOURCE_HASH,),
         )
 
@@ -114,7 +122,8 @@ class TaxWorkflowTests(unittest.TestCase):
 
         self.assertEqual(calls, {"vat": 1, "eit": 0})
         self.assertEqual(next(result for result in updated.results if result.tax_id == "enterprise_income_tax"), old_eit_result)
-        self.assertEqual(updated.request.facts[0].state, FactState.CONFIRMED)
+        confirmed_fact = next(fact for fact in updated.request.facts if fact.key == vat_question.fact_key)
+        self.assertEqual(confirmed_fact.state, FactState.CONFIRMED)
         self.assertNotIn(vat_question.question_id, {question.question_id for question in updated.questions})
         self.assertEqual(updated.revision, 2)
         digest = hashlib.sha256(b'"general"').hexdigest()
@@ -340,7 +349,10 @@ class TaxWorkflowTests(unittest.TestCase):
             )
 
         self.assertEqual(calls, {"vat": 0, "eit": 0})
-        self.assertEqual(initial.request.facts, ())
+        self.assertEqual(
+            initial.request.facts,
+            (TaxFact("activity.screening_applies", True, FactState.OBSERVED, ("source-001",)),),
+        )
         self.assertEqual(initial.revision, 1)
         self.assertEqual(len(initial.audit_events), 1)
 
@@ -506,7 +518,8 @@ class TaxWorkflowTests(unittest.TestCase):
 
         updated = apply_confirmations(confirmed, (conflict,), packs=self.packs, evaluators={})
 
-        self.assertEqual(updated.request.facts[0].value, "general")
+        confirmed_fact = next(fact for fact in updated.request.facts if fact.key == question.fact_key)
+        self.assertEqual(confirmed_fact.value, "general")
         vat_result = next(result for result in updated.results if result.tax_id == "vat")
         self.assertEqual(vat_result.status, TaxStatus.BLOCKED)
         self.assertEqual(vat_result.diagnostics, ("confirmation_conflict",))

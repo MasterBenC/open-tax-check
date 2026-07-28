@@ -33,8 +33,12 @@ SOURCE = RuleSource("国家税务总局", "https://www.chinatax.gov.cn/example",
 def vat_pack() -> TaxPack:
     return TaxPack(
         "vat-cn-2026", "vat", "CN", PERIOD, PackMaturity.SCREENING,
-        (FactRequirement("entity.vat_registration", "choice", ("营业执照",), 90, True, True),),
+        (
+            FactRequirement("entity.vat_registration", "choice", ("营业执照",), 90, True, True),
+            FactRequirement("activity.screening_applies", "boolean", (), 1, False, False),
+        ),
         (), "vat.screening", (SOURCE,),
+        "2026.1", "zh-CN.v1", ("activity.screening_applies",),
     )
 
 
@@ -116,7 +120,9 @@ class TaxHealthFacadeTests(unittest.TestCase):
         self.assertTrue(payload_keys(payload).isdisjoint({"model", "token", "prompt", "hidden_reasoning"}))
 
     def test_continue_facade_applies_confirmation_and_updates_report(self) -> None:
-        request = TaxCheckRequest(PERIOD, "CN")
+        request = TaxCheckRequest(
+            PERIOD, "CN", (TaxFact("activity.screening_applies", True, FactState.OBSERVED, ("source-001",)),)
+        )
         initial = run_tax_health_check(
             request, packs=(vat_pack(),), evaluators={"vat.screening": calculated}, occurred_at=OCCURRED_AT
         )

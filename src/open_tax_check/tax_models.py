@@ -248,7 +248,7 @@ class TaxPack:
         object.__setattr__(self, "sources", tuple(self.sources))
         object.__setattr__(self, "applicability_fact_keys", tuple(self.applicability_fact_keys))
         _require_identifiers(self.local_parameter_keys)
-        if self.maturity is PackMaturity.SCREENING and self.rule_version != "1.0.0":
+        if self.maturity is PackMaturity.SCREENING:
             _require_identifier(self.rule_version)
             _require_identifier(self.fact_catalog_version)
             if not self.applicability_fact_keys:

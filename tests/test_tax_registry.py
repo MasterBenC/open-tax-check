@@ -69,7 +69,7 @@ def payload(**overrides: object) -> dict[str, object]:
         "jurisdiction": "CN",
         "effective_from": "2023-01-01",
         "effective_to": "2023-12-31",
-        "maturity": "screening",
+        "maturity": "calculation",
         "requirements": [{
             "fact_key": "entity.registration",
             "answer_type": "choice",
@@ -79,7 +79,7 @@ def payload(**overrides: object) -> dict[str, object]:
             "critical": True,
         }],
         "local_parameter_keys": [],
-        "evaluator_id": "vat.screening",
+        "evaluator_id": "vat.calculation",
         "sources": [{
             "title": "Official source",
             "url": "https://example.test/source",
@@ -94,6 +94,7 @@ def screening_payload(**overrides: object) -> dict[str, object]:
     result = payload(
         schema_version="1.1.0",
         pack_id="vat-cn-screening-v1",
+        maturity="screening",
         requirements=[{
             "fact_key": "activity.acquired_land_or_building_rights",
             "answer_type": "boolean",

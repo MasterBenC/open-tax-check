@@ -47,21 +47,27 @@ def pack(
     evaluator_id: str | None = "vat.screening",
     period: DateRange = PERIOD,
 ) -> TaxPack:
+    all_requirements = requirements if requirements is not None else (requirement(),)
+    all_requirements += (FactRequirement("activity.screening_applies", "boolean", (), 1, False, False),)
     return TaxPack(
         pack_id,
         tax_id,
         "CN",
         period,
         PackMaturity.SCREENING,
-        requirements if requirements is not None else (requirement(),),
+        all_requirements,
         local_parameter_keys,
         evaluator_id,
         (SOURCE,),
+        "2026.1",
+        "zh-CN.v1",
+        ("activity.screening_applies",),
     )
 
 
 def request(*facts: TaxFact, period: DateRange = PERIOD) -> TaxCheckRequest:
-    return TaxCheckRequest(period, "CN", facts)
+    applicability = TaxFact("activity.screening_applies", True, FactState.OBSERVED, ("source-001",))
+    return TaxCheckRequest(period, "CN", (applicability, *facts))
 
 
 def calculated(context: object) -> EvaluationOutcome:
