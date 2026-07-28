@@ -22,6 +22,11 @@
     {"fact_key":"activity.acquired_taxable_vehicle","question_zh":"是否购置应税车辆？","help_zh":"请按车辆购置事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供车辆登记、发票和付款资料。"},
     {"fact_key":"assets.owns_or_manages_taxable_vehicle_or_vessel","question_zh":"是否拥有或管理应税车辆、船舶？","help_zh":"请按登记和实际管理情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供车辆船舶登记和台账。"},
     {"fact_key":"activity.occupies_cultivated_land_for_construction","question_zh":"是否占用耕地进行建设？","help_zh":"请按审批和实际建设情况回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供用地审批和土地资料。"},
-    {"fact_key":"activity.acquired_land_or_building_rights","question_zh":"是否取得土地、房屋权属？","help_zh":"请按合同和权属变更事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供权属、合同和付款资料。"}
+    {"fact_key":"activity.acquired_land_or_building_rights","question_zh":"是否取得土地、房屋权属？","help_zh":"请按合同和权属变更事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供权属、合同和付款资料。"},
+    {"fact_key":"activity.extracts_or_sells_taxable_resources","question_zh":"是否开采或销售应税自然资源？","help_zh":"请按许可、生产和销售事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供资源许可、生产和销售台账。"},
+    {"fact_key":"activity.directly_discharges_taxable_pollutants","question_zh":"是否直接向环境排放应税污染物？","help_zh":"请按排放监测和环保资料回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供监测记录和环保申报资料。"},
+    {"fact_key":"activity.purchases_tobacco_leaves","question_zh":"是否收购烟叶？","help_zh":"请按实际收购业务回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供收购和付款记录。"},
+    {"fact_key":"activity.has_foreign_vessel_entering_china_port","question_zh":"是否有外国籍船舶进入中国港口？","help_zh":"请按港口进出记录回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供港口记录和船舶证书。"},
+    {"fact_key":"activity.imports_or_exports_dutiable_goods","question_zh":"是否进出口应税货物？","help_zh":"请按报关和合同事实回答。","answer_type":"boolean","choices":[{"value":true,"label_zh":"是"},{"value":false,"label_zh":"否"}],"evidence_help_zh":"请提供报关单、合同和付款记录。"}
   ]
 }

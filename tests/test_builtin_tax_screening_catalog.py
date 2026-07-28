@@ -23,6 +23,11 @@ EXPECTED = {
     "vehicle_vessel_tax": "assets.owns_or_manages_taxable_vehicle_or_vessel",
     "cultivated_land_occupation_tax": "activity.occupies_cultivated_land_for_construction",
     "deed_tax": "activity.acquired_land_or_building_rights",
+    "resource_tax": "activity.extracts_or_sells_taxable_resources",
+    "environmental_protection_tax": "activity.directly_discharges_taxable_pollutants",
+    "tobacco_tax": "activity.purchases_tobacco_leaves",
+    "vessel_tonnage_tax": "activity.has_foreign_vessel_entering_china_port",
+    "customs_duty": "activity.imports_or_exports_dutiable_goods",
 }
 
 
@@ -45,7 +50,7 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
             packs = tuple(item.pack for item in select_pack_segments(self.packs, tax_id=tax_id, jurisdiction="CN", period=PERIOD).segments)
             for value, expected in ((False, TaxStatus.NOT_APPLICABLE), (True, TaxStatus.NEEDS_EVIDENCE)):
                 result = screen_tax_items(TaxCheckRequest(PERIOD, "CN", (TaxFact(fact_key, value, FactState.CONFIRMED, confirmed_by="customer", confirmed_at="2026-07-28T10:00:00+08:00"),)), packs, builtin_tax_evaluators(), tax_ids=(tax_id,))[0]
-                local_policy_ids = {"local_education_surcharge", "house_property_tax", "urban_land_use_tax", "vehicle_vessel_tax", "cultivated_land_occupation_tax", "deed_tax"}
+                local_policy_ids = {"local_education_surcharge", "house_property_tax", "urban_land_use_tax", "vehicle_vessel_tax", "cultivated_land_occupation_tax", "deed_tax", "resource_tax", "environmental_protection_tax"}
                 expected_status = TaxStatus.NEEDS_LOCAL_POLICY if tax_id in local_policy_ids and value else expected
                 self.assertEqual(result.status, expected_status)
 
