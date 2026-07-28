@@ -36,3 +36,6 @@ Issues = "https://github.com/MasterBenC/open-tax-check/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"open_tax_check.tax_packs" = ["*.json"]

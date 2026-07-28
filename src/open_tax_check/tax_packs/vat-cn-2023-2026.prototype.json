@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0.0",
+  "pack_id": "vat-cn-2023-2026-prototype",
+  "tax_id": "vat",
+  "jurisdiction": "CN",
+  "effective_from": "2023-01-01",
+  "effective_to": "2026-12-31",
+  "maturity": "prototype",
+  "requirements": [
+    {
+      "fact_key": "entity.vat_registration_status",
+      "answer_type": "choice",
+      "evidence_types": ["tax_registration_record"],
+      "priority": 100,
+      "blocking": true,
+      "critical": true
+    }
+  ],
+  "local_parameter_keys": [],
+  "evaluator_id": null,
+  "sources": [
+    {
+      "title": "China Tax System - Types of Taxes",
+      "url": "https://www.chinatax.gov.cn/eng/c101270/c101272/c5157954/content.html",
+      "published_on": "2020-10-26"
+    }
+  ]
+}
