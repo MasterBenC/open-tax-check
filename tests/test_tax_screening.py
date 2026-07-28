@@ -189,6 +189,76 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.diagnostics, ("rule_evaluator_failed",))
         self.assertNotIn("customer-secret", repr(result))
 
+    def test_period_transition_with_different_evaluators_blocks_without_dispatch(self) -> None:
+        calls: list[str] = []
+
+        def january_start(context: object) -> EvaluationOutcome:
+            calls.append("january_start")
+            return calculated(context)
+
+        def january_end(context: object) -> EvaluationOutcome:
+            calls.append("january_end")
+            return calculated(context)
+
+        first = pack(
+            pack_id="vat-cn-2026-start",
+            evaluator_id="vat.start",
+            period=DateRange(date(2026, 1, 1), date(2026, 1, 15)),
+        )
+        second = pack(
+            pack_id="vat-cn-2026-end",
+            evaluator_id="vat.end",
+            period=DateRange(date(2026, 1, 16), date(2026, 1, 31)),
+        )
+        result = screen_tax_items(
+            request(TaxFact("entity.registration", "general", FactState.OBSERVED, ("file-001",))),
+            (first, second),
+            {"vat.start": january_start, "vat.end": january_end},
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("inconsistent_rule_evaluators",))
+        self.assertEqual(calls, [])
+
+    def test_unsafe_evaluator_diagnostic_is_blocked_without_leakage(self) -> None:
+        def unsafe_diagnostic(context: object) -> EvaluationOutcome:
+            return EvaluationOutcome(
+                TaxStatus.CALCULATED,
+                diagnostics=("customer secret",),
+                evidence_refs=("source-001",),
+            )
+
+        result = screen_tax_items(
+            request(TaxFact("entity.registration", "general", FactState.OBSERVED, ("file-001",))),
+            (pack(),),
+            {"vat.screening": unsafe_diagnostic},
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("invalid_evaluator_outcome",))
+        self.assertNotIn("customer secret", repr(result))
+
+    def test_unsafe_evaluator_evidence_reference_is_blocked_without_leakage(self) -> None:
+        def unsafe_evidence(context: object) -> EvaluationOutcome:
+            return EvaluationOutcome(
+                TaxStatus.CALCULATED,
+                diagnostics=("demo_check_complete",),
+                evidence_refs=("customer/file",),
+            )
+
+        result = screen_tax_items(
+            request(TaxFact("entity.registration", "general", FactState.OBSERVED, ("file-001",))),
+            (pack(),),
+            {"vat.screening": unsafe_evidence},
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("invalid_evaluator_outcome",))
+        self.assertNotIn("customer/file", repr(result))
+
 
 class QuestionQueueTests(unittest.TestCase):
     def test_question_queue_merges_same_fact_key_deterministically(self) -> None:

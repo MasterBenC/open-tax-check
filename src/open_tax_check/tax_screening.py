@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import hashlib
+import re
 from types import MappingProxyType
 
 from .tax_models import (
@@ -34,6 +35,9 @@ class TaxEvaluationContext:
 
 
 RuleEvaluator = Callable[[TaxEvaluationContext], EvaluationOutcome]
+
+_DIAGNOSTIC_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_EVIDENCE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
 def _ordered_unique(values: tuple[object, ...]) -> tuple[object, ...]:
@@ -100,6 +104,22 @@ def _blocked_result(
     )
 
 
+def _is_safe_evaluator_outcome(outcome: object) -> bool:
+    return (
+        isinstance(outcome, EvaluationOutcome)
+        and outcome.status in (TaxStatus.CALCULATED, TaxStatus.NOT_APPLICABLE)
+        and (outcome.status is not TaxStatus.NOT_APPLICABLE or bool(outcome.evidence_refs))
+        and all(
+            isinstance(diagnostic, str) and _DIAGNOSTIC_CODE.fullmatch(diagnostic)
+            for diagnostic in outcome.diagnostics
+        )
+        and all(
+            isinstance(reference, str) and _EVIDENCE_REFERENCE.fullmatch(reference)
+            for reference in outcome.evidence_refs
+        )
+    )
+
+
 def _screen_one_tax(
     tax_id: str,
     request: TaxCheckRequest,
@@ -127,6 +147,8 @@ def _screen_one_tax(
         return TaxResult(tax_id, TaxStatus.NEEDS_EVIDENCE, pack_ids, gaps=gaps, rule_sources=sources)
 
     evaluator_ids = tuple(_ordered_unique(tuple(pack.evaluator_id for pack in selected_packs)))
+    if len(evaluator_ids) != 1:
+        return _blocked_result(tax_id, "inconsistent_rule_evaluators", pack_ids, sources)
     if not evaluator_ids or any(evaluator_id is None or evaluator_id not in evaluators for evaluator_id in evaluator_ids):
         return _blocked_result(tax_id, "rule_evaluator_unavailable", pack_ids, sources)
 
@@ -136,11 +158,7 @@ def _screen_one_tax(
         outcome = evaluator(context)
     except Exception:
         return _blocked_result(tax_id, "rule_evaluator_failed", pack_ids, sources)
-    if (
-        not isinstance(outcome, EvaluationOutcome)
-        or outcome.status not in (TaxStatus.CALCULATED, TaxStatus.NOT_APPLICABLE)
-        or (outcome.status is TaxStatus.NOT_APPLICABLE and not outcome.evidence_refs)
-    ):
+    if not _is_safe_evaluator_outcome(outcome):
         return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
     return TaxResult(
         tax_id=tax_id,
