@@ -94,6 +94,7 @@ class TaxWorkflowTests(unittest.TestCase):
 
     def test_confirmation_reruns_only_affected_tax_and_audits_digest(self) -> None:
         calls = {"vat": 0, "eit": 0}
+        prompts = {}
 
         def vat_evaluator(context: object) -> EvaluationOutcome:
             calls["vat"] += 1
@@ -106,6 +107,7 @@ class TaxWorkflowTests(unittest.TestCase):
         initial = start_tax_health_check(
             self.request, packs=self.packs,
             evaluators={"vat.screening": vat_evaluator, "eit.screening": eit_evaluator},
+            prompts=prompts,
             occurred_at=OCCURRED_AT,
         )
         vat_question = next(question for question in initial.questions if question.fact_key == "entity.vat_registration")
@@ -118,6 +120,7 @@ class TaxWorkflowTests(unittest.TestCase):
         updated = apply_confirmations(
             initial, (confirmation,), packs=self.packs,
             evaluators={"vat.screening": vat_evaluator, "eit.screening": eit_evaluator},
+            prompts=prompts,
         )
 
         self.assertEqual(calls, {"vat": 1, "eit": 0})
@@ -181,7 +184,7 @@ class TaxWorkflowTests(unittest.TestCase):
                     answer_type=answer_type,
                 )
                 initial = start_tax_health_check(
-                    TaxCheckRequest(PERIOD, "CN"),
+                    self.request,
                     packs=(pack,),
                     evaluators={},
                     occurred_at=OCCURRED_AT,
@@ -231,7 +234,7 @@ class TaxWorkflowTests(unittest.TestCase):
                     answer_type=answer_type,
                 )
                 initial = start_tax_health_check(
-                    TaxCheckRequest(PERIOD, "CN"),
+                    self.request,
                     packs=(pack,),
                     evaluators={},
                     occurred_at=OCCURRED_AT,

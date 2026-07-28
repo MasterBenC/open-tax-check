@@ -6,9 +6,27 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from .tax_models import Confirmation, TaxCheckRequest, TaxCheckSnapshot, TaxPack
+from .tax_prompts import load_builtin_fact_catalog
 from .tax_registry import load_builtin_tax_packs
-from .tax_screening import RuleEvaluator
+from .tax_screening import (
+    GENERIC_SCREENING_EVALUATOR_ID,
+    RuleEvaluator,
+    builtin_tax_evaluators,
+)
 from .tax_workflow import apply_confirmations, start_tax_health_check
+
+
+def _resolved_evaluators(
+    packs: tuple[TaxPack, ...] | None,
+    evaluators: Mapping[str, RuleEvaluator] | None,
+) -> Mapping[str, RuleEvaluator]:
+    if evaluators is not None:
+        return evaluators
+    if packs is None or any(
+        pack.evaluator_id == GENERIC_SCREENING_EVALUATOR_ID for pack in packs
+    ):
+        return builtin_tax_evaluators()
+    return {}
 
 
 def run_tax_health_check(
@@ -22,7 +40,8 @@ def run_tax_health_check(
     return start_tax_health_check(
         request,
         packs=load_builtin_tax_packs() if packs is None else tuple(packs),
-        evaluators={} if evaluators is None else evaluators,
+        evaluators=_resolved_evaluators(packs, evaluators),
+        prompts=load_builtin_fact_catalog() if packs is None else {},
         occurred_at=datetime.now(timezone.utc).isoformat() if occurred_at is None else occurred_at,
     )
 
@@ -39,5 +58,6 @@ def continue_tax_health_check(
         snapshot,
         tuple(confirmations),
         packs=load_builtin_tax_packs() if packs is None else tuple(packs),
-        evaluators={} if evaluators is None else evaluators,
+        evaluators=_resolved_evaluators(packs, evaluators),
+        prompts=load_builtin_fact_catalog() if packs is None else {},
     )

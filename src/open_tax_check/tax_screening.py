@@ -11,8 +11,10 @@ from types import MappingProxyType
 from .tax_models import (
     EvaluationOutcome,
     FactGap,
+    FactPrompt,
     FactRequirement,
     FactState,
+    PackMaturity,
     Question,
     RuleSource,
     TaxCheckRequest,
@@ -37,6 +39,7 @@ class TaxEvaluationContext:
 
 RuleEvaluator = Callable[[TaxEvaluationContext], EvaluationOutcome]
 
+GENERIC_SCREENING_EVALUATOR_ID = "generic.applicability.screening.v1"
 _DIAGNOSTIC_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _EVIDENCE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
@@ -66,12 +69,21 @@ def _fact_is_sufficient(requirement: FactRequirement, fact: TaxFact | None) -> b
 
 
 def _gaps_for_packs(
-    selected_packs: tuple[TaxPack, ...], facts: Mapping[str, TaxFact]
+    selected_packs: tuple[TaxPack, ...],
+    facts: Mapping[str, TaxFact],
+    *,
+    include_keys: frozenset[str] | None = None,
+    exclude_keys: frozenset[str] = frozenset(),
 ) -> tuple[FactGap, ...]:
     gaps: list[FactGap] = []
     for pack in selected_packs:
         local_parameter_keys = frozenset(pack.local_parameter_keys)
         for requirement in pack.requirements:
+            if (
+                (include_keys is not None and requirement.fact_key not in include_keys)
+                or requirement.fact_key in exclude_keys
+            ):
+                continue
             fact = facts.get(requirement.fact_key)
             if _fact_is_sufficient(requirement, fact):
                 continue
@@ -90,6 +102,53 @@ def _gaps_for_packs(
     return tuple(gaps)
 
 
+def _confirmation_evidence_reference(fact: TaxFact) -> str:
+    digest = hashlib.sha256(
+        "\x1f".join((fact.key, fact.confirmed_by or "", fact.confirmed_at or "")).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"confirmation-{digest}"
+
+
+def generic_screening_evaluator(context: TaxEvaluationContext) -> EvaluationOutcome:
+    """Evaluate evidence-backed boolean applicability without calculating tax."""
+    applicability_keys = tuple(_ordered_unique(tuple(
+        key for pack in context.packs for key in pack.applicability_fact_keys
+    )))
+    facts: list[TaxFact] = []
+    for key in applicability_keys:
+        fact = context.facts.get(key)
+        if (
+            fact is None
+            or not isinstance(fact.value, bool)
+            or fact.state is FactState.INFERRED
+            or (fact.state is FactState.OBSERVED and not fact.evidence_refs)
+        ):
+            raise _EvaluationOutcomeValidationError("invalid_applicability_fact")
+        facts.append(fact)
+
+    if any(fact.value for fact in facts):
+        return EvaluationOutcome(
+            TaxStatus.NEEDS_EVIDENCE,
+            diagnostics=("calculation_rule_unavailable",),
+        )
+
+    evidence_refs = tuple(_ordered_unique(tuple(
+        reference
+        for fact in facts
+        for reference in (
+            fact.evidence_refs
+            if fact.evidence_refs
+            else (_confirmation_evidence_reference(fact),)
+        )
+    )))
+    return EvaluationOutcome(TaxStatus.NOT_APPLICABLE, evidence_refs=evidence_refs)
+
+
+def builtin_tax_evaluators() -> Mapping[str, RuleEvaluator]:
+    """Return immutable built-in evaluator dispatch."""
+    return MappingProxyType({GENERIC_SCREENING_EVALUATOR_ID: generic_screening_evaluator})
+
+
 def _blocked_result(
     tax_id: str,
     diagnostic: str,
@@ -105,10 +164,23 @@ def _blocked_result(
     )
 
 
-def _is_safe_evaluator_outcome(outcome: object) -> bool:
+def _is_safe_evaluator_outcome(
+    outcome: object, selected_packs: tuple[TaxPack, ...]
+) -> bool:
+    screening_incomplete = (
+        isinstance(outcome, EvaluationOutcome)
+        and outcome.status is TaxStatus.NEEDS_EVIDENCE
+        and bool(selected_packs)
+        and all(pack.maturity is PackMaturity.SCREENING for pack in selected_packs)
+        and outcome.diagnostics == ("calculation_rule_unavailable",)
+        and not outcome.evidence_refs
+    )
     return (
         isinstance(outcome, EvaluationOutcome)
-        and outcome.status in (TaxStatus.CALCULATED, TaxStatus.NOT_APPLICABLE)
+        and (
+            outcome.status in (TaxStatus.CALCULATED, TaxStatus.NOT_APPLICABLE)
+            or screening_incomplete
+        )
         and (outcome.status is not TaxStatus.NOT_APPLICABLE or bool(outcome.evidence_refs))
         and all(
             isinstance(diagnostic, str) and _DIAGNOSTIC_CODE.fullmatch(diagnostic)
@@ -139,7 +211,30 @@ def _screen_one_tax(
     if selection.uncovered_periods:
         return _blocked_result(tax_id, "rule_pack_unavailable", pack_ids, sources)
 
-    gaps = _gaps_for_packs(selected_packs, facts)
+    applicability_keys = frozenset(
+        key for pack in selected_packs for key in pack.applicability_fact_keys
+    )
+    if applicability_keys:
+        applicability_gaps = _gaps_for_packs(
+            selected_packs, facts, include_keys=applicability_keys
+        )
+        if applicability_gaps:
+            return TaxResult(
+                tax_id,
+                TaxStatus.NEEDS_EVIDENCE,
+                pack_ids,
+                gaps=applicability_gaps,
+                rule_sources=sources,
+            )
+
+    all_applicability_false = bool(applicability_keys) and all(
+        facts[key].value is False for key in applicability_keys
+    )
+    gaps = (
+        ()
+        if all_applicability_false
+        else _gaps_for_packs(selected_packs, facts, exclude_keys=applicability_keys)
+    )
     if any(gap.reason_code == "missing_local_policy" for gap in gaps):
         return TaxResult(
             tax_id, TaxStatus.NEEDS_LOCAL_POLICY, pack_ids, gaps=gaps, rule_sources=sources
@@ -161,7 +256,7 @@ def _screen_one_tax(
         return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
     except Exception:
         return _blocked_result(tax_id, "rule_evaluator_failed", pack_ids, sources)
-    if not _is_safe_evaluator_outcome(outcome):
+    if not _is_safe_evaluator_outcome(outcome, selected_packs):
         return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
     return TaxResult(
         tax_id=tax_id,
@@ -190,7 +285,10 @@ def screen_tax_items(
     )
 
 
-def build_question_queue(results: tuple[TaxResult, ...]) -> tuple[Question, ...]:
+def build_question_queue(
+    results: tuple[TaxResult, ...],
+    prompts: Mapping[str, FactPrompt] | None = None,
+) -> tuple[Question, ...]:
     """Merge all unresolved fact gaps into a stable, one-question-per-fact queue."""
     grouped: dict[str, list[tuple[str, FactGap]]] = {}
     for result in results:

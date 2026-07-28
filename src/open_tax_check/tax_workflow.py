@@ -13,6 +13,7 @@ from .tax_models import (
     AuditEvent,
     Confirmation,
     FactGap,
+    FactPrompt,
     FactState,
     Question,
     TaxCheckRequest,
@@ -158,12 +159,13 @@ def start_tax_health_check(
     *,
     packs: tuple[TaxPack, ...],
     evaluators: Mapping[str, RuleEvaluator],
+    prompts: Mapping[str, FactPrompt] | None = None,
     occurred_at: str,
 ) -> TaxCheckSnapshot:
     """Create revision one without accessing a system clock or source files."""
     _validate_timestamp(occurred_at)
     results = screen_tax_items(request, packs, evaluators)
-    questions = build_question_queue(results)
+    questions = build_question_queue(results, prompts)
     return TaxCheckSnapshot(
         request=request,
         results=results,
@@ -180,6 +182,7 @@ def apply_confirmations(
     *,
     packs: tuple[TaxPack, ...],
     evaluators: Mapping[str, RuleEvaluator],
+    prompts: Mapping[str, FactPrompt] | None = None,
 ) -> TaxCheckSnapshot:
     """Apply a validated customer batch, rerunning only materially affected taxes."""
     questions = _known_questions(snapshot)
@@ -293,7 +296,7 @@ def apply_confirmations(
     return TaxCheckSnapshot(
         request=request,
         results=results,
-        questions=build_question_queue(results),
+        questions=build_question_queue(results, prompts),
         audit_events=snapshot.audit_events + tuple(audit_events),
         revision=snapshot.revision + 1,
         question_history=_question_history(snapshot),

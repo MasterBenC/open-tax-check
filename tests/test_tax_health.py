@@ -23,6 +23,7 @@ from open_tax_check.tax_models import (
 )
 from open_tax_check.tax_registry import TAX_DEFINITIONS
 from open_tax_check.tax_reporting import render_tax_health_report, tax_snapshot_payload
+from open_tax_check.tax_screening import GENERIC_SCREENING_EVALUATOR_ID
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
@@ -46,6 +47,31 @@ def calculated(context: object) -> EvaluationOutcome:
     return EvaluationOutcome(TaxStatus.CALCULATED, ("vat_complete",), ("source-001",))
 
 
+def generic_vat_pack() -> TaxPack:
+    requirement = FactRequirement(
+        "activity.has_vat_taxable_transaction",
+        "boolean",
+        ("customer_confirmation",),
+        100,
+        True,
+        True,
+    )
+    return TaxPack(
+        "vat-cn-2026-screening-v1",
+        "vat",
+        "CN",
+        PERIOD,
+        PackMaturity.SCREENING,
+        (requirement,),
+        (),
+        GENERIC_SCREENING_EVALUATOR_ID,
+        (SOURCE,),
+        "2026.1",
+        "zh-CN.v1",
+        (requirement.fact_key,),
+    )
+
+
 def payload_keys(value: object) -> set[str]:
     if isinstance(value, dict):
         return set(value) | set().union(*(payload_keys(item) for item in value.values()))
@@ -55,6 +81,56 @@ def payload_keys(value: object) -> set[str]:
 
 
 class TaxHealthFacadeTests(unittest.TestCase):
+    def test_exact_generic_pack_uses_builtin_evaluator_without_caller_mapping(self) -> None:
+        request = TaxCheckRequest(
+            PERIOD,
+            "CN",
+            (
+                TaxFact(
+                    "activity.has_vat_taxable_transaction",
+                    False,
+                    FactState.CONFIRMED,
+                    confirmed_by="customer",
+                    confirmed_at=OCCURRED_AT,
+                ),
+            ),
+        )
+
+        snapshot = run_tax_health_check(
+            request,
+            packs=(generic_vat_pack(),),
+            occurred_at=OCCURRED_AT,
+        )
+
+        vat = next(result for result in snapshot.results if result.tax_id == "vat")
+        self.assertEqual(vat.status, TaxStatus.NOT_APPLICABLE)
+
+    def test_explicit_empty_evaluator_mapping_does_not_inject_builtin_generic(self) -> None:
+        request = TaxCheckRequest(
+            PERIOD,
+            "CN",
+            (
+                TaxFact(
+                    "activity.has_vat_taxable_transaction",
+                    False,
+                    FactState.CONFIRMED,
+                    confirmed_by="customer",
+                    confirmed_at=OCCURRED_AT,
+                ),
+            ),
+        )
+
+        snapshot = run_tax_health_check(
+            request,
+            packs=(generic_vat_pack(),),
+            evaluators={},
+            occurred_at=OCCURRED_AT,
+        )
+
+        vat = next(result for result in snapshot.results if result.tax_id == "vat")
+        self.assertEqual(vat.status, TaxStatus.BLOCKED)
+        self.assertEqual(vat.diagnostics, ("rule_evaluator_unavailable",))
+
     def test_payload_excludes_confirmation_and_question_history_but_preserves_active_safety_metadata(self) -> None:
         active_question = Question(
             "active-question", "entity.active_fact", ("vat",), ("missing_fact",),

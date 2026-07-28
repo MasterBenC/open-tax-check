@@ -21,7 +21,14 @@ from open_tax_check.tax_models import (
     TaxResult,
     TaxStatus,
 )
-from open_tax_check.tax_screening import build_question_queue, screen_tax_items
+from open_tax_check.tax_screening import (
+    GENERIC_SCREENING_EVALUATOR_ID,
+    TaxEvaluationContext,
+    build_question_queue,
+    builtin_tax_evaluators,
+    generic_screening_evaluator,
+    screen_tax_items,
+)
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
@@ -78,7 +85,139 @@ def calculated(context: object) -> EvaluationOutcome:
     )
 
 
+def generic_pack(
+    *extra_requirements: FactRequirement,
+    local_parameter_keys: tuple[str, ...] = (),
+) -> TaxPack:
+    applicability = FactRequirement(
+        "activity.has_vat_taxable_transaction",
+        "boolean",
+        ("customer_confirmation",),
+        100,
+        True,
+        True,
+    )
+    return TaxPack(
+        "vat-cn-2026-screening-v1",
+        "vat",
+        "CN",
+        PERIOD,
+        PackMaturity.SCREENING,
+        (applicability, *extra_requirements),
+        local_parameter_keys,
+        GENERIC_SCREENING_EVALUATOR_ID,
+        (SOURCE,),
+        "2026.1",
+        "zh-CN.v1",
+        (applicability.fact_key,),
+    )
+
+
+def applicability_request(
+    value: bool,
+    state: FactState,
+    *,
+    evidence_refs: tuple[str, ...] = (),
+    extra_facts: tuple[TaxFact, ...] = (),
+) -> TaxCheckRequest:
+    confirmation = (
+        {"confirmed_by": "customer", "confirmed_at": "2026-07-28T10:00:00+08:00"}
+        if state is FactState.CONFIRMED
+        else {}
+    )
+    return TaxCheckRequest(
+        PERIOD,
+        "CN",
+        (
+            TaxFact(
+                "activity.has_vat_taxable_transaction",
+                value,
+                state,
+                evidence_refs,
+                **confirmation,
+            ),
+            *extra_facts,
+        ),
+    )
+
+
 class TaxScreeningTests(unittest.TestCase):
+    def test_direct_generic_evaluator_rejects_inferred_applicability_fact(self) -> None:
+        inferred = TaxFact(
+            "activity.has_vat_taxable_transaction",
+            False,
+            FactState.INFERRED,
+        )
+        context = TaxEvaluationContext(
+            "vat",
+            applicability_request(False, FactState.INFERRED),
+            (generic_pack(),),
+            {inferred.key: inferred},
+        )
+
+        with self.assertRaisesRegex(ValueError, "^invalid_applicability_fact$"):
+            generic_screening_evaluator(context)
+
+    def test_confirmed_negative_applicability_is_not_applicable(self) -> None:
+        result = screen_tax_items(
+            applicability_request(False, FactState.CONFIRMED),
+            (generic_pack(),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NOT_APPLICABLE)
+        self.assertRegex(result.evidence_refs[0], r"^confirmation-[0-9a-f]{16}$")
+
+    def test_inferred_negative_applicability_still_needs_evidence(self) -> None:
+        result = screen_tax_items(
+            applicability_request(False, FactState.INFERRED),
+            (generic_pack(),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+        self.assertEqual(
+            tuple(gap.fact_key for gap in result.gaps),
+            ("activity.has_vat_taxable_transaction",),
+        )
+
+    def test_confirmed_positive_without_calculation_pack_never_calculates(self) -> None:
+        result = screen_tax_items(
+            applicability_request(True, FactState.CONFIRMED),
+            (generic_pack(),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+        self.assertEqual(result.diagnostics, ("calculation_rule_unavailable",))
+
+    def test_negative_applicability_does_not_request_irrelevant_local_parameters(self) -> None:
+        local = FactRequirement("policy.vat_local_rule", "boolean", (), 90, True, True)
+        result = screen_tax_items(
+            applicability_request(False, FactState.CONFIRMED),
+            (generic_pack(local, local_parameter_keys=(local.fact_key,)),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NOT_APPLICABLE)
+        self.assertEqual(result.gaps, ())
+
+    def test_positive_applicability_with_missing_local_parameter_needs_local_policy(self) -> None:
+        local = FactRequirement("policy.vat_local_rule", "boolean", (), 90, True, True)
+        result = screen_tax_items(
+            applicability_request(True, FactState.CONFIRMED),
+            (generic_pack(local, local_parameter_keys=(local.fact_key,)),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_LOCAL_POLICY)
+        self.assertEqual(result.gaps[0].reason_code, "missing_local_policy")
+
     def test_missing_formal_pack_blocks_with_public_diagnostic(self) -> None:
         result = screen_tax_items(request(), (), {}, tax_ids=("vat",))[0]
 
