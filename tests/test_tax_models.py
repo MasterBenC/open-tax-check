@@ -10,10 +10,12 @@ from open_tax_check.tax_models import (
     DateRange,
     FactRequirement,
     FactState,
+    PackMaturity,
     Question,
     TaxCheckRequest,
     TaxCheckSnapshot,
     TaxFact,
+    TaxPack,
     TaxResult,
     TaxStatus,
 )
@@ -81,6 +83,36 @@ class TaxModelTests(unittest.TestCase):
     def test_not_applicable_result_requires_evidence(self):
         with self.assertRaisesRegex(ValueError, "not_applicable_without_evidence"):
             TaxResult(tax_id="vat", status=TaxStatus.NOT_APPLICABLE)
+
+    def test_not_applicable_status_string_requires_evidence(self):
+        with self.assertRaisesRegex(ValueError, "not_applicable_without_evidence"):
+            TaxResult(tax_id="vat", status="not_applicable")
+
+    def test_tax_fact_rejects_invalid_deserialized_state(self):
+        with self.assertRaisesRegex(ValueError, "invalid_fact_state"):
+            TaxFact("entity.type", "company", "unknown")
+
+    def test_confirmed_state_string_requires_confirmation_metadata(self):
+        with self.assertRaisesRegex(ValueError, "invalid_confirmation"):
+            TaxFact("entity.type", "company", "confirmed")
+
+    def test_tax_result_rejects_invalid_deserialized_status(self):
+        with self.assertRaisesRegex(ValueError, "invalid_tax_status"):
+            TaxResult("vat", "unknown")
+
+    def test_tax_pack_rejects_invalid_deserialized_maturity(self):
+        with self.assertRaisesRegex(ValueError, "invalid_pack_maturity"):
+            TaxPack(
+                "vat-cn",
+                "vat",
+                "CN",
+                DateRange(date(2026, 1, 1), date(2026, 1, 31)),
+                "unknown",
+                (),
+                (),
+                None,
+                (),
+            )
 
     def test_question_rejects_boolean_and_out_of_range_priority(self):
         base = dict(

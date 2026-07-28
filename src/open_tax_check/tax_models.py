@@ -28,6 +28,27 @@ class PackMaturity(StrEnum):
     CALCULATION = "calculation"
 
 
+def _coerce_fact_state(value: FactState) -> FactState:
+    try:
+        return FactState(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid_fact_state") from error
+
+
+def _coerce_tax_status(value: TaxStatus) -> TaxStatus:
+    try:
+        return TaxStatus(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid_tax_status") from error
+
+
+def _coerce_pack_maturity(value: PackMaturity) -> PackMaturity:
+    try:
+        return PackMaturity(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid_pack_maturity") from error
+
+
 def _require_identifier(value: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("empty_identifier")
@@ -104,6 +125,7 @@ class TaxFact:
         _require_identifier(self.key)
         _validate_fact_value(self.value)
         object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        object.__setattr__(self, "state", _coerce_fact_state(self.state))
         if self.state is FactState.CONFIRMED:
             if not isinstance(self.confirmed_by, str) or not self.confirmed_by.strip() or self.confirmed_at is None:
                 raise ValueError("invalid_confirmation")
@@ -140,6 +162,7 @@ class TaxPack:
         _require_identifier(self.pack_id)
         _require_identifier(self.tax_id)
         _require_identifier(self.jurisdiction)
+        object.__setattr__(self, "maturity", _coerce_pack_maturity(self.maturity))
         if self.evaluator_id is not None:
             _require_identifier(self.evaluator_id)
         object.__setattr__(self, "requirements", tuple(self.requirements))
@@ -186,6 +209,7 @@ class EvaluationOutcome:
     evidence_refs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "status", _coerce_tax_status(self.status))
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
         object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
 
@@ -202,6 +226,7 @@ class TaxResult:
 
     def __post_init__(self) -> None:
         _require_identifier(self.tax_id)
+        object.__setattr__(self, "status", _coerce_tax_status(self.status))
         object.__setattr__(self, "rule_pack_ids", tuple(self.rule_pack_ids))
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
         object.__setattr__(self, "gaps", tuple(self.gaps))
