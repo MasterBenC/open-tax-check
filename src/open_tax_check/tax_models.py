@@ -334,11 +334,13 @@ class TaxCheckSnapshot:
     questions: tuple[Question, ...]
     audit_events: tuple[AuditEvent, ...]
     revision: int
+    question_history: tuple[Question, ...] = ()
     schema_version: str = TAX_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "results", tuple(self.results))
         object.__setattr__(self, "questions", tuple(self.questions))
         object.__setattr__(self, "audit_events", tuple(self.audit_events))
+        object.__setattr__(self, "question_history", tuple(self.question_history))
         if len({result.tax_id for result in self.results}) != len(self.results):
             raise ValueError("duplicate_result_tax_id")

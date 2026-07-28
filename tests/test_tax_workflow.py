@@ -184,6 +184,43 @@ class TaxWorkflowTests(unittest.TestCase):
         self.assertEqual(updated.audit_events[-1].event_type, "confirmation_conflict")
         self.assertEqual(updated.revision, 3)
 
+    def test_conflict_uses_stored_question_after_packs_change_and_replay_is_idempotent(self) -> None:
+        calls = {"vat": 0}
+
+        def vat_evaluator(context: object) -> EvaluationOutcome:
+            calls["vat"] += 1
+            return EvaluationOutcome(TaxStatus.CALCULATED, (), ("source-001",))
+
+        initial = start_tax_health_check(
+            self.request,
+            packs=self.packs,
+            evaluators={"vat.screening": vat_evaluator},
+            occurred_at=OCCURRED_AT,
+        )
+        question = next(item for item in initial.questions if item.fact_key == "entity.vat_registration")
+        first = Confirmation(question.question_id, question.fact_key, "general", "customer", "2026-07-28T10:05:00+08:00")
+        confirmed = apply_confirmations(
+            initial, (first,), packs=self.packs, evaluators={"vat.screening": vat_evaluator}
+        )
+        conflict = Confirmation(question.question_id, question.fact_key, "small_scale", "customer", "2026-07-28T10:06:00+08:00")
+
+        conflicted = apply_confirmations(
+            confirmed, (conflict,), packs=(), evaluators={"vat.screening": vat_evaluator}
+        )
+        corrective = next(item for item in conflicted.questions if item.fact_key == question.fact_key)
+        replayed = apply_confirmations(
+            conflicted, (conflict,), packs=(), evaluators={"vat.screening": vat_evaluator}
+        )
+
+        self.assertEqual(corrective.answer_type, question.answer_type)
+        self.assertEqual(corrective.evidence_types, question.evidence_types)
+        self.assertEqual(corrective.priority, question.priority)
+        self.assertEqual(corrective.blocking, question.blocking)
+        self.assertEqual(calls, {"vat": 1})
+        self.assertEqual(replayed, conflicted)
+        self.assertEqual(len(replayed.audit_events), len(conflicted.audit_events))
+        self.assertEqual(replayed.revision, conflicted.revision)
+
 
 if __name__ == "__main__":
     unittest.main()

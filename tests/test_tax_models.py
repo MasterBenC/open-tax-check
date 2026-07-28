@@ -175,6 +175,19 @@ class TaxModelTests(unittest.TestCase):
         self.assertEqual(event.tax_ids, ("vat",))
         self.assertEqual(event.fact_keys, ("entity.type",))
 
+    def test_snapshot_canonicalizes_question_history(self):
+        request = TaxCheckRequest(DateRange(date(2026, 1, 1), date(2026, 1, 31)), "CN")
+        question = Question(
+            "q-001", "entity.type", ("vat",), ("missing_fact",), "text", (), 10, True
+        )
+
+        snapshot = TaxCheckSnapshot(
+            request, (TaxResult("vat", TaxStatus.CALCULATED),), (), (), 1,
+            question_history=[question],
+        )
+
+        self.assertEqual(snapshot.question_history, (question,))
+
 
 if __name__ == "__main__":
     unittest.main()

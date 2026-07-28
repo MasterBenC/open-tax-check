@@ -20,7 +20,6 @@ from .tax_models import (
     TaxStatus,
     _validate_timestamp,
 )
-from .tax_registry import select_pack_segments
 from .tax_screening import RuleEvaluator, build_question_queue, screen_tax_items
 
 
@@ -53,63 +52,27 @@ def _updated_request(request: TaxCheckRequest, facts: Mapping[str, TaxFact]) -> 
     )
 
 
-def _previous_question_tax_ids(snapshot: TaxCheckSnapshot, fact_key: str) -> tuple[str, ...]:
-    for event in reversed(snapshot.audit_events):
-        if event.event_type == "fact_confirmed" and event.fact_keys == (fact_key,):
-            return event.tax_ids
-    return ()
+def _question_history(snapshot: TaxCheckSnapshot) -> tuple[Question, ...]:
+    """Preserve original question records before removing resolved questions."""
+    by_id = {question.question_id: question for question in snapshot.question_history}
+    for question in snapshot.questions:
+        by_id.setdefault(question.question_id, question)
+    return tuple(by_id.values())
 
 
-def _previous_question(
-    snapshot: TaxCheckSnapshot,
-    fact_key: str,
-    tax_ids: tuple[str, ...],
-    packs: tuple[TaxPack, ...],
-) -> Question | None:
-    """Reconstruct stable question metadata without retaining customer answers."""
-    requirements = []
-    for tax_id in tax_ids:
-        selection = select_pack_segments(
-            packs,
-            tax_id=tax_id,
-            jurisdiction=snapshot.request.jurisdiction,
-            period=snapshot.request.period,
-        )
-        requirements.extend(
-            requirement
-            for segment in selection.segments
-            for requirement in segment.pack.requirements
-            if requirement.fact_key == fact_key
-        )
-    if not requirements:
-        return None
-    return Question(
-        question_id="question-" + hashlib.sha256(fact_key.encode("utf-8")).hexdigest()[:16],
-        fact_key=fact_key,
-        tax_ids=tax_ids,
-        reason_codes=("previously_confirmed",),
-        answer_type=min(item.answer_type for item in requirements),
-        evidence_types=tuple(sorted({evidence for item in requirements for evidence in item.evidence_types})),
-        priority=max(item.priority for item in requirements),
-        blocking=any(item.blocking for item in requirements),
+def _known_questions(snapshot: TaxCheckSnapshot) -> Mapping[str, Question]:
+    return {question.question_id: question for question in _question_history(snapshot)}
+
+
+def _has_recorded_conflict(
+    snapshot: TaxCheckSnapshot, fact_key: str, digest: str
+) -> bool:
+    return any(
+        event.event_type == "confirmation_conflict"
+        and event.fact_keys == (fact_key,)
+        and event.confirmation_digest == digest
+        for event in snapshot.audit_events
     )
-
-
-def _known_confirmation_question(
-    snapshot: TaxCheckSnapshot,
-    confirmation: Confirmation,
-    questions: Mapping[str, Question],
-    packs: tuple[TaxPack, ...],
-) -> Question | None:
-    question = questions.get(confirmation.question_id)
-    if question is not None:
-        return question
-    fact = next((item for item in snapshot.request.facts if item.key == confirmation.fact_key), None)
-    stable_id = "question-" + hashlib.sha256(confirmation.fact_key.encode("utf-8")).hexdigest()[:16]
-    if fact is not None and fact.state is FactState.CONFIRMED and confirmation.question_id == stable_id:
-        tax_ids = _previous_question_tax_ids(snapshot, confirmation.fact_key)
-        return _previous_question(snapshot, confirmation.fact_key, tax_ids, packs)
-    return None
 
 
 def _merge_results(
@@ -151,12 +114,14 @@ def start_tax_health_check(
     """Create revision one without accessing a system clock or source files."""
     _validate_timestamp(occurred_at)
     results = screen_tax_items(request, packs, evaluators)
+    questions = build_question_queue(results)
     return TaxCheckSnapshot(
         request=request,
         results=results,
-        questions=build_question_queue(results),
+        questions=questions,
         audit_events=(AuditEvent("check_started", occurred_at),),
         revision=1,
+        question_history=questions,
     )
 
 
@@ -168,10 +133,10 @@ def apply_confirmations(
     evaluators: Mapping[str, RuleEvaluator],
 ) -> TaxCheckSnapshot:
     """Apply a validated customer batch, rerunning only materially affected taxes."""
-    questions = {question.question_id: question for question in snapshot.questions}
+    questions = _known_questions(snapshot)
     resolved: list[tuple[Confirmation, Question]] = []
     for confirmation in confirmations:
-        question = _known_confirmation_question(snapshot, confirmation, questions, packs)
+        question = questions.get(confirmation.question_id)
         if question is None:
             raise ConfirmationError("unknown_question")
         if question.fact_key != confirmation.fact_key:
@@ -179,6 +144,17 @@ def apply_confirmations(
         resolved.append((confirmation, question))
 
     facts = {fact.key: fact for fact in snapshot.request.facts}
+    for confirmation, question in resolved:
+        existing = facts.get(confirmation.fact_key)
+        digest = _confirmation_digest(confirmation.value)
+        if (
+            existing is not None
+            and existing.state is FactState.CONFIRMED
+            and existing.value != confirmation.value
+            and _has_recorded_conflict(snapshot, question.fact_key, digest)
+        ):
+            return snapshot
+
     changed_tax_ids: list[str] = []
     conflicts: list[tuple[Confirmation, Question]] = []
     audit_events: list[AuditEvent] = []
@@ -235,4 +211,5 @@ def apply_confirmations(
         questions=build_question_queue(results),
         audit_events=snapshot.audit_events + tuple(audit_events),
         revision=snapshot.revision + 1,
+        question_history=_question_history(snapshot),
     )
