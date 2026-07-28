@@ -20,7 +20,7 @@ def valid_result(**overrides):
     cell = TableCell(text="x", page_number=1, coordinates=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)), confidence=1.0, row_index=0, column_index=0)
     region = TableRegion(page_number=1, coordinates=cell.coordinates, confidence=0.8, cells=(cell,))
     auth = AuthorizationRecord(provider="off", provider_version="1", transfer_scope="none", subject="case", authorized_at="2026-07-29T10:00:00+08:00", scope="none", cache_retention="none", revoked=False)
-    values = dict(schema_version=DOCUMENT_EXTRACTION_SCHEMA_VERSION, document_id="doc-1", source_id="src-1", filename="a.pdf", media_type="application/pdf", provider="off", provider_version="1", executed_at="2026-07-29T10:00:00+08:00", authorization=auth, status="completed", pages=(page,), blocks=(block,), tables=(region,), issues=(), source_refs=("src-1",))
+    values = dict(schema_version=DOCUMENT_EXTRACTION_SCHEMA_VERSION, document_id="doc-1", source_id="src-1", filename="a.pdf", media_type="application/pdf", provider="host", provider_version="1", executed_at="2026-07-29T10:00:00+08:00", authorization=auth, status="completed", pages=(page,), blocks=(block,), tables=(region,), issues=(), source_refs=("src-1",))
     values.update(overrides)
     return DocumentExtraction(**values)
 
