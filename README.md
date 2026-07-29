@@ -143,6 +143,7 @@ from open_tax_check.tax_reporting import write_tax_health_report, write_tax_heal
 通用税额计算内核只接受调用方明确提供、客户确认且带证据引用的计税基础、税率和扣除额；当前规则包未提供的法定税率不会由程序或 AI 猜测。
 
 参数化规则包的安装、调用、公式和交付边界见 [`docs/calculation-packs.md`](docs/calculation-packs.md)。
+需要一次启用全部 20 个参数化计算模板时，可在 CLI 追加 `--include-parameterized-packs`；默认筛查不会自动计算税额。
 
 ## 隐私与云端授权
 
