@@ -16,7 +16,13 @@ from .ocr_runtime import OcrDependencyError, prepare_ocr_models
 from .pipeline import inspect_case, run_case
 from .tax_health import run_tax_health_check
 from .tax_io import tax_request_from_dict
-from .tax_reporting import write_tax_health_report, write_tax_health_report_docx, write_tax_health_snapshot
+from .tax_reporting import (
+    PdfExportUnavailable,
+    write_tax_health_report,
+    write_tax_health_report_docx,
+    write_tax_health_report_pdf,
+    write_tax_health_snapshot,
+)
 from .reviews import (
     MappingReviewError,
     ReviewError,
@@ -133,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     health_parser.add_argument("--request", required=True, type=Path)
     health_parser.add_argument("--output-dir", required=True, type=Path)
     health_parser.add_argument("--include-docx", action="store_true")
+    health_parser.add_argument("--include-pdf", action="store_true")
     return parser
 
 
@@ -326,6 +333,10 @@ def main() -> int:
             report_path = write_tax_health_report(snapshot, args.output_dir / "税务健康检查报告.md")
             snapshot_path = write_tax_health_snapshot(snapshot, args.output_dir / "tax-health-snapshot.json")
             docx_path = write_tax_health_report_docx(snapshot, args.output_dir / "税务健康检查报告.docx") if args.include_docx else None
+            pdf_path = write_tax_health_report_pdf(snapshot, args.output_dir / "税务健康检查报告.pdf") if args.include_pdf else None
+        except PdfExportUnavailable as error:
+            print(json.dumps({"status": "failed", "error_code": str(error)}, ensure_ascii=False))
+            return 3
         except Exception:
             print(json.dumps({"status": "failed", "error_code": "tax_health_check_failed"}, ensure_ascii=False))
             return 3
@@ -335,6 +346,7 @@ def main() -> int:
             "report_path": str(report_path),
             "snapshot_path": str(snapshot_path),
             "docx_path": str(docx_path) if docx_path is not None else None,
+            "pdf_path": str(pdf_path) if pdf_path is not None else None,
         }, ensure_ascii=False))
         return 0
     return 2

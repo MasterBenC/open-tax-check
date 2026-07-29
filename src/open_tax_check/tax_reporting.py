@@ -7,12 +7,18 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .schemas import to_dict
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
+
+
+class PdfExportUnavailable(RuntimeError):
+    """Raised when the host lacks a supported DOCX-to-PDF renderer."""
 
 
 _STATUS_LABELS = {
@@ -276,4 +282,38 @@ def write_tax_health_report_docx(snapshot: TaxCheckSnapshot, path: Path) -> Path
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
+    return path
+
+
+def write_tax_health_report_pdf(snapshot: TaxCheckSnapshot, path: Path) -> Path:
+    """Convert the deterministic DOCX report to PDF using an explicit host renderer."""
+    renderer = shutil.which("soffice") or shutil.which("libreoffice")
+    if renderer is None:
+        raise PdfExportUnavailable("pdf_renderer_unavailable")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="open-tax-check-pdf-") as directory:
+        temporary_dir = Path(directory)
+        docx_path = temporary_dir / "税务健康检查报告.docx"
+        write_tax_health_report_docx(snapshot, docx_path)
+        completed = subprocess.run(
+            [renderer, "--headless", "--convert-to", "pdf", "--outdir", str(temporary_dir), str(docx_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        rendered_path = temporary_dir / "税务健康检查报告.pdf"
+        if completed.returncode != 0 or not rendered_path.is_file():
+            raise PdfExportUnavailable("pdf_render_failed")
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile("wb", dir=path.parent, suffix=".tmp", delete=False) as handle:
+                temporary_path = Path(handle.name)
+                handle.write(rendered_path.read_bytes())
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
     return path

@@ -22,6 +22,7 @@ from open_tax_check.tax_reporting import (
     write_tax_health_report,
     write_tax_health_snapshot,
     write_tax_health_report_docx,
+    write_tax_health_report_pdf,
 )
 
 
@@ -163,6 +164,14 @@ class TaxHealthReportingTests(unittest.TestCase):
                 self.assertIn("税务健康检查报告", document)
                 self.assertIn('w:styleId="Heading1"', styles)
                 self.assertIn('w:sz w:val="32"', styles)
+
+    def test_pdf_export_reports_missing_renderer_explicitly(self) -> None:
+        from open_tax_check import tax_reporting
+        from unittest.mock import patch
+
+        with patch.object(tax_reporting.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "pdf_renderer_unavailable"):
+                write_tax_health_report_pdf(snapshot_with_every_status(), "report.pdf")
 
 
 if __name__ == "__main__":

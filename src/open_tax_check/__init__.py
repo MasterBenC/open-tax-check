@@ -24,9 +24,12 @@ from .agent_orchestration import (
 )
 
 from .tax_reporting import (
+    PdfExportUnavailable,
     render_tax_health_report,
     tax_snapshot_payload,
     write_tax_health_report,
+    write_tax_health_report_docx,
+    write_tax_health_report_pdf,
     write_tax_health_snapshot,
 )
 from .tax_io import tax_request_from_dict, tax_request_to_dict
