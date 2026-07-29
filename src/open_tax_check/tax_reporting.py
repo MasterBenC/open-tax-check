@@ -36,6 +36,11 @@ _FIXED_DISCLAIMER = (
     "资料或政策不足的项目未形成确定结论；客户自行决定是否申报、调整或另行咨询专业机构",
 )
 
+_FORMULA_LABELS_ZH = {
+    "generic.base_minus_deductions_times_rate.v1": "计税基础减扣除额后乘税率",
+    "generic.base_times_rate.v1": "计税基础乘税率",
+}
+
 
 def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
     """Return an allowlisted, JSON-friendly snapshot without customer facts."""
@@ -91,9 +96,10 @@ def _result_lines(result: TaxResult) -> list[str]:
     ]
     if result.calculation is not None:
         calculation = result.calculation
+        formula_label = _FORMULA_LABELS_ZH.get(calculation.formula_id, "参数化计算公式")
         lines.extend(
             (
-                f"- \u8ba1\u7b97\u516c\u5f0f: {calculation.formula_id}",
+                f"- 计算公式: {formula_label}（{calculation.formula_id}）",
                 f"- \u8ba1\u7a0e\u57fa\u7840: {calculation.tax_base}",
                 f"- \u6263\u9664\u989d: {calculation.deductions}",
                 f"- \u51c0\u8ba1\u7a0e\u57fa\u7840: {calculation.net_base}",

@@ -124,6 +124,7 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("需要补充适用的当地政策参数", report)
         self.assertIn(SOURCE.url, report)
         self.assertIn("117.00", report)
+        self.assertIn("计税基础减扣除额后乘税率", report)
         self.assertIn("generic.base_minus_deductions_times_rate.v1", report)
         self.assertIn("## 待确认客户问题", report)
         self.assertNotIn("model hidden reasoning", report)
