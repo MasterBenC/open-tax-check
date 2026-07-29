@@ -36,3 +36,6 @@
 规则包由 OpenTaxCheck 版本统一携带，按税种、地区和期间选择；地方政策缺口必须继续展示，第三方规则包不会自动信任。
 
 本阶段明确未实现：MCP/HTTP 部署、认证、租户隔离、平台认证和七个宿主的原生插件。
+## Structured question handoff
+
+The host Agent may call `build_agent_question_tasks(snapshot, max_questions=...)` and display only the Chinese presentation fields from each task. It must not invent confirmations. Convert a validated answer with `confirmation_from_task(task, value, confirmed_by=..., confirmed_at=..., evidence_refs=...)`, then pass the resulting confirmations to `continue_tax_health_check`. The Python core remains model-independent; no prompt text, token count, hidden reasoning, or provider metadata enters the business contract.
