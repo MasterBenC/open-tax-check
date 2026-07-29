@@ -2,6 +2,7 @@
 
 from datetime import date
 import json
+from zipfile import ZipFile
 import unittest
 
 from open_tax_check.tax_models import (
@@ -20,6 +21,7 @@ from open_tax_check.tax_reporting import (
     render_tax_health_report,
     write_tax_health_report,
     write_tax_health_snapshot,
+    write_tax_health_report_docx,
 )
 
 
@@ -147,6 +149,20 @@ class TaxHealthReportingTests(unittest.TestCase):
             payload = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
             self.assertEqual(list(root.glob("*.tmp")), [])
+
+    def test_report_docx_export_contains_explicit_styles_and_report_title(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.docx"
+            self.assertEqual(write_tax_health_report_docx(snapshot_with_every_status(), path), path)
+            with ZipFile(path) as archive:
+                document = archive.read("word/document.xml").decode("utf-8")
+                styles = archive.read("word/styles.xml").decode("utf-8")
+                self.assertIn("税务健康检查报告", document)
+                self.assertIn('w:styleId="Heading1"', styles)
+                self.assertIn('w:sz w:val="32"', styles)
 
 
 if __name__ == "__main__":

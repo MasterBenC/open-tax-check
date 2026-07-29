@@ -17,16 +17,18 @@ def test_tax_health_check_cli_writes_customer_report_and_machine_snapshot(monkey
     output_dir = tmp_path / "output"
     request_path.write_text(json.dumps(request_payload()), encoding="utf-8")
     monkeypatch.setattr(cli.sys, "argv", [
-        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(output_dir)
+        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(output_dir), "--include-docx"
     ])
 
     assert cli.main() == 0
     result = json.loads(capsys.readouterr().out)
     report_path = output_dir / "税务健康检查报告.md"
     snapshot_path = output_dir / "tax-health-snapshot.json"
+    docx_path = output_dir / "税务健康检查报告.docx"
     assert result["status"] == "completed"
     assert report_path.is_file()
     assert snapshot_path.is_file()
+    assert docx_path.is_file()
     assert report_path.read_text(encoding="utf-8").startswith("# ")
     assert json.loads(snapshot_path.read_text(encoding="utf-8"))["revision"] == 1
 
