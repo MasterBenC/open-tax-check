@@ -41,3 +41,5 @@ opentaxcheck import-extraction --case CASE_DIR --source SOURCE_ID --input result
 `local-paddleocr` is an optional, offline provider for bounded PDF, PNG, and JPEG extraction. Install it with `pip install -e ".[ocr]"`, prepare a verified local model directory with `opentaxcheck prepare-ocr --model-dir PATH`, then run `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`. Extraction never downloads models; missing dependencies or an invalid manifest produce `not_performed`. The opt-in smoke gate is controlled by `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` and is explicitly skipped otherwise.
 
 Versioned calculation packs use schema `1.2.0` and must bind every formula input to a declared fact key and an official source. The CLI accepts them with repeatable `--pack PATH`; only confirmed, evidence-referenced facts can produce a calculated amount.
+
+Audited parameterized examples are kept in `examples/calculation-packs/` for VAT, stamp tax, and deed tax. They deliberately require the applicable rate as a confirmed fact; the examples do not invent a rate or local preferential policy.

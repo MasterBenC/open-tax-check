@@ -122,6 +122,18 @@ def screening_payload(**overrides: object) -> dict[str, object]:
 
 
 class TaxRegistryTests(unittest.TestCase):
+    def test_parameterized_calculation_pack_examples_are_strictly_valid(self) -> None:
+        root = __import__("pathlib").Path("examples/calculation-packs")
+        paths = sorted(root.glob("*.json"))
+        self.assertEqual([path.name for path in paths], [
+            "deed-tax-cn-2023-2026.parameterized.json",
+            "stamp-tax-cn-2023-2026.parameterized.json",
+            "vat-cn-2023-2026.parameterized.json",
+        ])
+        packs = tuple(validate_pack_payload(json.loads(path.read_text(encoding="utf-8"))) for path in paths)
+        self.assertEqual({pack.tax_id for pack in packs}, {"vat", "stamp_tax", "deed_tax"})
+        self.assertTrue(all(pack.calculation is not None for pack in packs))
+
     def test_schema_1_2_calculation_pack_parses_formula_bindings(self) -> None:
         value = payload(
             schema_version="1.2.0",

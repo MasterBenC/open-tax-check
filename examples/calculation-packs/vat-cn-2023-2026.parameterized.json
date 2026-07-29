@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.2.0",
+  "pack_id": "vat-cn-2023-2026-parameterized-calculation-v1",
+  "tax_id": "vat",
+  "jurisdiction": "CN",
+  "effective_from": "2023-01-01",
+  "effective_to": "2026-12-31",
+  "maturity": "calculation",
+  "requirements": [
+    {"fact_key": "calc.tax_base", "answer_type": "decimal", "evidence_types": ["vat_return", "sales_ledger"], "priority": 100, "blocking": true, "critical": true},
+    {"fact_key": "calc.rate", "answer_type": "decimal", "evidence_types": ["official_rule_source", "tax_return"], "priority": 100, "blocking": true, "critical": true},
+    {"fact_key": "calc.deductions", "answer_type": "decimal", "evidence_types": ["vat_return", "input_credit_schedule"], "priority": 90, "blocking": false, "critical": false}
+  ],
+  "local_parameter_keys": [],
+  "evaluator_id": "generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources": [{"title": "中华人民共和国增值税法", "url": "https://www.gov.cn/yaowen/liebiao/202412/content_6993442.htm", "published_on": "2024-12-25", "issuer": "全国人民代表大会常务委员会", "document_number": "中华人民共和国主席令第四十一号", "article_refs": ["第一条"], "verified_on": "2026-07-29"}],
+  "rule_version": "2026.1",
+  "fact_catalog_version": "zh-CN.v1",
+  "applicability_fact_keys": [],
+  "calculation": {"formula_id": "generic.base_minus_deductions_times_rate.v1", "tax_base_fact_key": "calc.tax_base", "rate_fact_key": "calc.rate", "deductions_fact_key": "calc.deductions"}
+}
