@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
@@ -90,6 +91,15 @@ def _sources(results: Iterable[TaxResult]) -> tuple[RuleSource, ...]:
     return tuple(sources)
 
 
+def _format_rate_zh(rate: str) -> str:
+    try:
+        percentage = Decimal(rate) * Decimal("100")
+    except InvalidOperation:
+        return rate
+    rendered = format(percentage, "f").rstrip("0").rstrip(".")
+    return f"{rendered or '0'}%"
+
+
 def _result_lines(result: TaxResult) -> list[str]:
     lines = [
         f"- 检查结果: {_STATUS_LABELS[result.status]}",
@@ -97,13 +107,15 @@ def _result_lines(result: TaxResult) -> list[str]:
     if result.calculation is not None:
         calculation = result.calculation
         formula_label = _FORMULA_LABELS_ZH.get(calculation.formula_id, "参数化计算公式")
+        if calculation.rate_selector_label_zh is not None:
+            lines.append(f"- 适用税目: {calculation.rate_selector_label_zh}")
         lines.extend(
             (
                 f"- 计算公式: {formula_label}（{calculation.formula_id}）",
                 f"- \u8ba1\u7a0e\u57fa\u7840: {calculation.tax_base}",
                 f"- \u6263\u9664\u989d: {calculation.deductions}",
                 f"- \u51c0\u8ba1\u7a0e\u57fa\u7840: {calculation.net_base}",
-                f"- \u7a0e\u7387: {calculation.rate}",
+                f"- \u9002\u7528\u7a0e\u7387: {_format_rate_zh(calculation.rate)}",
                 f"- \u8ba1\u7b97\u91d1\u989d: {calculation.amount}",
                 f"- \u8ba1\u7b97\u8bc1\u636e: {', '.join(calculation.evidence_refs)}",
             )

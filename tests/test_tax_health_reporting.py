@@ -77,6 +77,7 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
             CalculationRecord(
                 "generic.base_minus_deductions_times_rate.v1",
                 "1000.00", "100.00", "900.00", "0.13", "117.00", ("vat-return-2026",),
+                "sale_contract", "\u4e70\u5356\u5408\u540c",
             )
             if status is TaxStatus.CALCULATED and definition.tax_id == "vat"
             else None
@@ -126,6 +127,9 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("117.00", report)
         self.assertIn("计税基础减扣除额后乘税率", report)
         self.assertIn("generic.base_minus_deductions_times_rate.v1", report)
+        self.assertIn("\u9002\u7528\u7a0e\u76ee: \u4e70\u5356\u5408\u540c", report)
+        self.assertIn("\u9002\u7528\u7a0e\u7387: 13%", report)
+        self.assertNotIn("sale_contract", report)
         self.assertIn("## 待确认客户问题", report)
         self.assertNotIn("model hidden reasoning", report)
         self.assertNotIn("signature", report.lower())
@@ -162,6 +166,11 @@ class TaxHealthReportingTests(unittest.TestCase):
             self.assertTrue(markdown_path.read_text(encoding="utf-8").startswith("# "))
             payload = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
+            calculation = next(
+                item["calculation"] for item in payload["results"] if item["calculation"] is not None
+            )
+            self.assertEqual(calculation["rate_selector"], "sale_contract")
+            self.assertEqual(calculation["rate_selector_label_zh"], "\u4e70\u5356\u5408\u540c")
             self.assertEqual(list(root.glob("*.tmp")), [])
 
     def test_report_docx_export_contains_explicit_styles_and_report_title(self) -> None:

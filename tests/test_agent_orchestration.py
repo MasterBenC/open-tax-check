@@ -7,11 +7,14 @@ from open_tax_check.agent_orchestration import (
     confirmation_from_task,
     task_payload,
 )
+from open_tax_check.tax_health import run_tax_health_check
 from open_tax_check.tax_models import (
     DateRange,
+    FactState,
     Question,
     TaxCheckRequest,
     TaxCheckSnapshot,
+    TaxFact,
 )
 
 
@@ -58,3 +61,29 @@ def test_confirmation_from_task_rejects_mismatched_task_type():
 
     with pytest.raises(ValueError, match="invalid_confirmation_value"):
         confirmation_from_task(task, object(), confirmed_by="customer", confirmed_at="2026-07-29T10:00:00+08:00")
+
+
+def test_builtin_stamp_tax_question_is_customer_safe_for_host_agents():
+    snapshot = run_tax_health_check(TaxCheckRequest(
+        DateRange(date(2026, 1, 1), date(2026, 12, 31)),
+        "CN",
+        facts=(
+            TaxFact(
+                "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                True,
+                FactState.CONFIRMED,
+                ("contract-register",),
+                "customer",
+                "2026-07-29T10:00:00+08:00",
+            ),
+        ),
+    ))
+
+    task = next(
+        item for item in build_agent_question_tasks(snapshot)
+        if item.fact_key == "stamp_tax.tax_item"
+    )
+    payload = task_payload(task)
+    assert payload["question_zh"] == "\u672c\u6761\u5370\u82b1\u7a0e\u8ba1\u7b97\u5bf9\u5e94\u54ea\u4e2a\u6cd5\u5b9a\u7a0e\u76ee\uff1f"
+    assert "\u4e0d\u5f97\u7531AI\u81ea\u52a8\u5224\u65ad" in payload["help_zh"]
+    assert {"value": "sale_contract", "label_zh": "\u4e70\u5356\u5408\u540c"} in payload["choices"]

@@ -86,6 +86,56 @@ def test_tax_health_check_cli_accepts_explicit_calculation_pack(monkeypatch, tmp
     assert vat["calculation"]["amount"] == "130.00"
 
 
+def test_tax_health_check_cli_runs_builtin_stamp_tax_rate_table(monkeypatch, tmp_path, capsys):
+    request_path = tmp_path / "request.json"
+    output_dir = tmp_path / "output"
+    request_path.write_text(json.dumps({
+        **request_payload(),
+        "facts": [
+            {
+                "key": "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                "value": True,
+                "state": "confirmed",
+                "evidence_refs": ["contract-register"],
+                "confirmed_by": "customer",
+                "confirmed_at": "2026-01-02T00:00:00+08:00",
+            },
+            {
+                "key": "stamp_tax.tax_item",
+                "value": "sale_contract",
+                "state": "confirmed",
+                "evidence_refs": ["sale-contract"],
+                "confirmed_by": "customer",
+                "confirmed_at": "2026-01-02T00:00:00+08:00",
+            },
+            {
+                "key": "calc.tax_base",
+                "value": "1000.00",
+                "state": "confirmed",
+                "evidence_refs": ["sale-contract"],
+                "confirmed_by": "customer",
+                "confirmed_at": "2026-01-02T00:00:00+08:00",
+            },
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck", "tax-health-check", "--request", str(request_path),
+        "--output-dir", str(output_dir),
+    ])
+
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "completed"
+    snapshot = json.loads((output_dir / "tax-health-snapshot.json").read_text(encoding="utf-8"))
+    stamp_tax = next(item for item in snapshot["results"] if item["tax_id"] == "stamp_tax")
+    assert stamp_tax["calculation"]["amount"] == "0.30"
+    assert stamp_tax["calculation"]["rate"] == "0.0003"
+    assert stamp_tax["calculation"]["rate_selector_label_zh"] == "\u4e70\u5356\u5408\u540c"
+    report = (output_dir / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md").read_text(encoding="utf-8")
+    assert "\u9002\u7528\u7a0e\u76ee: \u4e70\u5356\u5408\u540c" in report
+    assert "\u9002\u7528\u7a0e\u7387: 0.03%" in report
+    assert "sale_contract" not in report
+
+
 def test_tax_health_check_cli_includes_parameterized_templates_for_all_tax_items(monkeypatch, tmp_path, capsys):
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request_payload()), encoding="utf-8")
