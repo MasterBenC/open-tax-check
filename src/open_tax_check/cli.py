@@ -23,7 +23,11 @@ from .tax_reporting import (
     write_tax_health_report_pdf,
     write_tax_health_snapshot,
 )
-from .tax_registry import TaxPackError, validate_pack_payload
+from .tax_registry import (
+    TaxPackError,
+    load_builtin_parameterized_calculation_packs,
+    validate_pack_payload,
+)
 from .tax_screening import builtin_tax_evaluators
 from .reviews import (
     MappingReviewError,
@@ -161,6 +165,11 @@ def build_parser() -> argparse.ArgumentParser:
     health_parser.add_argument("--include-docx", action="store_true")
     health_parser.add_argument("--include-pdf", action="store_true")
     health_parser.add_argument("--pack", action="append", type=Path)
+    health_parser.add_argument(
+        "--include-parameterized-packs",
+        action="store_true",
+        help="Include customer-confirmed calculation templates for all 20 tax items",
+    )
     return parser
 
 
@@ -351,12 +360,16 @@ def main() -> int:
             return 4
         try:
             explicit_packs = None
-            if args.pack:
-                if any(not _safe_pack_path(path) for path in args.pack):
+            if args.pack or args.include_parameterized_packs:
+                if args.pack and any(not _safe_pack_path(path) for path in args.pack):
                     raise TaxPackError("unsafe_tax_rule_pack_path")
                 explicit_packs = tuple(
                     validate_pack_payload(json.loads(path.read_text(encoding="utf-8")))
-                    for path in args.pack
+                    for path in (args.pack or ())
+                ) + (
+                    load_builtin_parameterized_calculation_packs()
+                    if args.include_parameterized_packs
+                    else ()
                 )
             snapshot = run_tax_health_check(
                 request,

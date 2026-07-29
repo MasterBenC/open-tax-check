@@ -6,13 +6,14 @@ import json
 import unittest
 from unittest.mock import patch
 
-from open_tax_check.tax_models import DateRange
+from open_tax_check.tax_models import DateRange, PackMaturity
 from open_tax_check.tax_registry import (
     TAX_DEFINITIONS,
     TaxPackIssue,
     TaxPackError,
     load_builtin_tax_pack_bundle,
     load_builtin_tax_packs,
+    load_builtin_parameterized_calculation_packs,
     select_pack_segments,
     validate_pack_payload,
     validate_pack_set,
@@ -328,6 +329,25 @@ class TaxRegistryTests(unittest.TestCase):
         self.assertEqual(
             [item.category for item in TAX_DEFINITIONS],
             ["tax"] * 18 + ["surcharge"] * 2,
+        )
+
+    def test_parameterized_calculation_templates_cover_all_twenty_tax_items(self) -> None:
+        packs = load_builtin_parameterized_calculation_packs()
+
+        self.assertEqual(len(packs), 20)
+        self.assertEqual(
+            {pack.tax_id for pack in packs},
+            {definition.tax_id for definition in TAX_DEFINITIONS},
+        )
+        self.assertTrue(all(pack.maturity is PackMaturity.CALCULATION for pack in packs))
+        self.assertTrue(all(pack.calculation is not None for pack in packs))
+        self.assertEqual(
+            next(pack for pack in packs if pack.tax_id == "vat").calculation.formula_id,
+            "generic.base_minus_deductions_times_rate.v1",
+        )
+        self.assertEqual(
+            next(pack for pack in packs if pack.tax_id == "stamp_tax").calculation.formula_id,
+            "generic.base_times_rate.v1",
         )
 
     def test_bundled_prototype_is_excluded_until_explicitly_included(self) -> None:

@@ -86,6 +86,20 @@ def test_tax_health_check_cli_accepts_explicit_calculation_pack(monkeypatch, tmp
     assert vat["calculation"]["amount"] == "130.00"
 
 
+def test_tax_health_check_cli_includes_parameterized_templates_for_all_tax_items(monkeypatch, tmp_path, capsys):
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request_payload()), encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck", "tax-health-check", "--request", str(request_path),
+        "--output-dir", str(tmp_path / "output"), "--include-parameterized-packs",
+    ])
+
+    assert cli.main() == 0
+    snapshot = json.loads((tmp_path / "output" / "tax-health-snapshot.json").read_text(encoding="utf-8"))
+    assert len(snapshot["results"]) == 20
+    assert all(item["rule_pack_ids"] for item in snapshot["results"])
+
+
 def test_tax_health_check_cli_rejects_invalid_explicit_pack(monkeypatch, tmp_path, capsys):
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request_payload()), encoding="utf-8")

@@ -304,6 +304,59 @@ def load_builtin_tax_packs() -> tuple[TaxPack, ...]:
     return result
 
 
+def load_builtin_parameterized_calculation_packs() -> tuple[TaxPack, ...]:
+    """Build explicit customer-confirmed calculation templates for all taxes."""
+    screening_by_tax: dict[str, TaxPack] = {}
+    for pack in load_builtin_tax_packs():
+        if pack.maturity is PackMaturity.SCREENING:
+            screening_by_tax.setdefault(pack.tax_id, pack)
+    templates: list[TaxPack] = []
+    for definition in TAX_DEFINITIONS:
+        source_pack = screening_by_tax.get(definition.tax_id)
+        if source_pack is None:
+            raise TaxPackError("missing_screening_source")
+        requirements = [
+            FactRequirement(
+                "calc.tax_base", "decimal",
+                ("tax_return", "accounting_ledger", "contract_register"),
+                100, True, True,
+            ),
+            FactRequirement(
+                "calc.rate", "decimal",
+                ("official_rule_source", "customer_confirmation"),
+                100, True, True,
+            ),
+        ]
+        formula_id = "generic.base_times_rate.v1"
+        deductions_key = None
+        if definition.tax_id == "vat":
+            requirements.append(FactRequirement(
+                "calc.deductions", "decimal",
+                ("tax_return", "input_credit_schedule"),
+                90, False, False,
+            ))
+            formula_id = "generic.base_minus_deductions_times_rate.v1"
+            deductions_key = "calc.deductions"
+        templates.append(TaxPack(
+            pack_id=f"{definition.tax_id}-cn-2023-2026-parameterized-calculation-v1",
+            tax_id=definition.tax_id,
+            jurisdiction="CN",
+            effective_period=DateRange(date(2023, 1, 1), date(2026, 12, 31)),
+            maturity=PackMaturity.CALCULATION,
+            requirements=tuple(requirements),
+            local_parameter_keys=("calc.rate",) if source_pack.local_parameter_keys else (),
+            evaluator_id="generic.calculation.base_minus_deductions_times_rate.v1",
+            sources=source_pack.sources,
+            rule_version="parameterized-2026.1",
+            fact_catalog_version="zh-CN.v1",
+            applicability_fact_keys=(),
+            calculation=CalculationSpec(
+                formula_id, "calc.tax_base", "calc.rate", deductions_key
+            ),
+        ))
+    return tuple(templates)
+
+
 _PACK_FILENAME_TAX_IDS = {
     "vat-cn-2023-2025.screening.json": "vat",
     "vat-cn-2026.screening.json": "vat",

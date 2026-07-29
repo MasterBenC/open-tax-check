@@ -14,6 +14,8 @@ opentaxcheck tax-health-check --request request.json --output-dir output --pack 
 
 `--pack` 可以重复传入多个规则包。程序会拒绝不存在、损坏、越界、symlink 或 Windows reparse point 规则包。
 
+若要对全部 20 个税费项目启用参数化模板，可追加 `--include-parameterized-packs`。这些模板只提供计税事实绑定和对应官方来源，不提供统一法定税率；默认筛查流程不会自动加载它们。
+
 ## 公式边界
 
 - `generic.base_minus_deductions_times_rate.v1`：计税基础减扣除额后乘税率，适用于明确提供扣除额的参数化场景。
