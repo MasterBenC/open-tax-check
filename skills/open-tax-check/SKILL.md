@@ -59,7 +59,7 @@ python <skill-dir>/scripts/opentaxcheck.py select-sheet --case <case-dir> --role
 多行表头要重复传 `--header-row`。隐藏行必须明确写为 `--hidden-rows include` 或 `--hidden-rows exclude`。当前读取器尚不能实际过滤隐藏行；含隐藏数据时，`exclude` 不会实际过滤，而会以 `hidden_row_exclusion_unavailable` 阻断。复核人只能在复核后改为 `include`，或停止处理。隐藏工作表只能人工确认，不得自动选择。
 
 4. 再次运行 `inspect`，再次读取 `state.json`。
-5. 达到 `partial_scope_ready` 后，读取 `work/mapping_review.json` 的提案；由复核人执行 `confirm-mapping` 后才可标准化、勾稽和跑规则，仍不得生成正式客户报告。
+5. 达到 `partial_scope_ready` 后，读取 `work/mapping_review.json` 的提案；由复核人执行 `confirm-mapping` 后才可标准化、勾稽和跑规则。该门槛控制旧 Phase 2B finding 流程，不阻止下文独立生成客户内部自查报告。
 
 资料覆盖矩阵必须保留 `missing`、`present_unparsed`、`not_performed_*` 等状态；缺失、未解析或未执行不等于“无风险”。人工决定必须与来源哈希、sheet、表头行、隐藏行决定、期间和 schema 版本绑定；来源变化后重新 `inspect`。
 
@@ -102,11 +102,25 @@ python <skill-dir>/scripts/opentaxcheck.py run --case <case-dir> --ai-mode off
 
 退出码 `0` 表示流程到达待专业复核；`3` 表示映射待确认；`4` 表示输入、选表或数据质量阻断；`5` 表示已安全记录处理错误。`state.json` 指向当前运行；`runs/run-XXXX/manifest.json` 保存不可变历史。不得把旧成功输出当作当前结果。
 
-## 4. 专业复核与交付边界
+## 4. 客户内部《税务健康检查报告》
+
+宿主 Agent 可把客户资料整理成 `TaxCheckRequest`，再运行：
+
+```text
+opentaxcheck tax-health-check --request request.json --output-dir output
+```
+
+需要 Word 时追加 `--include-docx`；宿主已安装 LibreOffice 时可追加 `--include-pdf`。需要对全部 20 个税费项目启用参数化计算模板时追加 `--include-parameterized-packs`。参数化模板不提供统一法定税率，税基、税率和扣除额必须由客户确认并绑定证据。
+
+首次报告可以包含“待补充资料”“待确认当地政策”和“暂时无法判断”。宿主 Agent 只展示中文问题字段，通过 `build_agent_question_tasks` 生成任务，用 `confirmation_from_task` 构造确认，再调用 `continue_tax_health_check` 增量重跑。AI 不得猜测事实、税率、地方政策或把未解决状态改写成“无风险”。
+
+《税务健康检查报告》仅供客户内部自查，不属于涉税鉴证、专业税务意见或纳税申报结论；不以税务专业人员复核、签字或盖章作为生成条件。
+
+## 5. 旧 finding 专业复核与交付边界
 
 每条 finding 都要核对来源血缘、计算基数、适用期间、纳税人类型、官方依据、缺失证据和反向证据。保留引擎原始结果，在 review 层记录复核人、时间、结论、理由、证据和调整金额。
 
-只有 `review_status` 为 `reviewed`、`report_status` 恰为 `approved`，且 finding 状态为 `suspected`、`confirmed` 或 `insufficient_data` 时，才具备进入客户报告的资格。当前 v0.1 仍只生成内部 Markdown 草稿，不生成正式客户报告。
+只有 `review_status` 为 `reviewed`、`report_status` 恰为 `approved`，且 finding 状态为 `suspected`、`confirmed` 或 `insufficient_data` 时，旧 Phase 2B finding 才具备进入客户报告的资格，并只能作为经过复核的确定性结论进入交付层。该审批门槛不适用于上文独立的客户内部自查报告；自查报告必须如实保留未解决状态和免责声明。
 
 所有说明都要列明实体、期间、已收/缺失资料、已执行/未执行程序、数据限制、规则版本和重大假设，并说明本工作是税务健康检查，不是审计、鉴证、法律意见、申报或税务机关认定。永远不要称代码输出“100% 准确”。
 

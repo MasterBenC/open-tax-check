@@ -223,6 +223,18 @@ class SkillContractTests(unittest.TestCase):
             with self.subTest(reference=name):
                 self.assertIn(link, text)
 
+    def test_skill_documents_customer_self_check_without_professional_approval_gate(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        host = (SKILL / "references" / "host-integrations.md").read_text(
+            encoding="utf-8"
+        )
+
+        for document in (text, host):
+            self.assertIn("《税务健康检查报告》", document)
+            self.assertIn("不以税务专业人员复核、签字或盖章作为生成条件", document)
+        self.assertIn("--include-parameterized-packs", host)
+        self.assertNotIn("当前 v0.1 仍只生成内部 Markdown 草稿", text)
+
     def test_canonical_schema_documents_conflicting_alias_gate(self):
         text = (SKILL / "references" / "canonical-schema.md").read_text(
             encoding="utf-8"
