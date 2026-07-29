@@ -135,7 +135,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("Phase 2A 自身止于安全盘点", schema)
         self.assertIn("当前 Phase 2B", schema)
         self.assertIn("不生成正式客户报告", schema)
-        self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", text)
+        self.assertIn("PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现", text)
 
     def test_skill_application_contract_requires_confirmed_mapping_for_phase_2b(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")

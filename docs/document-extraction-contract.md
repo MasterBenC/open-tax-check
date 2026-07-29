@@ -1,6 +1,6 @@
 # 文档抽取合同
 
-当前版本提供跨宿主交换的 `document-extraction/v1` JSON 合同，以及 `off` provider 和宿主结果导入/校验能力。实际 PDF、图片 OCR provider 尚未实现。
+当前版本提供跨宿主交换的 `document-extraction/v1.1` JSON 合同（兼容导入 `v1`），以及 `off`、`host` 和可选的本地 `local-paddleocr` provider。PDF/PNG/JPEG 的本地离线提取已实现；联网 provider、复杂版式理解和联网企业数据尚未实现。
 
 ## 状态
 

@@ -11,7 +11,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎、AI 税务项目助理�
 - 隐藏工作表不得自动选择；选择含隐藏数据的工作表时，隐藏行必须明确选择 `include` 或 `exclude`；
 - CSV 和已确认映射的 Excel 都支持业务行标准化、凭证借贷平衡检查、试算平衡表勾稽、首批确定性规则、语义候选和内部 Markdown 草稿。
 
-Excel 映射提案在复核人明确执行 `confirm-mapping` 前始终不生效；`needs_professional_review` 也不是正式客户报告。财务报表和纳税申报表即使已提供但仍为 `present_unparsed`，也不能宣称已完成完整基线健康检查。PDF、图片 OCR 和联网企业数据尚未实现。专业 Excel 工作底稿、DOCX、PDF 报告和完整证据包也尚未实现。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
+Excel 映射提案在复核人明确执行 `confirm-mapping` 前始终不生效；`needs_professional_review` 也不是正式客户报告。财务报表和纳税申报表即使已提供但仍为 `present_unparsed`，也不能宣称已完成完整基线健康检查。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。专业 Excel 工作底稿和完整证据包仍未实现，DOCX/PDF 报告已提供基础导出。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 

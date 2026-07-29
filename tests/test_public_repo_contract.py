@@ -8,11 +8,11 @@ ROADMAP_MILESTONES = (
     "1. 阶段 1：仓库基础与确定性 CSV 核心 — 已完成",
     "2. 阶段 2A：Excel 安全盘点与人工选表 — 已完成",
     "3. 阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成（正式客户报告未实现）",
-    "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 计划中",
+    "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 本地 OCR 已完成，正式税务计算规则包进行中",
     "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 计划中",
     "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例与公开 v1 — 计划中",
 )
-UNSUPPORTED_SCOPE_SENTENCE = "PDF、图片 OCR 和联网企业数据尚未实现。"
+LOCAL_OCR_SCOPE_SENTENCE = "PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。"
 
 
 def current_release_scope(text):
@@ -65,7 +65,7 @@ def assert_readme_phase_scope(test_case, text):
     test_case.assertIn("present_unparsed", scope)
     test_case.assertIn("公开路线不代表已经交付的能力", scope)
     test_case.assertIn("[docs/roadmap.md](docs/roadmap.md)", scope)
-    test_case.assertIn(UNSUPPORTED_SCOPE_SENTENCE, scope)
+    test_case.assertIn(LOCAL_OCR_SCOPE_SENTENCE, scope)
 
 
 def assert_privacy_option_is_required(test_case, text):
@@ -126,7 +126,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("v0.1 / Phase 2B", current_scope)
         self.assertIn("CSV 和已确认映射的 Excel", current_scope)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", current_scope)
-        self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", current_scope)
+        self.assertIn(LOCAL_OCR_SCOPE_SENTENCE, current_scope)
         self.assertIn("正式客户报告", current_scope)
         self.assertIn("公开路线不代表已经交付的能力", current_scope)
 
@@ -165,7 +165,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("复核后改为 `include`，或停止处理", text)
         self.assertIn("资料覆盖矩阵", text)
         self.assertIn("CSV 和已确认映射的 Excel", text)
-        self.assertIn("PDF、图片 OCR 和联网企业数据尚未实现", text)
+        self.assertIn(LOCAL_OCR_SCOPE_SENTENCE, text)
 
     def test_readme_documents_mapping_confirmation_and_reconciliation(self):
         """Dropping a 2B gate or risk boundary from the public workflow is a regression."""
@@ -300,7 +300,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
             "逐文件或逐页",
             "host",
             "off",
-            "实际 PDF、图片 OCR provider 尚未实现",
+            "document-extraction/v1.1",
         ):
             self.assertIn(required, contract)
 
