@@ -91,6 +91,19 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("release validation passed", proc.stdout.lower())
 
+    def test_pdf_fixture_is_marked_binary_by_git_attributes(self):
+        fixture = "tests/fixtures/ocr/fictional-digital.pdf"
+        proc = subprocess.run(
+            ["git", "check-attr", "binary", "--", fixture],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True,
+        )
+
+        self.assertEqual(proc.stdout.strip(), f"{fixture}: binary: set")
+
     def test_tax_pack_release_surface_accepts_formal_stamp_calculation_bundle(self):
         self.assertIsNone(validate_release.validate_pack_release_surface(ROOT))
 
