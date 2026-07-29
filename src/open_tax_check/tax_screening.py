@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import hashlib
 import re
 from types import MappingProxyType
@@ -18,12 +19,14 @@ from .tax_models import (
     Question,
     RuleSource,
     TaxCheckRequest,
+    CalculationRecord,
     TaxFact,
     TaxPack,
     TaxResult,
     TaxStatus,
     _EvaluationOutcomeValidationError,
 )
+from .tax_calculation import TaxCalculationRequest, calculate_tax_amount
 from .tax_registry import TAX_DEFINITIONS, select_pack_segments
 
 
@@ -40,6 +43,7 @@ class TaxEvaluationContext:
 RuleEvaluator = Callable[[TaxEvaluationContext], EvaluationOutcome]
 
 GENERIC_SCREENING_EVALUATOR_ID = "generic.applicability.screening.v1"
+GENERIC_CALCULATION_EVALUATOR_ID = "generic.calculation.base_minus_deductions_times_rate.v1"
 _DIAGNOSTIC_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _EVIDENCE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
@@ -121,6 +125,47 @@ def _gaps_for_packs(
     return tuple(gaps)
 
 
+def _calculation_confirmation_gaps(
+    selected_packs: tuple[TaxPack, ...], facts: Mapping[str, TaxFact]
+) -> tuple[FactGap, ...]:
+    """Require customer confirmation for every fact bound into a calculation."""
+    keys = {
+        key
+        for pack in selected_packs
+        if pack.calculation is not None
+        for key in (
+            pack.calculation.tax_base_fact_key,
+            pack.calculation.rate_fact_key,
+        )
+    }
+    for pack in selected_packs:
+        if pack.calculation is not None and pack.calculation.deductions_fact_key is not None:
+            if pack.calculation.deductions_fact_key in facts:
+                keys.add(pack.calculation.deductions_fact_key)
+    requirements = {
+        requirement.fact_key: requirement
+        for pack in selected_packs
+        for requirement in pack.requirements
+    }
+    gaps: list[FactGap] = []
+    for key in keys:
+        fact = facts.get(key)
+        if fact is not None and fact.state is FactState.CONFIRMED:
+            continue
+        requirement = requirements.get(key)
+        if requirement is None:
+            raise _EvaluationOutcomeValidationError("missing_calculation_requirement")
+        gaps.append(FactGap(
+            key,
+            "confirmation_required",
+            requirement.answer_type,
+            requirement.evidence_types,
+            requirement.priority,
+            requirement.blocking,
+        ))
+    return tuple(gaps)
+
+
 def _confirmation_evidence_reference(fact: TaxFact) -> str:
     digest = hashlib.sha256(
         "\x1f".join((fact.key, fact.confirmed_by or "", fact.confirmed_at or "")).encode("utf-8")
@@ -163,9 +208,79 @@ def generic_screening_evaluator(context: TaxEvaluationContext) -> EvaluationOutc
     return EvaluationOutcome(TaxStatus.NOT_APPLICABLE, evidence_refs=evidence_refs)
 
 
+def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOutcome:
+    """Calculate a confirmed base/rate pair using a pack-bound formula spec."""
+    specs = tuple(pack.calculation for pack in context.packs if pack.calculation is not None)
+    if len(specs) != 1 or specs[0].formula_id != "generic.base_minus_deductions_times_rate.v1":
+        raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+    spec = specs[0]
+    keys = [spec.tax_base_fact_key, spec.rate_fact_key]
+    facts = [context.facts.get(key) for key in keys]
+    deductions_fact = (
+        context.facts.get(spec.deductions_fact_key)
+        if spec.deductions_fact_key is not None
+        else None
+    )
+    if deductions_fact is not None:
+        facts.append(deductions_fact)
+    if any(fact is None for fact in facts):
+        raise _EvaluationOutcomeValidationError("missing_calculation_fact")
+    if any(fact.state is FactState.INFERRED for fact in facts):
+        raise _EvaluationOutcomeValidationError("unconfirmed_calculation_fact")
+
+    def decimal_value(fact: TaxFact) -> Decimal:
+        if not isinstance(fact.value, str):
+            raise _EvaluationOutcomeValidationError("invalid_calculation_fact")
+        try:
+            value = Decimal(fact.value)
+        except InvalidOperation as error:
+            raise _EvaluationOutcomeValidationError("invalid_calculation_fact") from error
+        if not value.is_finite() or value < 0:
+            raise _EvaluationOutcomeValidationError("invalid_calculation_fact")
+        return value
+
+    base_fact, rate_fact = facts[0], facts[1]
+    evidence_refs = tuple(dict.fromkeys(
+        reference
+        for fact in facts
+        for reference in fact.evidence_refs
+    ))
+    if not evidence_refs:
+        raise _EvaluationOutcomeValidationError("missing_calculation_evidence")
+    request = TaxCalculationRequest(
+        tax_id=context.tax_id,
+        tax_base=decimal_value(base_fact),
+        rate=decimal_value(rate_fact),
+        deductions=decimal_value(deductions_fact) if deductions_fact is not None else Decimal("0"),
+        confirmed=all(fact.state is FactState.CONFIRMED for fact in facts),
+        evidence_refs=evidence_refs,
+    )
+    try:
+        result = calculate_tax_amount(request)
+    except ValueError as error:
+        raise _EvaluationOutcomeValidationError(str(error)) from error
+    calculation = CalculationRecord(
+        formula_id=result.formula_id,
+        tax_base=f"{request.tax_base:.2f}",
+        deductions=f"{request.deductions:.2f}",
+        net_base=f"{result.net_base:.2f}",
+        rate=f"{result.rate:.6f}".rstrip("0").rstrip("."),
+        amount=f"{result.amount:.2f}",
+        evidence_refs=result.evidence_refs,
+    )
+    return EvaluationOutcome(
+        TaxStatus.CALCULATED,
+        evidence_refs=result.evidence_refs,
+        calculation=calculation,
+    )
+
+
 def builtin_tax_evaluators() -> Mapping[str, RuleEvaluator]:
     """Return immutable built-in evaluator dispatch."""
-    return MappingProxyType({GENERIC_SCREENING_EVALUATOR_ID: generic_screening_evaluator})
+    return MappingProxyType({
+        GENERIC_SCREENING_EVALUATOR_ID: generic_screening_evaluator,
+        GENERIC_CALCULATION_EVALUATOR_ID: generic_calculation_evaluator,
+    })
 
 
 def _blocked_result(
@@ -212,6 +327,13 @@ def _is_safe_evaluator_outcome(
         and all(
             isinstance(reference, str) and _EVIDENCE_REFERENCE.fullmatch(reference)
             for reference in outcome.evidence_refs
+        )
+        and (
+            outcome.calculation is None
+            or (
+                outcome.status is TaxStatus.CALCULATED
+                and tuple(outcome.calculation.evidence_refs) == tuple(outcome.evidence_refs)
+            )
         )
     )
 
@@ -265,6 +387,13 @@ def _screen_one_tax(
     if gaps:
         return TaxResult(tax_id, TaxStatus.NEEDS_EVIDENCE, pack_ids, gaps=gaps, rule_sources=sources)
 
+    confirmation_gaps = _calculation_confirmation_gaps(selected_packs, facts)
+    if confirmation_gaps:
+        return TaxResult(
+            tax_id, TaxStatus.NEEDS_EVIDENCE, pack_ids,
+            gaps=confirmation_gaps, rule_sources=sources,
+        )
+
     evaluator_ids = tuple(_ordered_unique(tuple(pack.evaluator_id for pack in selected_packs)))
     if len(evaluator_ids) != 1:
         return _blocked_result(tax_id, "inconsistent_rule_evaluators", pack_ids, sources)
@@ -288,6 +417,7 @@ def _screen_one_tax(
         diagnostics=outcome.diagnostics,
         evidence_refs=outcome.evidence_refs,
         rule_sources=sources,
+        calculation=outcome.calculation,
     )
 
 

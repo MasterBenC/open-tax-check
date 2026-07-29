@@ -122,6 +122,72 @@ def screening_payload(**overrides: object) -> dict[str, object]:
 
 
 class TaxRegistryTests(unittest.TestCase):
+    def test_schema_1_2_calculation_pack_parses_formula_bindings(self) -> None:
+        value = payload(
+            schema_version="1.2.0",
+            calculation={
+                "formula_id": "generic.base_minus_deductions_times_rate.v1",
+                "tax_base_fact_key": "calc.tax_base",
+                "rate_fact_key": "calc.rate",
+                "deductions_fact_key": "calc.deductions",
+            },
+            rule_version="2026.1",
+            fact_catalog_version="zh-CN.v1",
+            applicability_fact_keys=[],
+            evaluator_id="generic.calculation.base_minus_deductions_times_rate.v1",
+            sources=[{
+                "title": "Official source", "url": "https://example.test/source",
+                "published_on": "2023-01-01", "issuer": "Official issuer",
+                "document_number": "DOC-2023", "article_refs": ["Article 1"],
+                "verified_on": "2026-01-01",
+            }],
+            requirements=[
+                {
+                    "fact_key": "calc.tax_base", "answer_type": "decimal",
+                    "evidence_types": ["vat_return"], "priority": 100,
+                    "blocking": True, "critical": True,
+                },
+                {
+                    "fact_key": "calc.rate", "answer_type": "decimal",
+                    "evidence_types": ["rule_source"], "priority": 100,
+                    "blocking": True, "critical": True,
+                },
+                {
+                    "fact_key": "calc.deductions", "answer_type": "decimal",
+                    "evidence_types": ["vat_return"], "priority": 90,
+                    "blocking": False, "critical": False,
+                },
+            ],
+        )
+
+        pack = validate_pack_payload(value)
+
+        self.assertEqual(pack.calculation.formula_id, "generic.base_minus_deductions_times_rate.v1")
+        self.assertEqual(pack.calculation.deductions_fact_key, "calc.deductions")
+
+    def test_schema_1_2_rejects_unbound_calculation_fact(self) -> None:
+        value = payload(
+            schema_version="1.2.0",
+            rule_version="2026.1",
+            fact_catalog_version="zh-CN.v1",
+            applicability_fact_keys=[],
+            sources=[{
+                "title": "Official source", "url": "https://example.test/source",
+                "published_on": "2023-01-01", "issuer": "Official issuer",
+                "document_number": "DOC-2023", "article_refs": ["Article 1"],
+                "verified_on": "2026-01-01",
+            }],
+            calculation={
+                "formula_id": "generic.base_minus_deductions_times_rate.v1",
+                "tax_base_fact_key": "calc.unknown",
+                "rate_fact_key": "entity.registration",
+                "deductions_fact_key": None,
+            },
+        )
+
+        with self.assertRaisesRegex(TaxPackError, "^invalid_calculation_spec$"):
+            validate_pack_payload(value)
+
     def test_builtin_pack_bundle_has_explicit_issue_contract(self) -> None:
         bundle = load_builtin_tax_pack_bundle()
         self.assertTrue(bundle.packs)

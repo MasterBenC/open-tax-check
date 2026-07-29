@@ -23,6 +23,8 @@ from .tax_reporting import (
     write_tax_health_report_pdf,
     write_tax_health_snapshot,
 )
+from .tax_registry import TaxPackError, validate_pack_payload
+from .tax_screening import builtin_tax_evaluators
 from .reviews import (
     MappingReviewError,
     ReviewError,
@@ -140,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     health_parser.add_argument("--output-dir", required=True, type=Path)
     health_parser.add_argument("--include-docx", action="store_true")
     health_parser.add_argument("--include-pdf", action="store_true")
+    health_parser.add_argument("--pack", action="append", type=Path)
     return parser
 
 
@@ -329,7 +332,17 @@ def main() -> int:
             print(json.dumps({"status": "failed", "error_code": "invalid_tax_health_request"}, ensure_ascii=False))
             return 4
         try:
-            snapshot = run_tax_health_check(request)
+            explicit_packs = None
+            if args.pack:
+                explicit_packs = tuple(
+                    validate_pack_payload(json.loads(path.read_text(encoding="utf-8")))
+                    for path in args.pack
+                )
+            snapshot = run_tax_health_check(
+                request,
+                packs=explicit_packs,
+                evaluators=builtin_tax_evaluators() if explicit_packs is not None else None,
+            )
             report_path = write_tax_health_report(snapshot, args.output_dir / "税务健康检查报告.md")
             snapshot_path = write_tax_health_snapshot(snapshot, args.output_dir / "tax-health-snapshot.json")
             docx_path = write_tax_health_report_docx(snapshot, args.output_dir / "税务健康检查报告.docx") if args.include_docx else None
@@ -337,9 +350,9 @@ def main() -> int:
         except PdfExportUnavailable as error:
             print(json.dumps({"status": "failed", "error_code": str(error)}, ensure_ascii=False))
             return 3
-        except Exception:
-            print(json.dumps({"status": "failed", "error_code": "tax_health_check_failed"}, ensure_ascii=False))
-            return 3
+        except (OSError, UnicodeError, json.JSONDecodeError, TaxPackError, TypeError, ValueError):
+            print(json.dumps({"status": "failed", "error_code": "invalid_tax_rule_pack"}, ensure_ascii=False))
+            return 4
         print(json.dumps({
             "status": "completed",
             "revision": snapshot.revision,

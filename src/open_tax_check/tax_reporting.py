@@ -89,6 +89,19 @@ def _result_lines(result: TaxResult) -> list[str]:
     lines = [
         f"- 检查结果: {_STATUS_LABELS[result.status]}",
     ]
+    if result.calculation is not None:
+        calculation = result.calculation
+        lines.extend(
+            (
+                f"- \u8ba1\u7b97\u516c\u5f0f: {calculation.formula_id}",
+                f"- \u8ba1\u7a0e\u57fa\u7840: {calculation.tax_base}",
+                f"- \u6263\u9664\u989d: {calculation.deductions}",
+                f"- \u51c0\u8ba1\u7a0e\u57fa\u7840: {calculation.net_base}",
+                f"- \u7a0e\u7387: {calculation.rate}",
+                f"- \u8ba1\u7b97\u91d1\u989d: {calculation.amount}",
+                f"- \u8ba1\u7b97\u8bc1\u636e: {', '.join(calculation.evidence_refs)}",
+            )
+        )
     for gap in result.gaps:
         if gap.reason_code == "missing_local_policy":
             lines.append("- 需要补充适用的当地政策参数")

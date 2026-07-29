@@ -7,6 +7,7 @@ import unittest
 
 from open_tax_check.tax_models import (
     AuditEvent,
+    CalculationRecord,
     DateRange,
     FactGap,
     Question,
@@ -72,8 +73,17 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
             sources = (SOURCE,)
         elif status is TaxStatus.NOT_APPLICABLE:
             evidence_refs = ("evidence-not-applicable",)
+        calculation = (
+            CalculationRecord(
+                "generic.base_minus_deductions_times_rate.v1",
+                "1000.00", "100.00", "900.00", "0.13", "117.00", ("vat-return-2026",),
+            )
+            if status is TaxStatus.CALCULATED and definition.tax_id == "vat"
+            else None
+        )
         results.append(TaxResult(
-            definition.tax_id, status, pack_ids, diagnostics, gaps, evidence_refs, sources
+            definition.tax_id, status, pack_ids, diagnostics, gaps, evidence_refs, sources,
+            calculation,
         ))
     request = TaxCheckRequest(PERIOD, "CN", input_hashes=("a" * 64, "b" * 64))
     questions = (
@@ -113,6 +123,8 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("需要补充与该事项相关的资料", report)
         self.assertIn("需要补充适用的当地政策参数", report)
         self.assertIn(SOURCE.url, report)
+        self.assertIn("117.00", report)
+        self.assertIn("generic.base_minus_deductions_times_rate.v1", report)
         self.assertIn("## 待确认客户问题", report)
         self.assertNotIn("model hidden reasoning", report)
         self.assertNotIn("signature", report.lower())

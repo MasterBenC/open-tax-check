@@ -5,6 +5,8 @@ from datetime import date
 
 from open_tax_check.schemas import to_dict
 from open_tax_check.tax_models import (
+    CalculationRecord,
+    CalculationSpec,
     AuditEvent,
     Confirmation,
     DateRange,
@@ -26,6 +28,21 @@ from open_tax_check.tax_models import (
 
 
 class TaxModelTests(unittest.TestCase):
+    def test_calculation_contract_serializes_auditable_record(self):
+        spec = CalculationSpec(
+            "generic.base_minus_deductions_times_rate.v1",
+            "calc.tax_base",
+            "calc.rate",
+            "calc.deductions",
+        )
+        record = CalculationRecord(
+            spec.formula_id, "1000.00", "100.00", "900.00", "0.13", "117.00", ("source-1",)
+        )
+        result = TaxResult("vat", TaxStatus.CALCULATED, calculation=record)
+
+        self.assertEqual(to_dict(result)["calculation"]["amount"], "117.00")
+        self.assertEqual(to_dict(result)["calculation"]["evidence_refs"], ["source-1"])
+
     def test_screening_pack_requires_complete_versioned_applicability_contract(self):
         requirement = FactRequirement("activity.applies", "boolean", (), 100, True, True)
         base = dict(

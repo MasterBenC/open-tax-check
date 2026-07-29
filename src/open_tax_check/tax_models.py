@@ -188,6 +188,45 @@ class FactRequirement:
 
 
 @dataclass(frozen=True, slots=True)
+class CalculationSpec:
+    """Allowlisted fact bindings for a deterministic calculation evaluator."""
+
+    formula_id: str
+    tax_base_fact_key: str
+    rate_fact_key: str
+    deductions_fact_key: str | None = None
+
+    def __post_init__(self) -> None:
+        for value in (self.formula_id, self.tax_base_fact_key, self.rate_fact_key):
+            _require_identifier(value)
+        if self.deductions_fact_key is not None:
+            _require_identifier(self.deductions_fact_key)
+
+
+@dataclass(frozen=True, slots=True)
+class CalculationRecord:
+    """Auditable, serialized output of a confirmed tax calculation."""
+
+    formula_id: str
+    tax_base: str
+    deductions: str
+    net_base: str
+    rate: str
+    amount: str
+    evidence_refs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.formula_id)
+        for value in (self.tax_base, self.deductions, self.net_base, self.rate, self.amount):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("invalid_calculation_record")
+        refs = tuple(self.evidence_refs)
+        if any(not isinstance(reference, str) or not reference.strip() for reference in refs):
+            raise ValueError("invalid_calculation_record")
+        object.__setattr__(self, "evidence_refs", refs)
+
+
+@dataclass(frozen=True, slots=True)
 class TaxFact:
     key: str
     value: str | int | bool | None
@@ -235,6 +274,7 @@ class TaxPack:
     rule_version: str = "1.0.0"
     fact_catalog_version: str = ""
     applicability_fact_keys: tuple[str, ...] = ()
+    calculation: CalculationSpec | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.pack_id)
@@ -260,6 +300,18 @@ class TaxPack:
                     raise ValueError("unknown_applicability_fact_key")
                 if requirement.answer_type != "boolean":
                     raise ValueError("non_boolean_applicability_fact")
+        if self.calculation is not None and not isinstance(self.calculation, CalculationSpec):
+            raise ValueError("invalid_calculation_spec")
+        if self.calculation is not None:
+            requirement_keys = {item.fact_key for item in self.requirements}
+            bound_keys = {
+                self.calculation.tax_base_fact_key,
+                self.calculation.rate_fact_key,
+            }
+            if self.calculation.deductions_fact_key is not None:
+                bound_keys.add(self.calculation.deductions_fact_key)
+            if not bound_keys.issubset(requirement_keys):
+                raise ValueError("invalid_calculation_spec")
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +350,7 @@ class EvaluationOutcome:
     status: TaxStatus
     diagnostics: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
+    calculation: CalculationRecord | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", _coerce_tax_status(self.status))
@@ -311,6 +364,8 @@ class EvaluationOutcome:
             "evidence_refs",
             _canonical_evaluation_collection(self.evidence_refs, "invalid_evaluation_evidence_refs"),
         )
+        if self.calculation is not None and not isinstance(self.calculation, CalculationRecord):
+            raise ValueError("invalid_evaluation_calculation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +377,7 @@ class TaxResult:
     gaps: tuple[FactGap, ...] = ()
     evidence_refs: tuple[str, ...] = ()
     rule_sources: tuple[RuleSource, ...] = ()
+    calculation: CalculationRecord | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.tax_id)
@@ -334,6 +390,8 @@ class TaxResult:
         _require_identifiers(self.rule_pack_ids)
         if self.status is TaxStatus.NOT_APPLICABLE and not self.evidence_refs:
             raise ValueError("not_applicable_without_evidence")
+        if self.calculation is not None and not isinstance(self.calculation, CalculationRecord):
+            raise ValueError("invalid_tax_result_calculation")
 
 
 @dataclass(frozen=True, slots=True)

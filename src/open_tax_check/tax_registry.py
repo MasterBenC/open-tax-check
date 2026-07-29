@@ -10,6 +10,7 @@ import re
 
 from .tax_models import (
     DateRange,
+    CalculationSpec,
     FactRequirement,
     PackMaturity,
     PackSegment,
@@ -50,6 +51,7 @@ _PACK_V1_KEYS = frozenset({
 _PACK_V1_1_KEYS = _PACK_V1_KEYS | frozenset({
     "rule_version", "fact_catalog_version", "applicability_fact_keys",
 })
+_PACK_V1_2_KEYS = _PACK_V1_1_KEYS | frozenset({"calculation"})
 _MAX_PACK_MANIFEST_BYTES = 256 * 1024
 _MAX_PACK_MANIFESTS = 64
 _TAX_IDS = frozenset(item.tax_id for item in TAX_DEFINITIONS)
@@ -118,11 +120,11 @@ def _parse_requirement(value: object) -> FactRequirement:
 
 def _parse_source(value: object, *, schema_version: str) -> RuleSource:
     required = {"title", "url", "published_on"}
-    if schema_version == "1.1.0":
+    if schema_version in {"1.1.0", "1.2.0"}:
         required |= {"issuer", "document_number", "article_refs", "verified_on"}
     if not isinstance(value, dict) or set(value) != required:
-        raise TaxPackError("invalid_source_metadata" if schema_version == "1.1.0" else "invalid_source")
-    metadata_code = "invalid_source_metadata" if schema_version == "1.1.0" else "invalid_source_url"
+        raise TaxPackError("invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0"} else "invalid_source")
+    metadata_code = "invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0"} else "invalid_source_url"
     url = _required_string(value["url"], metadata_code)
     if not url.startswith("https://"):
         raise TaxPackError(metadata_code)
@@ -150,9 +152,14 @@ def validate_pack_payload(payload: object) -> TaxPack:
     if not isinstance(payload, dict) or not isinstance(payload.get("schema_version"), str):
         raise TaxPackError("unsupported_schema_version")
     schema_version = payload["schema_version"]
-    if schema_version not in {"1.0.0", "1.1.0"}:
+    if schema_version not in {"1.0.0", "1.1.0", "1.2.0"}:
         raise TaxPackError("unsupported_schema_version")
-    if set(payload) != (_PACK_V1_KEYS if schema_version == "1.0.0" else _PACK_V1_1_KEYS):
+    expected_keys = (
+        _PACK_V1_KEYS if schema_version == "1.0.0"
+        else _PACK_V1_1_KEYS if schema_version == "1.1.0"
+        else _PACK_V1_2_KEYS
+    )
+    if set(payload) != expected_keys:
         raise TaxPackError("invalid_pack_keys")
     tax_id = _required_string(payload["tax_id"], "invalid_tax_id")
     if tax_id not in _TAX_IDS:
@@ -193,11 +200,14 @@ def validate_pack_payload(payload: object) -> TaxPack:
     rule_version = "1.0.0"
     fact_catalog_version = ""
     applicability_fact_keys: tuple[str, ...] = ()
-    if schema_version == "1.1.0":
+    calculation = None
+    if schema_version in {"1.1.0", "1.2.0"}:
         rule_version = _required_string(payload["rule_version"], "missing_rule_version")
         fact_catalog_version = _required_string(payload["fact_catalog_version"], "missing_fact_catalog_version")
         raw_applicability = payload["applicability_fact_keys"]
-        if not isinstance(raw_applicability, list) or not raw_applicability or not all(isinstance(item, str) and item.strip() for item in raw_applicability):
+        if not isinstance(raw_applicability, list) or not all(isinstance(item, str) and item.strip() for item in raw_applicability):
+            raise TaxPackError("invalid_applicability_fact_keys")
+        if schema_version == "1.1.0" and not raw_applicability:
             raise TaxPackError("invalid_applicability_fact_keys")
         applicability_fact_keys = tuple(raw_applicability)
         requirements_by_key = {item.fact_key: item for item in requirements}
@@ -207,8 +217,31 @@ def validate_pack_payload(payload: object) -> TaxPack:
                 raise TaxPackError("unknown_applicability_fact_key")
             if requirement.answer_type != "boolean":
                 raise TaxPackError("non_boolean_applicability_fact")
-        if maturity is PackMaturity.SCREENING and evaluator_id != "generic.applicability.screening.v1":
+        if maturity is PackMaturity.SCREENING and (
+            not raw_applicability or evaluator_id != "generic.applicability.screening.v1"
+        ):
             raise TaxPackError("invalid_screening_evaluator")
+        if schema_version == "1.2.0":
+            raw_calculation = payload["calculation"]
+            if not isinstance(raw_calculation, dict) or set(raw_calculation) != {
+                "formula_id", "tax_base_fact_key", "rate_fact_key", "deductions_fact_key"
+            }:
+                raise TaxPackError("invalid_calculation_spec")
+            try:
+                calculation = CalculationSpec(**raw_calculation)
+            except (TypeError, ValueError) as error:
+                raise TaxPackError("invalid_calculation_spec") from error
+            requirement_keys = {item.fact_key for item in requirements}
+            bound_keys = {
+                calculation.tax_base_fact_key,
+                calculation.rate_fact_key,
+            }
+            if calculation.deductions_fact_key is not None:
+                bound_keys.add(calculation.deductions_fact_key)
+            if not bound_keys.issubset(requirement_keys):
+                raise TaxPackError("invalid_calculation_spec")
+            if maturity is not PackMaturity.CALCULATION or evaluator_id != "generic.calculation.base_minus_deductions_times_rate.v1":
+                raise TaxPackError("invalid_calculation_spec")
     try:
         return TaxPack(
             pack_id=_required_string(payload["pack_id"], "invalid_pack_id"),
@@ -223,6 +256,7 @@ def validate_pack_payload(payload: object) -> TaxPack:
             rule_version=rule_version,
             fact_catalog_version=fact_catalog_version,
             applicability_fact_keys=applicability_fact_keys,
+            calculation=calculation,
         )
     except ValueError as error:
         raise TaxPackError("invalid_tax_pack") from error

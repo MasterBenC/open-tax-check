@@ -42,3 +42,56 @@ def test_tax_health_check_cli_rejects_unknown_request_fields(monkeypatch, tmp_pa
 
     assert cli.main() == 4
     assert json.loads(capsys.readouterr().out)["error_code"] == "invalid_tax_health_request"
+
+
+def test_tax_health_check_cli_accepts_explicit_calculation_pack(monkeypatch, tmp_path, capsys):
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps({
+        **request_payload(),
+        "facts": [
+            {"key": "calc.tax_base", "value": "1000.00", "state": "confirmed", "evidence_refs": ["vat-return"], "confirmed_by": "customer", "confirmed_at": "2026-01-02T00:00:00+08:00"},
+            {"key": "calc.rate", "value": "0.13", "state": "confirmed", "evidence_refs": ["vat-rule"], "confirmed_by": "customer", "confirmed_at": "2026-01-02T00:00:00+08:00"},
+        ],
+    }), encoding="utf-8")
+    pack_path = tmp_path / "vat-calculation.json"
+    pack_path.write_text(json.dumps({
+        "schema_version": "1.2.0",
+        "pack_id": "vat-calculation-v1",
+        "tax_id": "vat",
+        "jurisdiction": "CN",
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "maturity": "calculation",
+        "requirements": [
+            {"fact_key": "calc.tax_base", "answer_type": "decimal", "evidence_types": ["vat_return"], "priority": 100, "blocking": True, "critical": True},
+            {"fact_key": "calc.rate", "answer_type": "decimal", "evidence_types": ["rule_source"], "priority": 100, "blocking": True, "critical": True},
+        ],
+        "local_parameter_keys": [],
+        "evaluator_id": "generic.calculation.base_minus_deductions_times_rate.v1",
+        "sources": [{"title": "Official VAT source", "url": "https://example.test/vat", "published_on": "2026-01-01", "issuer": "Official issuer", "document_number": "DOC-2026", "article_refs": ["Article 1"], "verified_on": "2026-01-01"}],
+        "rule_version": "2026.1",
+        "fact_catalog_version": "zh-CN.v1",
+        "applicability_fact_keys": [],
+        "calculation": {"formula_id": "generic.base_minus_deductions_times_rate.v1", "tax_base_fact_key": "calc.tax_base", "rate_fact_key": "calc.rate", "deductions_fact_key": None},
+    }), encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(tmp_path / "output"), "--pack", str(pack_path)
+    ])
+
+    assert cli.main() == 0
+    snapshot = json.loads((tmp_path / "output" / "tax-health-snapshot.json").read_text(encoding="utf-8"))
+    vat = next(item for item in snapshot["results"] if item["tax_id"] == "vat")
+    assert vat["calculation"]["amount"] == "130.00"
+
+
+def test_tax_health_check_cli_rejects_invalid_explicit_pack(monkeypatch, tmp_path, capsys):
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request_payload()), encoding="utf-8")
+    pack_path = tmp_path / "invalid-pack.json"
+    pack_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(tmp_path / "output"), "--pack", str(pack_path)
+    ])
+
+    assert cli.main() == 4
+    assert json.loads(capsys.readouterr().out)["error_code"] == "invalid_tax_rule_pack"

@@ -34,4 +34,5 @@ from .tax_reporting import (
 )
 from .tax_io import tax_request_from_dict, tax_request_to_dict
 from .tax_calculation import TaxCalculationRequest, TaxCalculationResult, calculate_tax_amount
+from .tax_models import CalculationRecord, CalculationSpec
 from .evidence import EvidenceVerification, verify_evidence_file
