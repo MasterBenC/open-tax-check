@@ -307,6 +307,19 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
             raise _EvaluationOutcomeValidationError("calculation_period_requires_split")
         if len({entry.label_zh for entry in selected_entries}) != 1:
             raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        maximum_tax_bases = {
+            entry.maximum_tax_base for entry in selected_entries
+        }
+        if len(maximum_tax_bases) != 1:
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        maximum_tax_base = next(iter(maximum_tax_bases))
+        if (
+            maximum_tax_base is not None
+            and decimal_value(base_fact) > Decimal(maximum_tax_base)
+        ):
+            raise _EvaluationOutcomeValidationError(
+                "tax_base_outside_statutory_range"
+            )
         rate = Decimal(selected_entries[0].rate)
         rate_selector = selected_entries[0].selector
         rate_selector_label_zh = selected_entries[0].label_zh
@@ -479,6 +492,7 @@ def _evaluate_selected_packs(
             "unknown_statutory_rate_selector",
             "calculation_period_requires_split",
             "rate_outside_statutory_range",
+            "tax_base_outside_statutory_range",
         }:
             return _blocked_result(tax_id, diagnostic, pack_ids, sources)
         return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)

@@ -257,9 +257,14 @@ def validate_pack_payload(payload: object) -> TaxPack:
                         raise ValueError("invalid_calculation_spec")
                     entries = []
                     for raw_entry in raw_entries:
-                        if not isinstance(raw_entry, dict) or set(raw_entry) != {
-                            "selector", "label_zh", "rate"
-                        }:
+                        if (
+                            not isinstance(raw_entry, dict)
+                            or set(raw_entry)
+                            not in (
+                                {"selector", "label_zh", "rate"},
+                                {"selector", "label_zh", "rate", "maximum_tax_base"},
+                            )
+                        ):
                             raise ValueError("invalid_calculation_spec")
                         entries.append(StatutoryRateEntry(**raw_entry))
                     calculation_values["rate_table"] = StatutoryRateTable(
@@ -427,6 +432,7 @@ _PACK_FILENAME_TAX_IDS = {
     "vat-cn-2023-2026.prototype.json": "vat",
     "consumption-tax-cn-2023-2026.screening.json": "consumption_tax",
     "enterprise-income-tax-cn-2023-2026.screening.json": "enterprise_income_tax",
+    "enterprise-income-tax-cn-2023-2026.calculation.json": "enterprise_income_tax",
     "individual-income-tax-cn-2023-2026.screening.json": "individual_income_tax",
     "resource-tax-cn-2023-2026.screening.json": "resource_tax",
     "urban-maintenance-construction-tax-cn-2023-2026.screening.json": "urban_maintenance_construction_tax",

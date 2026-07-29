@@ -8,7 +8,7 @@
   "maturity": "calculation",
   "requirements": [
     {
-      "fact_key": "calc.tax_base",
+      "fact_key": "surcharge.vat_consumption_tax_base",
       "answer_type": "decimal",
       "evidence_types": ["vat_return", "consumption_tax_return", "tax_payment_record"],
       "priority": 100,
@@ -42,7 +42,7 @@
   "applicability_fact_keys": [],
   "calculation": {
     "formula_id": "generic.base_times_rate.v1",
-    "tax_base_fact_key": "calc.tax_base",
+    "tax_base_fact_key": "surcharge.vat_consumption_tax_base",
     "rate_fact_key": null,
     "deductions_fact_key": null,
     "rate_table": {

@@ -195,6 +195,7 @@ class StatutoryRateEntry:
     selector: str
     label_zh: str
     rate: str
+    maximum_tax_base: str | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.selector)
@@ -208,6 +209,13 @@ class StatutoryRateEntry:
             raise ValueError("invalid_statutory_rate_entry") from error
         if not parsed.is_finite() or parsed < 0 or parsed > 1:
             raise ValueError("invalid_statutory_rate_entry")
+        if self.maximum_tax_base is not None:
+            try:
+                maximum_tax_base = Decimal(self.maximum_tax_base)
+            except (InvalidOperation, TypeError) as error:
+                raise ValueError("invalid_statutory_rate_entry") from error
+            if not maximum_tax_base.is_finite() or maximum_tax_base < 0:
+                raise ValueError("invalid_statutory_rate_entry")
 
 
 @dataclass(frozen=True, slots=True)

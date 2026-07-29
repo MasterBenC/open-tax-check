@@ -100,6 +100,21 @@ class TaxPromptTests(unittest.TestCase):
         )
         self.assertIn("不得由AI", prompt.help_zh)
 
+    def test_builtin_enterprise_income_tax_path_prompt_requires_eligibility_confirmation(self):
+        prompt = load_builtin_fact_catalog()["enterprise_income_tax.rate_path"]
+
+        self.assertEqual(prompt.answer_type, "choice")
+        self.assertEqual(
+            tuple(choice.value for choice in prompt.choices),
+            (
+                "standard_resident_enterprise",
+                "qualified_high_technology_enterprise",
+                "qualified_small_low_profit_enterprise",
+            ),
+        )
+        self.assertIn("不得由AI", prompt.help_zh)
+        self.assertIn("300万元", prompt.help_zh)
+
     def test_builtin_catalog_is_immutable_mapping(self):
         prompts = load_builtin_fact_catalog()
         self.assertEqual(prompts["activity.has_vat_taxable_transaction"].question_zh, "2023至2026年是否发生过销售货物、服务、无形资产、不动产或者进口货物？")

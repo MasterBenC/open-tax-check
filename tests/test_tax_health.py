@@ -37,7 +37,7 @@ def test_builtin_deed_tax_blocks_rate_outside_statutory_range():
         TaxFact("activity.acquired_land_or_building_rights", True, FactState.CONFIRMED, ("title",), "customer", timestamp),
         TaxFact("policy.deed_tax_local_rule", "\u7701\u7ea7\u653f\u7b56", FactState.CONFIRMED, ("policy",), "customer", timestamp),
         TaxFact("deed_tax.applicable_rate", "0.10", FactState.CONFIRMED, ("policy",), "customer", timestamp),
-        TaxFact("calc.tax_base", "100000.00", FactState.CONFIRMED, ("contract",), "customer", timestamp),
+        TaxFact("deed_tax.tax_base", "100000.00", FactState.CONFIRMED, ("contract",), "customer", timestamp),
     )
 
     snapshot = run_tax_health_check(TaxCheckRequest(PERIOD, "CN", facts))
@@ -45,6 +45,26 @@ def test_builtin_deed_tax_blocks_rate_outside_statutory_range():
 
     assert deed_tax.status is TaxStatus.BLOCKED
     assert deed_tax.diagnostics == ("rate_outside_statutory_range",)
+
+
+def test_builtin_small_low_profit_enterprise_path_enforces_income_ceiling():
+    timestamp = "2026-07-29T10:00:00+08:00"
+
+    def result_for(taxable_income):
+        facts = (
+            TaxFact("entity.has_enterprise_income_tax_scope", True, FactState.CONFIRMED, ("return",), "customer", timestamp),
+            TaxFact("enterprise_income_tax.taxable_income", taxable_income, FactState.CONFIRMED, ("return",), "customer", timestamp),
+            TaxFact("enterprise_income_tax.rate_path", "qualified_small_low_profit_enterprise", FactState.CONFIRMED, ("qualification",), "customer", timestamp),
+        )
+        snapshot = run_tax_health_check(TaxCheckRequest(PERIOD, "CN", facts))
+        return next(item for item in snapshot.results if item.tax_id == "enterprise_income_tax")
+
+    calculated = result_for("1000000.00")
+    blocked = result_for("3000000.01")
+
+    assert calculated.calculation.amount == "50000.00"
+    assert blocked.status is TaxStatus.BLOCKED
+    assert blocked.diagnostics == ("tax_base_outside_statutory_range",)
 SOURCE = RuleSource("国家税务总局", "https://www.chinatax.gov.cn/example", date(2026, 1, 1))
 
 

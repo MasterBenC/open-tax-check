@@ -146,7 +146,7 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
         pack = packs[0]
         self.assertEqual(pack.effective_period, PERIOD)
         self.assertEqual(pack.calculation.formula_id, "generic.base_times_rate.v1")
-        self.assertEqual(pack.calculation.tax_base_fact_key, "calc.tax_base")
+        self.assertEqual(pack.calculation.tax_base_fact_key, "deed_tax.tax_base")
         self.assertEqual(pack.calculation.rate_fact_key, "deed_tax.applicable_rate")
         self.assertIsNone(pack.calculation.rate_table)
         self.assertEqual(pack.local_parameter_keys, ("deed_tax.applicable_rate",))
@@ -183,7 +183,49 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
                 )
                 self.assertEqual(len(packs), 1)
                 self.assertEqual(packs[0].calculation.fixed_rate, rate)
-                self.assertEqual(packs[0].calculation.tax_base_fact_key, "calc.tax_base")
+                self.assertEqual(
+                    packs[0].calculation.tax_base_fact_key,
+                    "surcharge.vat_consumption_tax_base",
+                )
+
+    def test_enterprise_income_tax_pack_has_audited_common_rate_paths(self):
+        packs = tuple(
+            pack for pack in self.packs
+            if pack.tax_id == "enterprise_income_tax"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(len(packs), 1)
+        entries = {
+            entry.selector: entry
+            for entry in packs[0].calculation.rate_table.entries
+        }
+        self.assertEqual(entries["standard_resident_enterprise"].rate, "0.25")
+        self.assertEqual(entries["qualified_high_technology_enterprise"].rate, "0.15")
+        self.assertEqual(entries["qualified_small_low_profit_enterprise"].rate, "0.05")
+        self.assertEqual(
+            entries["qualified_small_low_profit_enterprise"].maximum_tax_base,
+            "3000000.00",
+        )
+
+    def test_formal_calculation_packs_do_not_reuse_unrelated_tax_bases(self):
+        base_keys = {
+            pack.tax_id: pack.calculation.tax_base_fact_key
+            for pack in self.packs
+            if pack.maturity is PackMaturity.CALCULATION
+        }
+
+        self.assertEqual(base_keys["stamp_tax"], "stamp_tax.tax_base")
+        self.assertEqual(base_keys["deed_tax"], "deed_tax.tax_base")
+        for tax_id in (
+            "urban_maintenance_construction_tax",
+            "education_surcharge",
+            "local_education_surcharge",
+        ):
+            self.assertEqual(
+                base_keys[tax_id],
+                "surcharge.vat_consumption_tax_base",
+            )
 
 
 if __name__ == "__main__":

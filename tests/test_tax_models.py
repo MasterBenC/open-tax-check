@@ -51,6 +51,23 @@ class TaxModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^invalid_statutory_rate_entry$"):
             StatutoryRateEntry("sale_contract", "买卖合同", "1.0001")
 
+    def test_statutory_rate_entry_validates_optional_maximum_tax_base(self):
+        entry = StatutoryRateEntry(
+            "small_low_profit",
+            "\u5c0f\u578b\u5fae\u5229\u4f01\u4e1a",
+            "0.05",
+            maximum_tax_base="3000000.00",
+        )
+
+        self.assertEqual(entry.maximum_tax_base, "3000000.00")
+        with self.assertRaisesRegex(ValueError, "^invalid_statutory_rate_entry$"):
+            StatutoryRateEntry(
+                "small_low_profit",
+                "\u5c0f\u578b\u5fae\u5229\u4f01\u4e1a",
+                "0.05",
+                maximum_tax_base="-1",
+            )
+
     def test_calculation_spec_requires_exactly_one_rate_source(self):
         table = StatutoryRateTable(
             "stamp_tax.tax_item",

@@ -109,7 +109,7 @@ def test_tax_health_check_cli_runs_builtin_stamp_tax_rate_table(monkeypatch, tmp
                 "confirmed_at": "2026-01-02T00:00:00+08:00",
             },
             {
-                "key": "calc.tax_base",
+                "key": "stamp_tax.tax_base",
                 "value": "1000.00",
                 "state": "confirmed",
                 "evidence_refs": ["sale-contract"],
@@ -146,7 +146,7 @@ def test_tax_health_check_cli_calculates_deed_tax_only_with_confirmed_local_rate
             {"key": "activity.acquired_land_or_building_rights", "value": True, "state": "confirmed", "evidence_refs": ["title-transfer"], "confirmed_by": "customer", "confirmed_at": timestamp},
             {"key": "policy.deed_tax_local_rule", "value": "当地现行契税具体适用税率文件", "state": "confirmed", "evidence_refs": ["provincial-policy"], "confirmed_by": "customer", "confirmed_at": timestamp},
             {"key": "deed_tax.applicable_rate", "value": "0.03", "state": "confirmed", "evidence_refs": ["provincial-policy"], "confirmed_by": "customer", "confirmed_at": timestamp},
-            {"key": "calc.tax_base", "value": "100000.00", "state": "confirmed", "evidence_refs": ["property-contract"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "deed_tax.tax_base", "value": "100000.00", "state": "confirmed", "evidence_refs": ["property-contract"], "confirmed_by": "customer", "confirmed_at": timestamp},
         ],
     }), encoding="utf-8")
     monkeypatch.setattr(cli.sys, "argv", [
@@ -174,7 +174,7 @@ def test_tax_health_check_cli_calculates_three_vat_consumption_tax_addons(monkey
             {"key": "tax.has_vat_or_consumption_tax_payable", "value": True, "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
             {"key": "policy.local_education_surcharge_rule", "value": "当地现行地方教育附加政策", "state": "confirmed", "evidence_refs": ["local-policy"], "confirmed_by": "customer", "confirmed_at": timestamp},
             {"key": "urban_maintenance_construction_tax.location_category", "value": "urban_area", "state": "confirmed", "evidence_refs": ["registration"], "confirmed_by": "customer", "confirmed_at": timestamp},
-            {"key": "calc.tax_base", "value": "10000.00", "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "surcharge.vat_consumption_tax_base", "value": "10000.00", "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
         ],
     }), encoding="utf-8")
     monkeypatch.setattr(cli.sys, "argv", [
