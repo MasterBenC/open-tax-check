@@ -13,6 +13,8 @@ from open_tax_check.document_extraction import (
     document_extraction_to_dict,
 )
 
+LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION = "document-extraction/v1"
+
 
 def valid_result(**overrides):
     page = DocumentPage(page_number=1, width=100, height=200, unit="pt", rotation=0)
@@ -63,6 +65,44 @@ def test_text_and_not_performed_semantics():
     payload = document_extraction_to_dict(valid_result())
     payload["blocks"][0]["text"] = "x" * (1024 * 1024 + 1)
     with pytest.raises(ValueError): document_extraction_from_dict(payload)
+
+
+def test_native_text_uses_explicit_unscored_confidence_source():
+    block = TextBlock(
+        text="native",
+        page_number=1,
+        coordinates=((0, 0), (1, 0), (1, 1), (0, 1)),
+        confidence=None,
+        confidence_source="native_unscored",
+    )
+    assert block.confidence is None
+    assert block.confidence_source == "native_unscored"
+
+
+def test_model_confidence_requires_a_score_and_v11_payload_field():
+    with pytest.raises(ValueError):
+        TextBlock(
+            text="model",
+            page_number=1,
+            coordinates=((0, 0), (1, 0), (1, 1), (0, 1)),
+            confidence=None,
+            confidence_source="model",
+        )
+    payload = document_extraction_to_dict(valid_result())
+    assert payload["schema_version"] == DOCUMENT_EXTRACTION_SCHEMA_VERSION
+    assert "confidence_source" in payload["blocks"][0]
+
+
+def test_legacy_v1_payload_normalizes_non_null_confidence_to_model():
+    payload = document_extraction_to_dict(valid_result())
+    payload["schema_version"] = LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION
+    payload["blocks"][0].pop("confidence_source", None)
+    payload["tables"][0]["cells"][0].pop("confidence_source", None)
+
+    restored = document_extraction_from_dict(payload)
+
+    assert restored.schema_version == LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION
+    assert restored.blocks[0].confidence_source == "model"
     result = valid_result(status="not_performed", issues=(ExtractionIssue(code="off", severity="warning", message="not run"),), blocks=(), tables=())
     assert result.status == "not_performed"
     payload = document_extraction_to_dict(result)

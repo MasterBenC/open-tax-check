@@ -5,7 +5,12 @@ from datetime import datetime
 import json
 from typing import Mapping
 
-DOCUMENT_EXTRACTION_SCHEMA_VERSION = "document-extraction/v1"
+DOCUMENT_EXTRACTION_SCHEMA_VERSION = "document-extraction/v1.1"
+LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION = "document-extraction/v1"
+_SUPPORTED_SCHEMA_VERSIONS = {
+    DOCUMENT_EXTRACTION_SCHEMA_VERSION,
+    LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION,
+}
 _STATUSES = {"not_requested", "not_performed", "completed", "partial", "failed"}
 _PROVIDERS = {"off", "host", "cloud"}
 _MAX_TEXT = 1024 * 1024
@@ -27,7 +32,10 @@ def _coordinates(value):
 def _confidence(value):
     if isinstance(value, bool):
         raise ValueError("invalid_confidence")
-    value = float(value)
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("invalid_confidence") from None
     if not 0 <= value <= 1:
         raise ValueError("invalid_confidence")
     return value
@@ -64,14 +72,21 @@ class TextBlock:
     text: str
     page_number: int
     coordinates: tuple[tuple[float, float], ...]
-    confidence: float
+    confidence: float | None
+    confidence_source: str = "model"
     language: str | None = None
 
     def __post_init__(self):
         if not isinstance(self.text, str) or len(self.text.encode("utf-8")) > _MAX_TEXT: raise ValueError("text_too_long")
         if self.page_number < 1: raise ValueError("invalid_page_number")
         object.__setattr__(self, "coordinates", _coordinates(self.coordinates))
-        object.__setattr__(self, "confidence", _confidence(self.confidence))
+        if self.confidence_source not in {"model", "native_unscored"}:
+            raise ValueError("invalid_confidence_source")
+        if self.confidence_source == "native_unscored":
+            if self.confidence is not None:
+                raise ValueError("native_confidence_must_be_none")
+        else:
+            object.__setattr__(self, "confidence", _confidence(self.confidence))
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,15 +94,22 @@ class TableCell:
     text: str
     page_number: int
     coordinates: tuple[tuple[float, float], ...]
-    confidence: float
+    confidence: float | None
     row_index: int
     column_index: int
+    confidence_source: str = "model"
 
     def __post_init__(self):
         if not isinstance(self.text, str) or len(self.text.encode("utf-8")) > _MAX_TEXT: raise ValueError("text_too_long")
         if self.page_number < 1 or self.row_index < 0 or self.column_index < 0: raise ValueError("invalid_index")
         object.__setattr__(self, "coordinates", _coordinates(self.coordinates))
-        object.__setattr__(self, "confidence", _confidence(self.confidence))
+        if self.confidence_source not in {"model", "native_unscored"}:
+            raise ValueError("invalid_confidence_source")
+        if self.confidence_source == "native_unscored":
+            if self.confidence is not None:
+                raise ValueError("native_confidence_must_be_none")
+        else:
+            object.__setattr__(self, "confidence", _confidence(self.confidence))
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +174,7 @@ class DocumentExtraction:
     source_refs: tuple[str, ...]
 
     def __post_init__(self):
-        if self.schema_version != DOCUMENT_EXTRACTION_SCHEMA_VERSION: raise ValueError("invalid_schema_version")
+        if self.schema_version not in _SUPPORTED_SCHEMA_VERSIONS: raise ValueError("invalid_schema_version")
         if self.provider not in _PROVIDERS: raise ValueError("invalid_provider")
         if self.status not in _STATUSES: raise ValueError("invalid_status")
         if self.status == "completed" and (self.provider == "off" or any(issue.code in {"off", "provider_off"} for issue in self.issues)): raise ValueError("invalid_completed_status")
@@ -186,8 +208,26 @@ def document_extraction_from_dict(payload: Mapping[str, object]) -> DocumentExtr
     a = require_map(payload["authorization"], ("provider", "provider_version", "transfer_scope", "subject", "authorized_at", "scope", "cache_retention", "revoked"))
     auth = AuthorizationRecord(**a)
     pages = tuple(DocumentPage(**require_map(v, ("page_number", "width", "height", "unit", "rotation"))) for v in payload["pages"])
-    blocks = tuple(TextBlock(**require_map(v, ("text", "page_number", "coordinates", "confidence", "language"))) for v in payload["blocks"])
+    schema_version = payload["schema_version"]
+    if schema_version not in _SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError("invalid_schema_version")
+    block_fields = ("text", "page_number", "coordinates", "confidence", "language")
+    cell_fields = ("text", "page_number", "coordinates", "confidence", "row_index", "column_index")
+    if schema_version == DOCUMENT_EXTRACTION_SCHEMA_VERSION:
+        block_fields += ("confidence_source",)
+        cell_fields += ("confidence_source",)
+    def parse_block(value):
+        record = dict(require_map(value, block_fields))
+        if schema_version == LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION:
+            record["confidence_source"] = "model"
+        return TextBlock(**record)
+    def parse_cell(value):
+        record = dict(require_map(value, cell_fields))
+        if schema_version == LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION:
+            record["confidence_source"] = "model"
+        return TableCell(**record)
+    blocks = tuple(parse_block(v) for v in payload["blocks"])
     tables = tuple((lambda v: (require_map(v, ("page_number", "coordinates", "confidence", "cells"))))(v) for v in payload["tables"])
-    tables = tuple(TableRegion(page_number=v["page_number"], coordinates=v["coordinates"], confidence=v["confidence"], cells=tuple(TableCell(**require_map(c, ("text", "page_number", "coordinates", "confidence", "row_index", "column_index"))) for c in v["cells"])) for v in tables)
+    tables = tuple(TableRegion(page_number=v["page_number"], coordinates=v["coordinates"], confidence=v["confidence"], cells=tuple(parse_cell(c) for c in v["cells"])) for v in tables)
     issues = tuple(ExtractionIssue(**require_map(v, ("code", "severity", "message", "page_number", "area"))) for v in payload["issues"])
     return DocumentExtraction(schema_version=payload["schema_version"], document_id=payload["document_id"], source_id=payload["source_id"], filename=payload["filename"], media_type=payload["media_type"], provider=payload["provider"], provider_version=payload["provider_version"], executed_at=payload["executed_at"], authorization=auth, status=payload["status"], pages=pages, blocks=blocks, tables=tables, issues=issues, source_refs=tuple(payload["source_refs"]))
