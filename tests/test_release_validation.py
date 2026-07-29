@@ -157,6 +157,37 @@ class ReleaseValidationTests(unittest.TestCase):
             "tax_pack_release_invalid:vat_calculation_period_gap",
         )
 
+    def test_tax_pack_release_surface_rejects_new_fixed_rate_pack_gap(self):
+        cases = (
+            (
+                "vehicle-purchase-tax-cn-2023-2026.calculation.json",
+                "vehicle_purchase_tax",
+            ),
+            (
+                "tobacco-tax-cn-2023-2026.calculation.json",
+                "tobacco_tax",
+            ),
+        )
+        for filename, error_prefix in cases:
+            with self.subTest(filename=filename):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    shutil.copytree(
+                        ROOT / "src/open_tax_check/tax_packs",
+                        root / "src/open_tax_check/tax_packs",
+                    )
+                    shutil.copy2(ROOT / "pyproject.toml", root / "pyproject.toml")
+                    (root / "src/open_tax_check/tax_packs" / filename).unlink(
+                        missing_ok=True
+                    )
+
+                    result = validate_release.validate_pack_release_surface(root)
+
+                self.assertEqual(
+                    result,
+                    f"tax_pack_release_invalid:{error_prefix}_calculation_period_gap",
+                )
+
     def test_tax_pack_release_surface_rejects_non_official_calculation_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

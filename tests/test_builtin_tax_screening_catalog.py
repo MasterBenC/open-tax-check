@@ -323,6 +323,28 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
             "3000000.00",
         )
 
+    def test_vehicle_purchase_and_tobacco_tax_use_fixed_statutory_rates(self):
+        expected = {
+            "vehicle_purchase_tax": ("vehicle_purchase_tax.tax_base", "0.10"),
+            "tobacco_tax": ("tobacco_tax.purchase_price_total", "0.20"),
+        }
+        for tax_id, (base_key, rate) in expected.items():
+            with self.subTest(tax_id=tax_id):
+                packs = tuple(
+                    pack
+                    for pack in self.packs
+                    if pack.tax_id == tax_id
+                    and pack.maturity is PackMaturity.CALCULATION
+                )
+                self.assertEqual(len(packs), 1)
+                self.assertEqual(packs[0].effective_period, PERIOD)
+                self.assertEqual(
+                    packs[0].calculation.formula_id,
+                    "generic.base_times_rate.v1",
+                )
+                self.assertEqual(packs[0].calculation.tax_base_fact_key, base_key)
+                self.assertEqual(packs[0].calculation.fixed_rate, rate)
+
     def test_formal_calculation_packs_do_not_reuse_unrelated_tax_bases(self):
         base_keys = {
             pack.tax_id: pack.calculation.tax_base_fact_key
