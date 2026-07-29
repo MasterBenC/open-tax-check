@@ -57,3 +57,20 @@ def test_vat_formula_subtracts_confirmed_input_tax_after_output_tax():
     assert result.amount == Decimal("5000.00")
     assert result.net_base == Decimal("100000.00")
     assert result.formula_id == "generic.base_times_rate_minus_credits.v1"
+
+
+def test_progressive_formula_subtracts_statutory_quick_deduction():
+    result = calculate_tax_amount(
+        TaxCalculationRequest(
+            tax_id="individual_income_tax",
+            tax_base=Decimal("100000"),
+            rate=Decimal("0.10"),
+            deductions=Decimal("2520"),
+            confirmed=True,
+            evidence_refs=("annual-return",),
+            formula_id="generic.base_times_rate_minus_quick_deduction.v1",
+        )
+    )
+
+    assert result.amount == Decimal("7480.00")
+    assert result.net_base == Decimal("100000")

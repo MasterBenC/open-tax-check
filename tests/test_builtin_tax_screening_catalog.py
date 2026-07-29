@@ -436,6 +436,78 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
         self.assertEqual(confirmed_policy.status, TaxStatus.CALCULATED)
         self.assertEqual(confirmed_policy.calculation.amount, "12000.00")
 
+    def test_individual_income_tax_pack_has_annual_comprehensive_brackets(self):
+        packs = tuple(
+            pack
+            for pack in self.packs
+            if pack.tax_id == "individual_income_tax"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(len(packs), 1)
+        table = packs[0].calculation.bracket_table
+        self.assertEqual(
+            tuple(
+                (entry.maximum_tax_base, entry.rate, entry.quick_deduction)
+                for entry in table.entries
+            ),
+            (
+                ("36000", "0.03", "0"),
+                ("144000", "0.10", "2520"),
+                ("300000", "0.20", "16920"),
+                ("420000", "0.25", "31920"),
+                ("660000", "0.30", "52920"),
+                ("960000", "0.35", "85920"),
+                (None, "0.45", "181920"),
+            ),
+        )
+        self.assertEqual(
+            table.required_selector,
+            "resident_annual_comprehensive_income",
+        )
+
+    def test_individual_income_tax_annual_comprehensive_path_calculates(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        timestamp = "2026-07-29T10:00:00+08:00"
+        facts = (
+            TaxFact(
+                "activity.has_individual_income_tax_duty",
+                True,
+                FactState.CONFIRMED,
+                ("annual-return",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "individual_income_tax.annual_comprehensive_taxable_income",
+                "100000",
+                FactState.CONFIRMED,
+                ("annual-return",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "individual_income_tax.calculation_path",
+                "resident_annual_comprehensive_income",
+                FactState.CONFIRMED,
+                ("annual-return",),
+                "customer",
+                timestamp,
+            ),
+        )
+
+        result = screen_tax_items(
+            TaxCheckRequest(period, "CN", facts),
+            self.packs,
+            builtin_tax_evaluators(),
+            tax_ids=("individual_income_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.CALCULATED)
+        self.assertEqual(result.calculation.rate, "0.1")
+        self.assertEqual(result.calculation.deductions, "2520.00")
+        self.assertEqual(result.calculation.amount, "7480.00")
+
     def test_formal_calculation_packs_do_not_reuse_unrelated_tax_bases(self):
         base_keys = {
             pack.tax_id: pack.calculation.tax_base_fact_key

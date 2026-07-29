@@ -20,6 +20,8 @@ from open_tax_check.tax_models import (
     StatutoryRateEntry,
     StatutoryRateRange,
     StatutoryRateTable,
+    StatutoryBracketEntry,
+    StatutoryBracketTable,
     TaxCheckRequest,
     TaxCheckSnapshot,
     TaxFact,
@@ -112,6 +114,25 @@ class TaxModelTests(unittest.TestCase):
         )
 
         self.assertEqual(spec.fixed_rate, "0.03")
+
+    def test_statutory_bracket_table_requires_ordered_ceiling_and_open_last_band(self):
+        table = StatutoryBracketTable(
+            (
+                StatutoryBracketEntry("36000", "0.03", "0"),
+                StatutoryBracketEntry("144000", "0.10", "2520"),
+                StatutoryBracketEntry(None, "0.20", "16920"),
+            )
+        )
+
+        self.assertIsNone(table.entries[-1].maximum_tax_base)
+        with self.assertRaisesRegex(ValueError, "^invalid_statutory_bracket_table$"):
+            StatutoryBracketTable(
+                (
+                    StatutoryBracketEntry("144000", "0.10", "2520"),
+                    StatutoryBracketEntry("36000", "0.03", "0"),
+                    StatutoryBracketEntry(None, "0.20", "16920"),
+                )
+            )
         with self.assertRaisesRegex(ValueError, "^invalid_calculation_spec$"):
             CalculationSpec(
                 "generic.base_times_rate.v1",

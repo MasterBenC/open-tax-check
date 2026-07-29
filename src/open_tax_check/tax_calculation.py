@@ -34,6 +34,7 @@ class TaxCalculationRequest:
             "generic.base_minus_deductions_times_rate.v1",
             "generic.base_times_rate.v1",
             "generic.base_times_rate_minus_credits.v1",
+            "generic.base_times_rate_minus_quick_deduction.v1",
         }:
             raise ValueError("invalid_tax_calculation_formula")
         if (
@@ -63,7 +64,10 @@ class TaxCalculationResult:
 def calculate_tax_amount(request: TaxCalculationRequest) -> TaxCalculationResult:
     if not request.confirmed or not request.evidence_refs:
         raise ValueError("calculation_requires_confirmed_evidence")
-    if request.formula_id == "generic.base_times_rate_minus_credits.v1":
+    if request.formula_id in {
+        "generic.base_times_rate_minus_credits.v1",
+        "generic.base_times_rate_minus_quick_deduction.v1",
+    }:
         net_base = request.tax_base
         gross_tax = exact_multiply(request.tax_base, request.rate)
         amount = max(

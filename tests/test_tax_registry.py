@@ -185,6 +185,27 @@ class TaxRegistryTests(unittest.TestCase):
         self.assertEqual(pack.calculation.rate_table.selector_fact_key, "stamp_tax.tax_item")
         self.assertEqual(pack.calculation.rate_table.entries[0].rate, "0.0003")
 
+    def test_schema_1_4_parses_statutory_bracket_table(self) -> None:
+        value = statutory_calculation_payload(schema_version="1.4.0")
+        value["requirements"] = value["requirements"][:1]
+        value["calculation"] = {
+            "formula_id": "generic.base_times_rate_minus_quick_deduction.v1",
+            "tax_base_fact_key": "calc.tax_base",
+            "rate_fact_key": None,
+            "deductions_fact_key": None,
+            "bracket_table": {
+                "entries": [
+                    {"maximum_tax_base": "36000", "rate": "0.03", "quick_deduction": "0"},
+                    {"maximum_tax_base": None, "rate": "0.10", "quick_deduction": "2520"},
+                ]
+            },
+        }
+
+        pack = validate_pack_payload(value)
+
+        self.assertEqual(pack.calculation.bracket_table.entries[0].maximum_tax_base, "36000")
+        self.assertEqual(pack.calculation.bracket_table.entries[1].quick_deduction, "2520")
+
     def test_schema_1_3_parses_selector_specific_maximum_deductions(self) -> None:
         value = statutory_calculation_payload()
         value["calculation"]["rate_table"]["entries"][0]["maximum_deductions"] = "0"

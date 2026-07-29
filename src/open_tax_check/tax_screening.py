@@ -216,6 +216,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         "generic.base_minus_deductions_times_rate.v1",
         "generic.base_times_rate.v1",
         "generic.base_times_rate_minus_credits.v1",
+        "generic.base_times_rate_minus_quick_deduction.v1",
     } for spec in specs):
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     spec = specs[0]
@@ -225,6 +226,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         or item.deductions_fact_key != spec.deductions_fact_key
         or (item.rate_fact_key is None) != (spec.rate_fact_key is None)
         or (item.rate_table is None) != (spec.rate_table is None)
+        or item.bracket_table != spec.bracket_table
         or item.fixed_rate != spec.fixed_rate
         or item.rate_range != spec.rate_range
         for item in specs
@@ -232,9 +234,15 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     if spec.formula_id == "generic.base_times_rate.v1" and spec.deductions_fact_key is not None:
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+    if (
+        spec.formula_id == "generic.base_times_rate_minus_quick_deduction.v1"
+        and (spec.bracket_table is None or spec.deductions_fact_key is not None)
+    ):
+        raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     base_fact = context.facts.get(spec.tax_base_fact_key)
     selector_fact = None
     rate_fact = None
+    bracket_selector_fact = None
     rate_selector = None
     rate_selector_label_zh = None
     if spec.rate_fact_key is not None:
@@ -249,11 +257,21 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         if any(table.selector_fact_key != selector_key for table in rate_tables):
             raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
         selector_fact = context.facts.get(selector_key)
+    elif (
+        spec.bracket_table is not None
+        and spec.bracket_table.selector_fact_key is not None
+    ):
+        bracket_selector_fact = context.facts.get(
+            spec.bracket_table.selector_fact_key
+        )
     facts = [base_fact]
+    statutory_deduction = Decimal("0")
     if rate_fact is not None:
         facts.append(rate_fact)
     elif selector_fact is not None:
         facts.append(selector_fact)
+    if bracket_selector_fact is not None:
+        facts.append(bracket_selector_fact)
     deductions_fact = (
         context.facts.get(spec.deductions_fact_key)
         if spec.deductions_fact_key is not None
@@ -338,6 +356,35 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         rate = Decimal(selected_entries[0].rate)
         rate_selector = selected_entries[0].selector
         rate_selector_label_zh = selected_entries[0].label_zh
+    elif spec.bracket_table is not None:
+        if any(item.bracket_table != spec.bracket_table for item in specs):
+            raise _EvaluationOutcomeValidationError(
+                "calculation_period_requires_split"
+            )
+        if spec.bracket_table.selector_fact_key is not None:
+            if (
+                bracket_selector_fact is None
+                or not isinstance(bracket_selector_fact.value, str)
+                or bracket_selector_fact.value
+                != spec.bracket_table.required_selector
+            ):
+                raise _EvaluationOutcomeValidationError(
+                    "unknown_statutory_rate_selector"
+                )
+        base_value = decimal_value(base_fact)
+        bracket = next(
+            (
+                entry
+                for entry in spec.bracket_table.entries
+                if entry.maximum_tax_base is None
+                or base_value <= Decimal(entry.maximum_tax_base)
+            ),
+            None,
+        )
+        if bracket is None:
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        rate = Decimal(bracket.rate)
+        statutory_deduction = Decimal(bracket.quick_deduction)
     else:
         if spec.fixed_rate is None or any(
             item.fixed_rate != spec.fixed_rate for item in specs
@@ -355,7 +402,11 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         tax_id=context.tax_id,
         tax_base=decimal_value(base_fact),
         rate=rate,
-        deductions=decimal_value(deductions_fact) if deductions_fact is not None else Decimal("0"),
+        deductions=(
+            decimal_value(deductions_fact)
+            if deductions_fact is not None
+            else statutory_deduction
+        ),
         confirmed=all(fact.state is FactState.CONFIRMED for fact in facts),
         evidence_refs=evidence_refs,
         formula_id=spec.formula_id,

@@ -20,6 +20,8 @@ from open_tax_check.tax_models import (
     RuleSource,
     StatutoryRateEntry,
     StatutoryRateTable,
+    StatutoryBracketEntry,
+    StatutoryBracketTable,
     TaxCheckRequest,
     TaxFact,
     TaxPack,
@@ -354,6 +356,61 @@ class TaxScreeningTests(unittest.TestCase):
 
         self.assertEqual(result.status, TaxStatus.BLOCKED)
         self.assertEqual(result.diagnostics, ("deductions_outside_statutory_range",))
+
+    def test_statutory_bracket_table_selects_rate_and_quick_deduction_from_base(self) -> None:
+        bracket_pack = TaxPack(
+            "individual-income-tax-brackets",
+            "individual_income_tax",
+            "CN",
+            PERIOD,
+            PackMaturity.CALCULATION,
+            (
+                FactRequirement(
+                    "individual_income_tax.annual_comprehensive_taxable_income",
+                    "decimal",
+                    ("annual_return",),
+                    100,
+                    True,
+                    True,
+                ),
+            ),
+            (),
+            "generic.calculation.base_minus_deductions_times_rate.v1",
+            (SOURCE,),
+            calculation=CalculationSpec(
+                "generic.base_times_rate_minus_quick_deduction.v1",
+                "individual_income_tax.annual_comprehensive_taxable_income",
+                bracket_table=StatutoryBracketTable(
+                    (
+                        StatutoryBracketEntry("36000", "0.03", "0"),
+                        StatutoryBracketEntry("144000", "0.10", "2520"),
+                        StatutoryBracketEntry(None, "0.20", "16920"),
+                    )
+                ),
+            ),
+        )
+
+        result = screen_tax_items(
+            TaxCheckRequest(
+                PERIOD,
+                "CN",
+                (
+                    confirmed_fact(
+                        "individual_income_tax.annual_comprehensive_taxable_income",
+                        "100000",
+                        "annual-return",
+                    ),
+                ),
+            ),
+            (bracket_pack,),
+            builtin_tax_evaluators(),
+            tax_ids=("individual_income_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.CALCULATED)
+        self.assertEqual(result.calculation.rate, "0.1")
+        self.assertEqual(result.calculation.deductions, "2520.00")
+        self.assertEqual(result.calculation.amount, "7480.00")
 
     def test_rate_change_with_aggregate_base_requires_period_split(self) -> None:
         period = DateRange(date(2023, 1, 1), date(2023, 12, 31))

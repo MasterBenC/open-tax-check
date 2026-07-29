@@ -16,6 +16,8 @@ from .tax_models import (
     PackSegment,
     PackSelection,
     RuleSource,
+    StatutoryBracketEntry,
+    StatutoryBracketTable,
     StatutoryRateEntry,
     StatutoryRateRange,
     StatutoryRateTable,
@@ -56,6 +58,7 @@ _PACK_V1_1_KEYS = _PACK_V1_KEYS | frozenset({
 })
 _PACK_V1_2_KEYS = _PACK_V1_1_KEYS | frozenset({"calculation"})
 _PACK_V1_3_KEYS = _PACK_V1_2_KEYS
+_PACK_V1_4_KEYS = _PACK_V1_3_KEYS
 _MAX_PACK_MANIFEST_BYTES = 256 * 1024
 _MAX_PACK_MANIFESTS = 64
 _TAX_IDS = frozenset(item.tax_id for item in TAX_DEFINITIONS)
@@ -124,11 +127,11 @@ def _parse_requirement(value: object) -> FactRequirement:
 
 def _parse_source(value: object, *, schema_version: str) -> RuleSource:
     required = {"title", "url", "published_on"}
-    if schema_version in {"1.1.0", "1.2.0", "1.3.0"}:
+    if schema_version in {"1.1.0", "1.2.0", "1.3.0", "1.4.0"}:
         required |= {"issuer", "document_number", "article_refs", "verified_on"}
     if not isinstance(value, dict) or set(value) != required:
-        raise TaxPackError("invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0"} else "invalid_source")
-    metadata_code = "invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0"} else "invalid_source_url"
+        raise TaxPackError("invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0", "1.4.0"} else "invalid_source")
+    metadata_code = "invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0", "1.4.0"} else "invalid_source_url"
     url = _required_string(value["url"], metadata_code)
     if not url.startswith("https://"):
         raise TaxPackError(metadata_code)
@@ -156,13 +159,14 @@ def validate_pack_payload(payload: object) -> TaxPack:
     if not isinstance(payload, dict) or not isinstance(payload.get("schema_version"), str):
         raise TaxPackError("unsupported_schema_version")
     schema_version = payload["schema_version"]
-    if schema_version not in {"1.0.0", "1.1.0", "1.2.0", "1.3.0"}:
+    if schema_version not in {"1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"}:
         raise TaxPackError("unsupported_schema_version")
     expected_keys = (
         _PACK_V1_KEYS if schema_version == "1.0.0"
         else _PACK_V1_1_KEYS if schema_version == "1.1.0"
         else _PACK_V1_2_KEYS if schema_version == "1.2.0"
-        else _PACK_V1_3_KEYS
+        else _PACK_V1_3_KEYS if schema_version == "1.3.0"
+        else _PACK_V1_4_KEYS
     )
     if set(payload) != expected_keys:
         raise TaxPackError("invalid_pack_keys")
@@ -206,7 +210,7 @@ def validate_pack_payload(payload: object) -> TaxPack:
     fact_catalog_version = ""
     applicability_fact_keys: tuple[str, ...] = ()
     calculation = None
-    if schema_version in {"1.1.0", "1.2.0", "1.3.0"}:
+    if schema_version in {"1.1.0", "1.2.0", "1.3.0", "1.4.0"}:
         rule_version = _required_string(payload["rule_version"], "missing_rule_version")
         fact_catalog_version = _required_string(payload["fact_catalog_version"], "missing_fact_catalog_version")
         raw_applicability = payload["applicability_fact_keys"]
@@ -226,7 +230,7 @@ def validate_pack_payload(payload: object) -> TaxPack:
             not raw_applicability or evaluator_id != "generic.applicability.screening.v1"
         ):
             raise TaxPackError("invalid_screening_evaluator")
-        if schema_version in {"1.2.0", "1.3.0"}:
+        if schema_version in {"1.2.0", "1.3.0", "1.4.0"}:
             raw_calculation = payload["calculation"]
             expected_calculation_keys = {
                 "formula_id", "tax_base_fact_key", "rate_fact_key", "deductions_fact_key"
@@ -234,12 +238,16 @@ def validate_pack_payload(payload: object) -> TaxPack:
             if not isinstance(raw_calculation, dict):
                 raise TaxPackError("invalid_calculation_spec")
             calculation_keys = set(raw_calculation)
-            if schema_version == "1.3.0":
+            if schema_version in {"1.3.0", "1.4.0"}:
                 valid_key_sets = (
                     expected_calculation_keys | {"rate_table"},
                     expected_calculation_keys | {"rate_range"},
                     expected_calculation_keys | {"fixed_rate"},
                 )
+                if schema_version == "1.4.0":
+                    valid_key_sets += (
+                        expected_calculation_keys | {"bracket_table"},
+                    )
                 if calculation_keys not in valid_key_sets:
                     raise TaxPackError("invalid_calculation_spec")
             elif calculation_keys != expected_calculation_keys:
@@ -280,6 +288,32 @@ def validate_pack_payload(payload: object) -> TaxPack:
                     }:
                         raise ValueError("invalid_calculation_spec")
                     calculation_values["rate_range"] = StatutoryRateRange(**raw_rate_range)
+                if "bracket_table" in calculation_values:
+                    raw_bracket_table = calculation_values.pop("bracket_table")
+                    if (
+                        not isinstance(raw_bracket_table, dict)
+                        or set(raw_bracket_table)
+                        not in (
+                            {"entries"},
+                            {"entries", "selector_fact_key", "required_selector"},
+                        )
+                        or not isinstance(raw_bracket_table["entries"], list)
+                    ):
+                        raise ValueError("invalid_calculation_spec")
+                    bracket_entries = []
+                    for raw_entry in raw_bracket_table["entries"]:
+                        if not isinstance(raw_entry, dict) or set(raw_entry) != {
+                            "maximum_tax_base",
+                            "rate",
+                            "quick_deduction",
+                        }:
+                            raise ValueError("invalid_calculation_spec")
+                        bracket_entries.append(StatutoryBracketEntry(**raw_entry))
+                    calculation_values["bracket_table"] = StatutoryBracketTable(
+                        tuple(bracket_entries),
+                        raw_bracket_table.get("selector_fact_key"),
+                        raw_bracket_table.get("required_selector"),
+                    )
                 calculation = CalculationSpec(**calculation_values)
             except (TypeError, ValueError) as error:
                 raise TaxPackError("invalid_calculation_spec") from error
@@ -289,6 +323,11 @@ def validate_pack_payload(payload: object) -> TaxPack:
                 bound_keys.add(calculation.rate_fact_key)
             if calculation.rate_table is not None:
                 bound_keys.add(calculation.rate_table.selector_fact_key)
+            if (
+                calculation.bracket_table is not None
+                and calculation.bracket_table.selector_fact_key is not None
+            ):
+                bound_keys.add(calculation.bracket_table.selector_fact_key)
             if calculation.deductions_fact_key is not None:
                 bound_keys.add(calculation.deductions_fact_key)
             if not bound_keys.issubset(requirement_keys):
@@ -307,6 +346,15 @@ def validate_pack_payload(payload: object) -> TaxPack:
                 calculation.rate_table is not None
                 and requirements_by_key[
                     calculation.rate_table.selector_fact_key
+                ].answer_type
+                != "choice"
+            ):
+                raise TaxPackError("invalid_calculation_spec")
+            if (
+                calculation.bracket_table is not None
+                and calculation.bracket_table.selector_fact_key is not None
+                and requirements_by_key[
+                    calculation.bracket_table.selector_fact_key
                 ].answer_type
                 != "choice"
             ):
@@ -439,6 +487,7 @@ _PACK_FILENAME_TAX_IDS = {
     "enterprise-income-tax-cn-2023-2026.screening.json": "enterprise_income_tax",
     "enterprise-income-tax-cn-2023-2026.calculation.json": "enterprise_income_tax",
     "individual-income-tax-cn-2023-2026.screening.json": "individual_income_tax",
+    "individual-income-tax-cn-2023-2026.calculation.json": "individual_income_tax",
     "resource-tax-cn-2023-2026.screening.json": "resource_tax",
     "urban-maintenance-construction-tax-cn-2023-2026.screening.json": "urban_maintenance_construction_tax",
     "urban-maintenance-construction-tax-cn-2023-2026.calculation.json": "urban_maintenance_construction_tax",

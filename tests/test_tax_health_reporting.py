@@ -169,6 +169,34 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("- 允许抵扣进项税额: 8000.00", report)
         self.assertNotIn("- 扣除额: 8000.00", report)
 
+    def test_progressive_formula_labels_quick_deduction_in_chinese(self) -> None:
+        snapshot = TaxCheckSnapshot(
+            request=TaxCheckRequest(PERIOD, "CN"),
+            results=(
+                TaxResult(
+                    "individual_income_tax",
+                    TaxStatus.CALCULATED,
+                    calculation=CalculationRecord(
+                        "generic.base_times_rate_minus_quick_deduction.v1",
+                        "100000.00",
+                        "2520.00",
+                        "100000.00",
+                        "0.10",
+                        "7480.00",
+                        ("annual-return",),
+                    ),
+                ),
+            ),
+            questions=(),
+            audit_events=(),
+            revision=1,
+        )
+
+        report = render_tax_health_report(snapshot)
+
+        self.assertIn("计税基础乘税率后减速算扣除数", report)
+        self.assertIn("- 速算扣除数: 2520.00", report)
+
     def test_report_contains_the_fixed_self_use_disclaimer(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
 

@@ -246,6 +246,71 @@ class StatutoryRateTable:
 
 
 @dataclass(frozen=True, slots=True)
+class StatutoryBracketEntry:
+    """One upper-bounded progressive band with an official quick deduction."""
+
+    maximum_tax_base: str | None
+    rate: str
+    quick_deduction: str
+
+    def __post_init__(self) -> None:
+        try:
+            rate = Decimal(self.rate)
+            quick_deduction = Decimal(self.quick_deduction)
+            maximum = (
+                Decimal(self.maximum_tax_base)
+                if self.maximum_tax_base is not None
+                else None
+            )
+        except (InvalidOperation, TypeError) as error:
+            raise ValueError("invalid_statutory_bracket_entry") from error
+        if (
+            not rate.is_finite()
+            or rate < 0
+            or rate > 1
+            or not quick_deduction.is_finite()
+            or quick_deduction < 0
+            or (
+                maximum is not None
+                and (not maximum.is_finite() or maximum < 0)
+            )
+        ):
+            raise ValueError("invalid_statutory_bracket_entry")
+
+
+@dataclass(frozen=True, slots=True)
+class StatutoryBracketTable:
+    """Ordered progressive bands selected deterministically from the tax base."""
+
+    entries: tuple[StatutoryBracketEntry, ...]
+    selector_fact_key: str | None = None
+    required_selector: str | None = None
+
+    def __post_init__(self) -> None:
+        entries = tuple(self.entries)
+        object.__setattr__(self, "entries", entries)
+        if (self.selector_fact_key is None) != (self.required_selector is None):
+            raise ValueError("invalid_statutory_bracket_table")
+        if self.selector_fact_key is not None:
+            _require_identifier(self.selector_fact_key)
+            _require_identifier(self.required_selector)
+        finite_maxima = [
+            Decimal(entry.maximum_tax_base)
+            for entry in entries
+            if entry.maximum_tax_base is not None
+        ]
+        if (
+            not entries
+            or not all(isinstance(entry, StatutoryBracketEntry) for entry in entries)
+            or entries[-1].maximum_tax_base is not None
+            or any(entry.maximum_tax_base is None for entry in entries[:-1])
+            or finite_maxima != sorted(finite_maxima)
+            or len(set(finite_maxima)) != len(finite_maxima)
+        ):
+            raise ValueError("invalid_statutory_bracket_table")
+
+
+@dataclass(frozen=True, slots=True)
 class StatutoryRateRange:
     """Inclusive statutory bounds for a customer-confirmed local rate."""
 
@@ -279,23 +344,34 @@ class CalculationSpec:
     rate_table: StatutoryRateTable | None = None
     rate_range: StatutoryRateRange | None = None
     fixed_rate: str | None = None
+    bracket_table: StatutoryBracketTable | None = None
 
     def __post_init__(self) -> None:
         for value in (self.formula_id, self.tax_base_fact_key):
             _require_identifier(value)
         if sum(
             source is not None
-            for source in (self.rate_fact_key, self.rate_table, self.fixed_rate)
+            for source in (
+                self.rate_fact_key,
+                self.rate_table,
+                self.fixed_rate,
+                self.bracket_table,
+            )
         ) != 1:
             raise ValueError("invalid_calculation_spec")
         if self.rate_fact_key is not None:
             _require_identifier(self.rate_fact_key)
         if self.rate_table is not None and not isinstance(self.rate_table, StatutoryRateTable):
             raise ValueError("invalid_calculation_spec")
+        if self.bracket_table is not None and not isinstance(
+            self.bracket_table, StatutoryBracketTable
+        ):
+            raise ValueError("invalid_calculation_spec")
         if self.rate_range is not None and (
             self.rate_fact_key is None
             or self.rate_table is not None
             or self.fixed_rate is not None
+            or self.bracket_table is not None
             or not isinstance(self.rate_range, StatutoryRateRange)
         ):
             raise ValueError("invalid_calculation_spec")
