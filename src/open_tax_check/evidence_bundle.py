@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import re
+
+from .evidence import verify_evidence_file
+from .tax_models import FactState, TaxCheckSnapshot
 
 
 MANIFEST_SCHEMA_VERSION = "tax-evidence-manifest/v1"
@@ -32,6 +36,22 @@ class EvidenceManifestItem:
 class EvidenceManifest:
     schema_version: str
     items: tuple[EvidenceManifestItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedEvidenceItem:
+    source_id: str
+    relative_path: str
+    sha256: str
+    media_type: str
+    size_bytes: int
+    source_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedEvidenceSet:
+    items: tuple[VerifiedEvidenceItem, ...]
+    total_size_bytes: int
 
 
 def parse_evidence_manifest(payload: object) -> EvidenceManifest:
@@ -70,3 +90,63 @@ def parse_evidence_manifest(payload: object) -> EvidenceManifest:
     if len(normalized_paths) != len(items):
         raise EvidenceBundleError("invalid_evidence_manifest")
     return EvidenceManifest(MANIFEST_SCHEMA_VERSION, tuple(items))
+
+
+def verify_evidence_manifest(
+    manifest: EvidenceManifest,
+    evidence_root: Path,
+) -> VerifiedEvidenceSet:
+    verified_items: list[VerifiedEvidenceItem] = []
+    total = 0
+    for item in manifest.items:
+        try:
+            result = verify_evidence_file(
+                evidence_root,
+                item.relative_path,
+                item.sha256,
+                max_file_bytes=MAX_EVIDENCE_FILE_BYTES,
+            )
+        except ValueError as error:
+            if str(error) == "unsafe_evidence_path":
+                raise EvidenceBundleError("unsafe_evidence_path") from None
+            raise EvidenceBundleError("invalid_evidence_manifest") from None
+        if (
+            result.status != "verified"
+            or result.sha256 is None
+            or result.size_bytes is None
+            or result.verified_path is None
+        ):
+            raise EvidenceBundleError("evidence_verification_failed")
+        total += result.size_bytes
+        if total > MAX_EVIDENCE_TOTAL_BYTES:
+            raise EvidenceBundleError("evidence_bundle_size_limit_exceeded")
+        verified_items.append(VerifiedEvidenceItem(
+            source_id=item.source_id,
+            relative_path=item.relative_path,
+            sha256=result.sha256,
+            media_type=item.media_type,
+            size_bytes=result.size_bytes,
+            source_path=result.verified_path,
+        ))
+    return VerifiedEvidenceSet(tuple(verified_items), total)
+
+
+def validate_evidence_bindings(
+    snapshot: TaxCheckSnapshot,
+    verified: VerifiedEvidenceSet,
+) -> None:
+    verified_ids = {item.source_id for item in verified.items}
+    required = {
+        reference
+        for fact in snapshot.request.facts
+        if fact.state is FactState.CONFIRMED
+        for reference in fact.evidence_refs
+    }
+    required.update(
+        reference
+        for result in snapshot.results
+        if result.calculation is not None
+        for reference in result.calculation.evidence_refs
+    )
+    if not required.issubset(verified_ids):
+        raise EvidenceBundleError("unverified_evidence_reference")

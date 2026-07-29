@@ -18,6 +18,7 @@ class EvidenceVerification:
     sha256: str | None = None
     size_bytes: int | None = None
     error_code: str | None = None
+    verified_path: Path | None = None
 
 
 def _is_reparse_or_link(path: Path) -> bool:
@@ -38,9 +39,14 @@ def verify_evidence_file(
     if not isinstance(expected_sha256, str) or _SHA256.fullmatch(expected_sha256) is None:
         raise ValueError("invalid_evidence_hash")
     relative = Path(relative_path)
-    if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError("unsafe_evidence_path")
     root = Path(root).absolute()
+    if (
+        relative.is_absolute()
+        or bool(relative.drive)
+        or ".." in relative.parts
+        or _is_reparse_or_link(root)
+    ):
+        raise ValueError("unsafe_evidence_path")
     candidate = root / relative
     try:
         current = candidate
@@ -66,4 +72,10 @@ def verify_evidence_file(
         return EvidenceVerification(relative.as_posix(), "failed", error_code="evidence_unreadable")
     if actual != expected_sha256:
         return EvidenceVerification(relative.as_posix(), "failed", error_code="evidence_hash_mismatch")
-    return EvidenceVerification(relative.as_posix(), "verified", sha256=actual, size_bytes=size)
+    return EvidenceVerification(
+        relative.as_posix(),
+        "verified",
+        sha256=actual,
+        size_bytes=size,
+        verified_path=resolved,
+    )
