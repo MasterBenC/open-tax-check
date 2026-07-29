@@ -33,6 +33,27 @@ from open_tax_check.tax_models import (
 
 
 class TaxModelTests(unittest.TestCase):
+    def test_tax_result_keeps_pack_versions_parallel_to_pack_ids(self):
+        result = TaxResult(
+            "vat",
+            TaxStatus.NEEDS_EVIDENCE,
+            rule_pack_ids=("vat-screening", "vat-calculation"),
+            rule_pack_versions=("2026.1", "2026.2"),
+        )
+
+        self.assertEqual(result.rule_pack_versions, ("2026.1", "2026.2"))
+
+    def test_tax_result_rejects_missing_or_misaligned_pack_versions(self):
+        for versions in ((), ("2026.1",), ("2026.1", "2026.2", "2026.3")):
+            with self.subTest(versions=versions):
+                with self.assertRaisesRegex(ValueError, "^invalid_rule_pack_versions$"):
+                    TaxResult(
+                        "vat",
+                        TaxStatus.NEEDS_EVIDENCE,
+                        rule_pack_ids=("vat-screening", "vat-calculation"),
+                        rule_pack_versions=versions,
+                    )
+
     def test_statutory_rate_range_rejects_invalid_bounds(self):
         for minimum, maximum in (("0.05", "0.03"), ("-0.01", "0.03"), ("0.03", "1.01")):
             with self.subTest(minimum=minimum, maximum=maximum):

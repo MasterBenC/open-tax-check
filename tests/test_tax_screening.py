@@ -212,6 +212,20 @@ def stamp_rate_pack(
 
 
 class TaxScreeningTests(unittest.TestCase):
+    def test_screening_result_preserves_each_selected_pack_version(self) -> None:
+        selected_pack = pack()
+
+        results = screen_tax_items(
+            request(),
+            (selected_pack,),
+            {"vat.screening": calculated},
+            tax_ids=("vat",),
+        )
+
+        vat = results[0]
+        self.assertEqual(vat.rule_pack_ids, (selected_pack.pack_id,))
+        self.assertEqual(vat.rule_pack_versions, (selected_pack.rule_version,))
+
     def test_staged_stamp_screening_uses_confirmed_statutory_rate(self) -> None:
         period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
         result = screen_tax_items(
@@ -968,16 +982,24 @@ class QuestionQueueTests(unittest.TestCase):
         self.assertEqual(question.choices, prompt.choices)
 
     def test_formal_question_requires_prompt(self) -> None:
-        result = TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",), gaps=(
+        result = TaxResult(
+            "deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",),
+            gaps=(
             FactGap("activity.shared", "missing_fact", "choice", (), 70, False),
-        ))
+            ),
+            rule_pack_versions=("2026.1",),
+        )
         with self.assertRaisesRegex(ValueError, "^missing_fact_prompt$"):
             build_question_queue((result,), {})
 
     def test_question_prompt_answer_type_must_match_gap(self) -> None:
-        result = TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",), gaps=(
+        result = TaxResult(
+            "deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",),
+            gaps=(
             FactGap("activity.shared", "missing_fact", "choice", (), 70, False),
-        ))
+            ),
+            rule_pack_versions=("2026.1",),
+        )
         prompt = FactPrompt(
             "activity.shared", "问题", "帮助", "boolean",
             (PromptChoice(True, "是"), PromptChoice(False, "否")), "证据",

@@ -579,6 +579,7 @@ class TaxResult:
     evidence_refs: tuple[str, ...] = ()
     rule_sources: tuple[RuleSource, ...] = ()
     calculation: CalculationRecord | None = None
+    rule_pack_versions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_identifier(self.tax_id)
@@ -588,7 +589,11 @@ class TaxResult:
         object.__setattr__(self, "gaps", tuple(self.gaps))
         object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
         object.__setattr__(self, "rule_sources", tuple(self.rule_sources))
+        object.__setattr__(self, "rule_pack_versions", tuple(self.rule_pack_versions))
         _require_identifiers(self.rule_pack_ids)
+        if len(self.rule_pack_versions) != len(self.rule_pack_ids):
+            raise ValueError("invalid_rule_pack_versions")
+        _require_identifiers(self.rule_pack_versions)
         if self.status is TaxStatus.NOT_APPLICABLE and not self.evidence_refs:
             raise ValueError("not_applicable_without_evidence")
         if self.calculation is not None and not isinstance(self.calculation, CalculationRecord):

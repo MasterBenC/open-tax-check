@@ -53,6 +53,7 @@ def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
     result_payloads = []
     for result in snapshot.results:
         payload = to_dict(result)
+        payload["rule_pack_versions"] = list(result.rule_pack_versions)
         payload["status_label_zh"] = _STATUS_LABELS[result.status]
         result_payloads.append(payload)
     question_payloads = []

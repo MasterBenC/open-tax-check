@@ -153,6 +153,7 @@ def _conflict_result(result: TaxResult, question: Question) -> TaxResult:
         tax_id=result.tax_id,
         status=TaxStatus.BLOCKED,
         rule_pack_ids=result.rule_pack_ids,
+        rule_pack_versions=result.rule_pack_versions,
         diagnostics=("confirmation_conflict",),
         gaps=other_gaps + (conflict_gap,),
         evidence_refs=result.evidence_refs,

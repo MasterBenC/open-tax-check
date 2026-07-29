@@ -20,6 +20,7 @@ from open_tax_check.tax_models import (
 from open_tax_check.tax_registry import TAX_DEFINITIONS
 from open_tax_check.tax_reporting import (
     render_tax_health_report,
+    tax_snapshot_payload,
     write_tax_health_report,
     write_tax_health_snapshot,
     write_tax_health_report_docx,
@@ -61,6 +62,7 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
         gaps = ()
         diagnostics = ()
         pack_ids = ()
+        pack_versions = ()
         sources = ()
         evidence_refs = ()
         if status is TaxStatus.NEEDS_EVIDENCE:
@@ -70,6 +72,7 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
         elif status is TaxStatus.BLOCKED:
             diagnostics = ("rule_evaluator_unavailable",)
             pack_ids = ("vat-cn-2026",)
+            pack_versions = ("2026.1",)
             sources = (SOURCE,)
         elif status is TaxStatus.NOT_APPLICABLE:
             evidence_refs = ("evidence-not-applicable",)
@@ -85,6 +88,7 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
         results.append(TaxResult(
             definition.tax_id, status, pack_ids, diagnostics, gaps, evidence_refs, sources,
             calculation,
+            pack_versions,
         ))
     request = TaxCheckRequest(PERIOD, "CN", input_hashes=("a" * 64, "b" * 64))
     questions = (
@@ -103,6 +107,12 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
 
 
 class TaxHealthReportingTests(unittest.TestCase):
+    def test_snapshot_payload_includes_rule_pack_versions(self) -> None:
+        payload = tax_snapshot_payload(snapshot_with_every_status())
+
+        result = next(item for item in payload["results"] if item["rule_pack_ids"])
+        self.assertEqual(result["rule_pack_versions"], ["2026.1"])
+
     def test_report_uses_the_public_chinese_names_for_all_twenty_items(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
 

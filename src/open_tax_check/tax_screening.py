@@ -56,10 +56,13 @@ def _ordered_unique(values: tuple[object, ...]) -> tuple[object, ...]:
     return tuple(result)
 
 
-def _selected_pack_details(selected_packs: tuple[TaxPack, ...]) -> tuple[tuple[str, ...], tuple[RuleSource, ...]]:
-    pack_ids = tuple(_ordered_unique(tuple(pack.pack_id for pack in selected_packs)))
+def _selected_pack_details(
+    selected_packs: tuple[TaxPack, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[RuleSource, ...]]:
+    pack_ids = tuple(pack.pack_id for pack in selected_packs)
+    pack_versions = tuple(pack.rule_version for pack in selected_packs)
     sources = tuple(_ordered_unique(tuple(source for pack in selected_packs for source in pack.sources)))
-    return pack_ids, sources
+    return pack_ids, pack_versions, sources
 
 
 def _fact_is_sufficient(
@@ -448,12 +451,14 @@ def _blocked_result(
     tax_id: str,
     diagnostic: str,
     pack_ids: tuple[str, ...] = (),
+    pack_versions: tuple[str, ...] = (),
     sources: tuple[RuleSource, ...] = (),
 ) -> TaxResult:
     return TaxResult(
         tax_id=tax_id,
         status=TaxStatus.BLOCKED,
         rule_pack_ids=pack_ids,
+        rule_pack_versions=pack_versions,
         diagnostics=(diagnostic,),
         rule_sources=sources,
     )
@@ -506,7 +511,7 @@ def _evaluate_selected_packs(
     evaluators: Mapping[str, RuleEvaluator],
     facts: Mapping[str, TaxFact],
 ) -> TaxResult:
-    pack_ids, sources = _selected_pack_details(selected_packs)
+    pack_ids, pack_versions, sources = _selected_pack_details(selected_packs)
 
     applicability_keys = frozenset(
         key for pack in selected_packs for key in pack.applicability_fact_keys
@@ -522,6 +527,7 @@ def _evaluate_selected_packs(
                 pack_ids,
                 gaps=applicability_gaps,
                 rule_sources=sources,
+                rule_pack_versions=pack_versions,
             )
 
     all_applicability_false = bool(applicability_keys) and all(
@@ -534,23 +540,31 @@ def _evaluate_selected_packs(
     )
     if any(gap.reason_code == "missing_local_policy" for gap in gaps):
         return TaxResult(
-            tax_id, TaxStatus.NEEDS_LOCAL_POLICY, pack_ids, gaps=gaps, rule_sources=sources
+            tax_id, TaxStatus.NEEDS_LOCAL_POLICY, pack_ids, gaps=gaps,
+            rule_sources=sources, rule_pack_versions=pack_versions,
         )
     if gaps:
-        return TaxResult(tax_id, TaxStatus.NEEDS_EVIDENCE, pack_ids, gaps=gaps, rule_sources=sources)
+        return TaxResult(
+            tax_id, TaxStatus.NEEDS_EVIDENCE, pack_ids, gaps=gaps,
+            rule_sources=sources, rule_pack_versions=pack_versions,
+        )
 
     confirmation_gaps = _calculation_confirmation_gaps(selected_packs, facts)
     if confirmation_gaps:
         return TaxResult(
             tax_id, TaxStatus.NEEDS_EVIDENCE, pack_ids,
-            gaps=confirmation_gaps, rule_sources=sources,
+            gaps=confirmation_gaps, rule_sources=sources, rule_pack_versions=pack_versions,
         )
 
     evaluator_ids = tuple(_ordered_unique(tuple(pack.evaluator_id for pack in selected_packs)))
     if len(evaluator_ids) != 1:
-        return _blocked_result(tax_id, "inconsistent_rule_evaluators", pack_ids, sources)
+        return _blocked_result(
+            tax_id, "inconsistent_rule_evaluators", pack_ids, pack_versions, sources
+        )
     if not evaluator_ids or any(evaluator_id is None or evaluator_id not in evaluators for evaluator_id in evaluator_ids):
-        return _blocked_result(tax_id, "rule_evaluator_unavailable", pack_ids, sources)
+        return _blocked_result(
+            tax_id, "rule_evaluator_unavailable", pack_ids, pack_versions, sources
+        )
 
     evaluator = evaluators[evaluator_ids[0]]
     context = TaxEvaluationContext(tax_id, request, selected_packs, facts)
@@ -565,16 +579,21 @@ def _evaluate_selected_packs(
             "tax_base_outside_statutory_range",
             "deductions_outside_statutory_range",
         }:
-            return _blocked_result(tax_id, diagnostic, pack_ids, sources)
-        return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
+            return _blocked_result(tax_id, diagnostic, pack_ids, pack_versions, sources)
+        return _blocked_result(
+            tax_id, "invalid_evaluator_outcome", pack_ids, pack_versions, sources
+        )
     except Exception:
-        return _blocked_result(tax_id, "rule_evaluator_failed", pack_ids, sources)
+        return _blocked_result(tax_id, "rule_evaluator_failed", pack_ids, pack_versions, sources)
     if not _is_safe_evaluator_outcome(outcome, selected_packs):
-        return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
+        return _blocked_result(
+            tax_id, "invalid_evaluator_outcome", pack_ids, pack_versions, sources
+        )
     return TaxResult(
         tax_id=tax_id,
         status=outcome.status,
         rule_pack_ids=pack_ids,
+        rule_pack_versions=pack_versions,
         diagnostics=outcome.diagnostics,
         evidence_refs=outcome.evidence_refs,
         rule_sources=sources,
@@ -599,9 +618,9 @@ def _screen_one_tax(
     if screening.segments:
         selected_screening = tuple(segment.pack for segment in screening.segments)
         if screening.uncovered_periods:
-            pack_ids, sources = _selected_pack_details(selected_screening)
+            pack_ids, pack_versions, sources = _selected_pack_details(selected_screening)
             return _blocked_result(
-                tax_id, "rule_pack_unavailable", pack_ids, sources
+                tax_id, "rule_pack_unavailable", pack_ids, pack_versions, sources
             )
         screening_result = _evaluate_selected_packs(
             tax_id, request, selected_screening, evaluators, facts
@@ -640,8 +659,10 @@ def _screen_one_tax(
     )
     selected_calculation = tuple(segment.pack for segment in calculation.segments)
     if calculation.uncovered_periods:
-        pack_ids, sources = _selected_pack_details(selected_calculation)
-        return _blocked_result(tax_id, "rule_pack_unavailable", pack_ids, sources)
+        pack_ids, pack_versions, sources = _selected_pack_details(selected_calculation)
+        return _blocked_result(
+            tax_id, "rule_pack_unavailable", pack_ids, pack_versions, sources
+        )
     return _evaluate_selected_packs(
         tax_id, request, selected_calculation, evaluators, facts
     )
