@@ -1,0 +1,34 @@
+{
+  "schema_version":"1.3.0",
+  "pack_id":"house-property-tax-cn-2023-2026-calculation-v1",
+  "tax_id":"house_property_tax",
+  "jurisdiction":"CN",
+  "effective_from":"2023-01-01",
+  "effective_to":"2026-12-31",
+  "maturity":"calculation",
+  "requirements":[
+    {"fact_key":"house_property_tax.confirmed_tax_base","answer_type":"decimal","evidence_types":["property_register","property_value_workpaper","lease_contract","rental_ledger","tax_return"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"house_property_tax.rate_path","answer_type":"choice","evidence_types":["local_policy","property_value_workpaper","lease_contract","tax_return"],"priority":100,"blocking":true,"critical":true}
+  ],
+  "local_parameter_keys":[],
+  "evaluator_id":"generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources":[
+    {"title":"中华人民共和国房产税暂行条例","url":"https://fgk.chinatax.gov.cn/zcfgk/c100010/c5196866/content.html","published_on":"2011-01-08","issuer":"国务院","document_number":"国发〔1986〕90号（2011年修订）","article_refs":["第三条","第四条","第五条","第六条"],"verified_on":"2026-07-29"}
+  ],
+  "rule_version":"2026.1",
+  "fact_catalog_version":"zh-CN.v1",
+  "applicability_fact_keys":[],
+  "calculation":{
+    "formula_id":"generic.base_times_rate.v1",
+    "tax_base_fact_key":"house_property_tax.confirmed_tax_base",
+    "rate_fact_key":null,
+    "deductions_fact_key":null,
+    "rate_table":{
+      "selector_fact_key":"house_property_tax.rate_path",
+      "entries":[
+        {"selector":"residual_value_standard","label_zh":"房产余值标准税率1.2%","rate":"0.012"},
+        {"selector":"rental_income_standard","label_zh":"房产租金收入标准税率12%","rate":"0.12"}
+      ]
+    }
+  }
+}

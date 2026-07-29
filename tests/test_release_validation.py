@@ -188,6 +188,27 @@ class ReleaseValidationTests(unittest.TestCase):
                     f"tax_pack_release_invalid:{error_prefix}_calculation_period_gap",
                 )
 
+    def test_tax_pack_release_surface_rejects_house_property_calculation_gap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(
+                ROOT / "src/open_tax_check/tax_packs",
+                root / "src/open_tax_check/tax_packs",
+            )
+            shutil.copy2(ROOT / "pyproject.toml", root / "pyproject.toml")
+            (
+                root
+                / "src/open_tax_check/tax_packs/"
+                "house-property-tax-cn-2023-2026.calculation.json"
+            ).unlink(missing_ok=True)
+
+            result = validate_release.validate_pack_release_surface(root)
+
+        self.assertEqual(
+            result,
+            "tax_pack_release_invalid:house_property_tax_calculation_period_gap",
+        )
+
     def test_tax_pack_release_surface_rejects_non_official_calculation_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

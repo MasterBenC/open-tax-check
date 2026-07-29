@@ -345,6 +345,97 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
                 self.assertEqual(packs[0].calculation.tax_base_fact_key, base_key)
                 self.assertEqual(packs[0].calculation.fixed_rate, rate)
 
+    def test_house_property_tax_pack_uses_common_statutory_rate_paths(self):
+        packs = tuple(
+            pack
+            for pack in self.packs
+            if pack.tax_id == "house_property_tax"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(len(packs), 1)
+        pack = packs[0]
+        self.assertEqual(pack.effective_period, PERIOD)
+        self.assertEqual(
+            pack.calculation.tax_base_fact_key,
+            "house_property_tax.confirmed_tax_base",
+        )
+        self.assertEqual(
+            pack.calculation.rate_table.selector_fact_key,
+            "house_property_tax.rate_path",
+        )
+        self.assertEqual(
+            {
+                entry.selector: entry.rate
+                for entry in pack.calculation.rate_table.entries
+            },
+            {
+                "residual_value_standard": "0.012",
+                "rental_income_standard": "0.12",
+            },
+        )
+
+    def test_house_property_tax_calculates_only_after_local_policy_confirmation(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        timestamp = "2026-07-29T10:00:00+08:00"
+        common_facts = (
+            TaxFact(
+                "assets.has_owned_taxable_house",
+                True,
+                FactState.CONFIRMED,
+                ("property-register",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "house_property_tax.confirmed_tax_base",
+                "1000000.00",
+                FactState.CONFIRMED,
+                ("property-tax-workpaper",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "house_property_tax.rate_path",
+                "residual_value_standard",
+                FactState.CONFIRMED,
+                ("property-tax-workpaper",),
+                "customer",
+                timestamp,
+            ),
+        )
+
+        missing_policy = screen_tax_items(
+            TaxCheckRequest(period, "CN", common_facts),
+            self.packs,
+            builtin_tax_evaluators(),
+            tax_ids=("house_property_tax",),
+        )[0]
+        confirmed_policy = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                common_facts
+                + (
+                    TaxFact(
+                        "policy.house_property_tax_local_rule",
+                        "客户已确认适用省级减除幅度及征收期间",
+                        FactState.CONFIRMED,
+                        ("local-policy",),
+                        "customer",
+                        timestamp,
+                    ),
+                ),
+            ),
+            self.packs,
+            builtin_tax_evaluators(),
+            tax_ids=("house_property_tax",),
+        )[0]
+
+        self.assertEqual(missing_policy.status, TaxStatus.NEEDS_LOCAL_POLICY)
+        self.assertEqual(confirmed_policy.status, TaxStatus.CALCULATED)
+        self.assertEqual(confirmed_policy.calculation.amount, "12000.00")
+
     def test_formal_calculation_packs_do_not_reuse_unrelated_tax_bases(self):
         base_keys = {
             pack.tax_id: pack.calculation.tax_base_fact_key

@@ -442,6 +442,7 @@ def validate_pack_release_surface(root: Path) -> str | None:
         ("enterprise_income_tax", "enterprise_income_tax"),
         ("vehicle_purchase_tax", "vehicle_purchase_tax"),
         ("tobacco_tax", "tobacco_tax"),
+        ("house_property_tax", "house_property_tax"),
     ):
         try:
             calculation_selection = select_pack_segments(
