@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import importlib.metadata
+import json
+import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
+import shutil
+import tempfile
+from typing import BinaryIO
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .evidence import verify_evidence_file
 from .tax_models import FactState, TaxCheckSnapshot
@@ -16,6 +25,12 @@ MAX_EVIDENCE_TOTAL_BYTES = 512 * 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _MANIFEST_KEYS = {"schema_version", "items"}
 _ITEM_KEYS = {"source_id", "relative_path", "sha256", "media_type"}
+_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+_FIXED_DISCLAIMER_ZH = (
+    "本证据包仅用于客户内部税务健康检查资料链路复核；"
+    "文件哈希验证不等于税务事实真实、申报正确或不存在风险；"
+    "本证据包不属于涉税鉴证、专业税务意见或纳税申报结论。"
+)
 
 
 class EvidenceBundleError(ValueError):
@@ -52,6 +67,20 @@ class VerifiedEvidenceItem:
 class VerifiedEvidenceSet:
     items: tuple[VerifiedEvidenceItem, ...]
     total_size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class BundleArtifact:
+    kind: str
+    path: Path
+    archive_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceBundleResult:
+    path: Path
+    sha256: str
+    includes_evidence_files: bool
 
 
 def parse_evidence_manifest(payload: object) -> EvidenceManifest:
@@ -150,3 +179,295 @@ def validate_evidence_bindings(
     )
     if not required.issubset(verified_ids):
         raise EvidenceBundleError("unverified_evidence_reference")
+
+
+def _json_bytes(payload: object) -> bytes:
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _archive_evidence_path(index: int, item: VerifiedEvidenceItem) -> str:
+    suffix = item.source_path.suffix.lower()
+    safe_suffix = suffix if re.fullmatch(r"\.[a-z0-9]{1,10}", suffix) else ".bin"
+    return f"evidence/{index:04d}/original{safe_suffix}"
+
+
+def _is_safe_archive_path(archive_path: str) -> bool:
+    if (
+        not isinstance(archive_path, str)
+        or not archive_path
+        or "\\" in archive_path
+        or "\0" in archive_path
+    ):
+        return False
+    path = PurePosixPath(archive_path)
+    return (
+        not path.is_absolute()
+        and path.as_posix() == archive_path
+        and all(part not in {"", ".", ".."} for part in path.parts)
+    )
+
+
+def _evidence_item_payloads(
+    verified: VerifiedEvidenceSet,
+    *,
+    include_evidence_files: bool,
+) -> tuple[list[dict[str, object]], list[tuple[str, Path]]]:
+    payloads: list[dict[str, object]] = []
+    members: list[tuple[str, Path]] = []
+    for index, item in enumerate(
+        sorted(verified.items, key=lambda candidate: candidate.source_id),
+        start=1,
+    ):
+        bundle_path = (
+            _archive_evidence_path(index, item) if include_evidence_files else None
+        )
+        payloads.append({
+            "source_id": item.source_id,
+            "relative_path": item.relative_path,
+            "bundle_path": bundle_path,
+            "sha256": item.sha256,
+            "size_bytes": item.size_bytes,
+            "media_type": item.media_type,
+            "status": "verified",
+        })
+        if bundle_path is not None:
+            members.append((bundle_path, item.source_path))
+    return payloads, members
+
+
+def _confirmed_fact_bindings(snapshot: TaxCheckSnapshot) -> list[dict[str, object]]:
+    return [
+        {
+            "fact_key": fact.key,
+            "evidence_refs": sorted(fact.evidence_refs),
+        }
+        for fact in sorted(snapshot.request.facts, key=lambda item: item.key)
+        if fact.state is FactState.CONFIRMED
+    ]
+
+
+def _calculation_payloads(snapshot: TaxCheckSnapshot) -> list[dict[str, object]]:
+    return [
+        {
+            "tax_id": result.tax_id,
+            "formula_id": result.calculation.formula_id,
+            "amount": result.calculation.amount,
+            "evidence_refs": sorted(result.calculation.evidence_refs),
+        }
+        for result in sorted(snapshot.results, key=lambda item: item.tax_id)
+        if result.calculation is not None
+    ]
+
+
+def _rule_pack_payloads(snapshot: TaxCheckSnapshot) -> list[dict[str, str]]:
+    rule_packs = {
+        (pack_id, rule_version)
+        for result in snapshot.results
+        for pack_id, rule_version in zip(
+            result.rule_pack_ids,
+            result.rule_pack_versions,
+            strict=True,
+        )
+    }
+    return [
+        {"pack_id": pack_id, "rule_version": rule_version}
+        for pack_id, rule_version in sorted(rule_packs)
+    ]
+
+
+def _rule_source_payloads(snapshot: TaxCheckSnapshot) -> list[dict[str, object]]:
+    sources = []
+    for result in snapshot.results:
+        for source in result.rule_sources:
+            if source not in sources:
+                sources.append(source)
+    ordered = sorted(
+        sources,
+        key=lambda source: (source.title, source.url, source.published_on),
+    )
+    return [
+        {
+            "title": source.title,
+            "url": source.url,
+            "issuer": source.issuer,
+            "document_number": source.document_number,
+            "article_refs": list(source.article_refs),
+            "published_on": source.published_on.isoformat(),
+            "verified_on": (
+                source.verified_on.isoformat()
+                if source.verified_on is not None
+                else None
+            ),
+        }
+        for source in ordered
+    ]
+
+
+def _audit_event_payloads(snapshot: TaxCheckSnapshot) -> list[dict[str, object]]:
+    return [
+        {
+            "event_type": event.event_type,
+            "tax_ids": list(event.tax_ids),
+            "fact_keys": list(event.fact_keys),
+            "confirmation_digest": event.confirmation_digest,
+        }
+        for event in snapshot.audit_events
+    ]
+
+
+def _artifact_payloads(
+    artifacts: tuple[BundleArtifact, ...],
+) -> tuple[list[dict[str, object]], list[tuple[str, Path]]]:
+    payloads: list[dict[str, object]] = []
+    members: list[tuple[str, Path]] = []
+    for artifact in sorted(artifacts, key=lambda item: item.archive_path):
+        if not _is_safe_archive_path(artifact.archive_path):
+            raise ValueError("unsafe_bundle_artifact_path")
+        payloads.append({
+            "kind": artifact.kind,
+            "archive_path": artifact.archive_path,
+            "sha256": _sha256_file(artifact.path),
+            "size_bytes": artifact.path.stat().st_size,
+        })
+        members.append((artifact.archive_path, artifact.path))
+    return payloads, members
+
+
+def _manifest_payload(
+    snapshot: TaxCheckSnapshot,
+    verified: VerifiedEvidenceSet,
+    artifacts: tuple[BundleArtifact, ...],
+    *,
+    include_evidence_files: bool,
+) -> tuple[dict[str, object], list[tuple[str, Path]]]:
+    evidence_items, evidence_members = _evidence_item_payloads(
+        verified,
+        include_evidence_files=include_evidence_files,
+    )
+    artifact_payloads, artifact_members = _artifact_payloads(artifacts)
+    payload = {
+        "schema_version": BUNDLE_SCHEMA_VERSION,
+        "generator_version": importlib.metadata.version("open-tax-check"),
+        "period": {
+            "start": snapshot.request.period.start.isoformat(),
+            "end": snapshot.request.period.end.isoformat(),
+        },
+        "jurisdiction": snapshot.request.jurisdiction,
+        "snapshot_schema_version": snapshot.schema_version,
+        "snapshot_revision": snapshot.revision,
+        "includes_evidence_files": include_evidence_files,
+        "evidence_items": evidence_items,
+        "confirmed_fact_bindings": _confirmed_fact_bindings(snapshot),
+        "calculations": _calculation_payloads(snapshot),
+        "rule_packs": _rule_pack_payloads(snapshot),
+        "rule_sources": _rule_source_payloads(snapshot),
+        "artifacts": artifact_payloads,
+        "audit_events": _audit_event_payloads(snapshot),
+        "disclaimer_zh": _FIXED_DISCLAIMER_ZH,
+    }
+    return payload, artifact_members + evidence_members
+
+
+def _zip_info(archive_path: str) -> ZipInfo:
+    info = ZipInfo(archive_path, _ZIP_TIMESTAMP)
+    info.compress_type = ZIP_DEFLATED
+    info.create_system = 3
+    info.external_attr = 0o100644 << 16
+    return info
+
+
+def _write_stream(archive: ZipFile, archive_path: str, source: BinaryIO) -> None:
+    with archive.open(_zip_info(archive_path), "w") as target:
+        shutil.copyfileobj(source, target, length=1024 * 1024)
+
+
+def _write_zip_members(
+    archive: ZipFile,
+    snapshot: TaxCheckSnapshot,
+    verified: VerifiedEvidenceSet,
+    artifacts: tuple[BundleArtifact, ...],
+    *,
+    include_evidence_files: bool,
+) -> None:
+    manifest, path_members = _manifest_payload(
+        snapshot,
+        verified,
+        artifacts,
+        include_evidence_files=include_evidence_files,
+    )
+    members: list[tuple[str, Path | bytes]] = [
+        *path_members,
+        ("bundle-manifest.json", _json_bytes(manifest)),
+    ]
+    archive_paths = [archive_path for archive_path, _ in members]
+    if (
+        len(set(archive_paths)) != len(archive_paths)
+        or any(not _is_safe_archive_path(path) for path in archive_paths)
+    ):
+        raise ValueError("invalid_bundle_archive_path")
+    for archive_path, source in sorted(members, key=lambda member: member[0]):
+        if isinstance(source, bytes):
+            archive.writestr(_zip_info(archive_path), source)
+        else:
+            with source.open("rb") as input_file:
+                _write_stream(archive, archive_path, input_file)
+
+
+def build_evidence_bundle(
+    snapshot: TaxCheckSnapshot,
+    verified: VerifiedEvidenceSet,
+    artifacts: tuple[BundleArtifact, ...],
+    destination: Path,
+    *,
+    include_evidence_files: bool = False,
+) -> EvidenceBundleResult:
+    validate_evidence_bindings(snapshot, verified)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w+b") as output:
+            with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+                _write_zip_members(
+                    archive,
+                    snapshot,
+                    verified,
+                    artifacts,
+                    include_evidence_files=include_evidence_files,
+                )
+            output.flush()
+            os.fsync(output.fileno())
+        bundle_sha256 = _sha256_file(temporary)
+        os.replace(temporary, destination)
+    except (OSError, ValueError, BadZipFile):
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise EvidenceBundleError("evidence_bundle_write_failed") from None
+    return EvidenceBundleResult(
+        path=destination,
+        sha256=bundle_sha256,
+        includes_evidence_files=include_evidence_files,
+    )
