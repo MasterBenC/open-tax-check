@@ -26,3 +26,16 @@ jobs:
       - run: python scripts/run_fictional_example.py --output work/ci-demo
       - run: python -m build
       - run: python scripts/validate_release.py --require-distributions
+
+  ocr-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[ocr]"
+      - run: python -m pytest tests/test_ocr_smoke.py -q
+        env:
+          OPEN_TAX_CHECK_RUN_OCR_SMOKE: "1"

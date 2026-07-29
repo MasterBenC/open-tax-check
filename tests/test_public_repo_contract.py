@@ -304,6 +304,17 @@ class PublicRepositoryContractTests(unittest.TestCase):
         ):
             self.assertIn(required, contract)
 
+    def test_public_docs_describe_local_ocr_boundary(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        contract = (ROOT / "docs/document-extraction-contract.md").read_text(encoding="utf-8")
+        roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
+        for text in (readme, contract):
+            self.assertIn('pip install -e ".[ocr]"', text)
+            self.assertIn("prepare-ocr", text)
+            self.assertIn("extract-document", text)
+            self.assertIn("local-paddleocr", text)
+        self.assertIn("OPEN_TAX_CHECK_RUN_OCR_SMOKE", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

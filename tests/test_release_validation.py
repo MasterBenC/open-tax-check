@@ -448,6 +448,11 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(result, 0, message)
         self.assertIn("release validation passed", message.lower())
 
+    def test_ocr_fixture_allowlist_is_explicit(self):
+        self.assertIn("tests/fixtures/ocr/fictional-tax-note.png", validate_release.ALLOWED_BINARY_FIXTURES)
+        self.assertIn("tests/fixtures/ocr/fictional-digital.pdf", validate_release.ALLOWED_BINARY_FIXTURES)
+        self.assertIn(".model", validate_release.FORBIDDEN_BINARY_SUFFIXES)
+
     def test_tampered_fictional_xls_fixture_is_rejected(self):
         fixture = ROOT / "tests/fixtures/fictional-journal.xls"
         relative_path = Path("tests/fixtures/fictional-journal.xls")

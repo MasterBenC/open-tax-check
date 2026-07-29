@@ -36,3 +36,6 @@ opentaxcheck import-extraction --case CASE_DIR --source SOURCE_ID --input result
 ## 结果结构
 
 结果包含文档元数据、provider 与授权信息、页码与旋转、文本块（四点坐标和 `[0,1]` 置信度）、表格单元格、机器可读问题及案件来源引用。合同版本独立于现有 `SCHEMA_VERSION` 和税务规则包版本。
+## Local OCR provider
+
+`local-paddleocr` is an optional, offline provider for bounded PDF, PNG, and JPEG extraction. Install it with `pip install -e ".[ocr]"`, prepare a verified local model directory with `opentaxcheck prepare-ocr --model-dir PATH`, then run `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`. Extraction never downloads models; missing dependencies or an invalid manifest produce `not_performed`. The opt-in smoke gate is controlled by `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` and is explicitly skipped otherwise.

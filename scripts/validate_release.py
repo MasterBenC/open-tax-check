@@ -110,11 +110,24 @@ FORBIDDEN_BINARY_SUFFIXES = {
     ".pth",
     ".safetensors",
     ".tflite",
+    ".pdmodel",
+    ".pdparams",
+    ".params",
+    ".weights",
+    ".cache",
 }
 ALLOWED_BINARY_FIXTURES = {
     "tests/fixtures/fictional-journal.xls": (
         "5a9bfece99db9cbae5442add9e206973a20d3226534664d747a205433f546195",
         5632,
+    ),
+    "tests/fixtures/ocr/fictional-tax-note.png": (
+        "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+        68,
+    ),
+    "tests/fixtures/ocr/fictional-digital.pdf": (
+        "554f5147984d75fe7e43c6f15d08e3d52097907a122299c06613e84b3b4c8749",
+        142,
     ),
 }
 OFFICIAL_SOURCE_SUFFIXES = (
@@ -421,6 +434,11 @@ def main() -> int:
         action="store_true",
         help="require exactly one wheel and one source distribution",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="run release validation with distribution artifacts required",
+    )
     args = parser.parse_args()
 
     candidates = public_paths(ROOT)
@@ -468,7 +486,7 @@ def main() -> int:
         )
         return 1
     artifacts = distribution_artifacts(ROOT)
-    if args.require_distributions:
+    if args.require_distributions or args.strict:
         wheels = tuple(
             artifact
             for artifact in artifacts

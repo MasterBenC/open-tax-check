@@ -139,7 +139,11 @@ from open_tax_check.tax_reporting import render_tax_health_report
 
 ## 隐私与云端授权
 
-当前核心默认只在本地处理，不收集遥测，也不向 OpenTaxCheck 项目方上传资料。当前核心不调用 OCR、企业查询或大模型云服务。统一的宿主文档抽取 JSON、授权和导入边界见 [文档抽取合同](docs/document-extraction-contract.md)；该合同不代表实际 OCR provider 已实现。未来任何云端适配器都必须在调用前说明服务和拟发送的数据范围，并取得明确授权；密钥只能放在环境变量或宿主安全凭证中。
+当前核心默认只在本地处理，不收集遥测，也不向 OpenTaxCheck 项目方上传资料。统一的宿主文档抽取 JSON、授权和导入边界见 [文档抽取合同](docs/document-extraction-contract.md)。
+
+### 本地 OCR（可选）
+
+离线 PDF/PNG/JPEG OCR 通过 `local-paddleocr` provider 提供。安装可选依赖：`pip install -e ".[ocr]"`；模型必须由操作者显式预热：`opentaxcheck prepare-ocr --model-dir PATH`；案件提取使用 `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`。案件运行不会联网下载模型，缺少依赖或模型会返回 `not_performed`。烟测只有在 `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` 时才会执行；默认结果是明确跳过。
 
 真实项目应按机构制度执行最小化、脱敏、访问控制、备份和安全删除。日志、截图、Issue、Discussion、测试、提交记录和示例均不得包含真实客户数据或凭证。
 
