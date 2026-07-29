@@ -1,9 +1,19 @@
 """Bounded PDF/image inspection primitives for the local OCR provider."""
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
-from .document_providers import LocalDocumentSource
+from .document_extraction import (
+    AuthorizationRecord,
+    DocumentExtraction,
+    ExtractionIssue,
+    TableRegion,
+    TextBlock,
+)
+from .document_providers import ExtractionOptions, LocalDocumentSource
+from .ocr_runtime import OcrDependencyError, load_ocr_dependencies, load_ocr_model_manifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,8 +49,151 @@ class ImageInput:
     pixels: int
 
 
+@dataclass(frozen=True, slots=True)
+class OcrLine:
+    text: str
+    quadrilateral: tuple[tuple[float, float], ...]
+    confidence: float
+
+
 class LocalOcrInspectionError(ValueError):
     pass
+
+
+class PaddleOcrBackend:
+    def __init__(self, dependencies: object, model_dir: Path):
+        self._dependencies = dependencies
+        self._pipeline = dependencies.paddleocr.PaddleOCR(
+            text_detection_model_dir=str(model_dir),
+            text_recognition_model_dir=str(model_dir),
+            device="cpu",
+        )
+
+    def predict(self, image: object) -> tuple[OcrLine, ...]:
+        lines: list[OcrLine] = []
+        for result in self._pipeline.predict(image):
+            payload = result.json if hasattr(result, "json") else result
+            if isinstance(payload, dict) and "res" in payload:
+                payload = payload["res"]
+            if not isinstance(payload, dict):
+                continue
+            texts = payload.get("rec_texts") or payload.get("texts") or ()
+            scores = payload.get("rec_scores") or payload.get("scores") or ()
+            polygons = payload.get("rec_polys") or payload.get("rec_boxes") or ()
+            for text, score, polygon in zip(texts, scores, polygons):
+                points = tuple(tuple(float(value) for value in point) for point in polygon)
+                if len(points) == 2:
+                    x1, y1 = points[0]
+                    x2, y2 = points[1]
+                    points = ((x1, y1), (x2, y1), (x2, y2), (x1, y2))
+                if len(points) == 4 and str(text).strip():
+                    lines.append(OcrLine(str(text), points, float(score)))
+        return tuple(lines)
+
+
+class PypdfiumRenderer:
+    def __init__(self, path: Path, pdfium: object):
+        self._document = pdfium.PdfDocument(str(path))
+
+    def render(self, page_number: int, *, dpi: int):
+        page = self._document.get_page(page_number - 1)
+        bitmap = page.render(scale=dpi / 72.0)
+        return bitmap.to_pil()
+
+
+class LocalOcrProvider:
+    provider_id = "local-paddleocr"
+    provider_version = "3.7"
+
+    def extract(self, source: LocalDocumentSource, options: ExtractionOptions) -> DocumentExtraction:
+        budgets = options.budgets or OcrBudgets()
+        try:
+            dependencies = options.dependencies or load_ocr_dependencies()
+            if options.backend is None:
+                if options.model_dir is None:
+                    raise OcrDependencyError("local_ocr_model_unavailable")
+                load_ocr_model_manifest(options.model_dir)
+                backend = PaddleOcrBackend(dependencies, options.model_dir)
+            else:
+                backend = options.backend
+        except OcrDependencyError as error:
+            return self._result(source, "not_performed", str(error))
+        try:
+            if source.media_type == "application/pdf":
+                return self._extract_pdf(source, dependencies, backend, options.renderer, budgets)
+            if source.media_type in {"image/png", "image/jpeg"}:
+                inspect_image(source, dependencies, budgets)
+                return self._extract_image(source, backend)
+            return self._result(source, "failed", "unsupported_document_media_type")
+        except LocalOcrInspectionError as error:
+            return self._result(source, "failed", str(error))
+        except Exception:
+            return self._result(source, "failed", "local_ocr_failed")
+
+    def _extract_image(self, source, backend):
+        blocks = tuple(self._block(line, 1) for line in backend.predict(source.path))
+        status = "completed" if blocks else "failed"
+        issues = () if blocks else (ExtractionIssue("page_has_no_text", "warning", "page_has_no_text", 1),)
+        return self._result(source, status, None, blocks=blocks, issues=issues)
+
+    def _extract_pdf(self, source, dependencies, backend, renderer, budgets):
+        pages = inspect_pdf(source, dependencies, budgets)
+        renderer = renderer or PypdfiumRenderer(source.path, dependencies.pypdfium2)
+        blocks = []
+        issues = []
+        successful_pages = 0
+        failed_pages = 0
+        rendered_pixels = 0
+        for page in pages:
+            for fragment in page.native_fragments:
+                blocks.append(TextBlock(fragment.text, page.page_number, fragment.coordinates, None, "native_unscored"))
+            if page.native_fragments:
+                successful_pages += 1
+            for code in page.issues:
+                issues.append(ExtractionIssue(code, "error", code, page.page_number))
+                failed_pages += 1
+            if not page.needs_ocr:
+                continue
+            pixels = int(page.width * budgets.render_dpi / 72 * page.height * budgets.render_dpi / 72)
+            if rendered_pixels + pixels > budgets.max_total_rendered_pixels:
+                issues.append(ExtractionIssue("render_pixel_limit_exceeded", "error", "render_pixel_limit_exceeded", page.page_number))
+                failed_pages += 1
+                continue
+            rendered_pixels += pixels
+            try:
+                lines = tuple(backend.predict(renderer.render(page.page_number, dpi=budgets.render_dpi)))
+            except Exception:
+                issues.append(ExtractionIssue("pdf_page_render_failed", "error", "pdf_page_render_failed", page.page_number))
+                failed_pages += 1
+                continue
+            if not lines:
+                issues.append(ExtractionIssue("page_has_no_text", "warning", "page_has_no_text", page.page_number))
+                failed_pages += 1
+                continue
+            blocks.extend(self._block(line, page.page_number) for line in lines)
+            successful_pages += 1
+        if failed_pages and successful_pages:
+            status = "partial"
+        elif failed_pages:
+            status = "failed"
+        else:
+            status = "completed"
+        return self._result(source, status, None, blocks=tuple(blocks), issues=tuple(issues))
+
+    @staticmethod
+    def _block(line: OcrLine, page_number: int) -> TextBlock:
+        return TextBlock(line.text, page_number, line.quadrilateral, line.confidence, "model")
+
+    def _result(self, source, status, issue_code=None, *, blocks=(), issues=()):
+        if issue_code:
+            issues = tuple(issues) + (ExtractionIssue(issue_code, "error", issue_code),)
+        return DocumentExtraction(
+            "document-extraction/v1.1", f"{self.provider_id}-{source.source_id}", source.source_id,
+            source.path.name, source.media_type, self.provider_id, self.provider_version,
+            datetime.now(timezone.utc).isoformat(),
+            AuthorizationRecord(self.provider_id, self.provider_version, "none", "local", datetime.now(timezone.utc).isoformat(), "local", "none"),
+            status, (), tuple(blocks), (), tuple(issues), (source.source_id,),
+        )
 
 
 def _check_file_size(source: LocalDocumentSource, budgets: OcrBudgets) -> None:

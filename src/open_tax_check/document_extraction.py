@@ -12,7 +12,7 @@ _SUPPORTED_SCHEMA_VERSIONS = {
     LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION,
 }
 _STATUSES = {"not_requested", "not_performed", "completed", "partial", "failed"}
-_PROVIDERS = {"off", "host", "cloud"}
+_PROVIDERS = {"off", "host", "cloud", "local-paddleocr"}
 _MAX_TEXT = 1024 * 1024
 _MAX_BLOCKS = 100_000
 _MAX_PAGES = 10_000

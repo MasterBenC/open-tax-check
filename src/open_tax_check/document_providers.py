@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol
 
 from .document_extraction import (
     DOCUMENT_EXTRACTION_SCHEMA_VERSION,
@@ -25,6 +25,11 @@ class LocalDocumentSource:
 @dataclass(frozen=True, slots=True)
 class ExtractionOptions:
     authorization: AuthorizationRecord | None = None
+    model_dir: Path | None = None
+    budgets: Any = None
+    dependencies: Any = None
+    backend: Any = None
+    renderer: Any = None
 
 
 class DocumentProvider(Protocol):
