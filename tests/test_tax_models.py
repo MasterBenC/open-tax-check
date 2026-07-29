@@ -17,6 +17,8 @@ from open_tax_check.tax_models import (
     PromptChoice,
     Question,
     RuleSource,
+    StatutoryRateEntry,
+    StatutoryRateTable,
     TaxCheckRequest,
     TaxCheckSnapshot,
     TaxFact,
@@ -28,6 +30,57 @@ from open_tax_check.tax_models import (
 
 
 class TaxModelTests(unittest.TestCase):
+    def test_statutory_rate_table_rejects_duplicate_selectors(self):
+        with self.assertRaisesRegex(ValueError, "^invalid_statutory_rate_table$"):
+            StatutoryRateTable(
+                "stamp_tax.tax_item",
+                (
+                    StatutoryRateEntry("sale_contract", "买卖合同", "0.0003"),
+                    StatutoryRateEntry("sale_contract", "重复税目", "0.0005"),
+                ),
+            )
+
+    def test_statutory_rate_entry_rejects_rate_outside_unit_interval(self):
+        with self.assertRaisesRegex(ValueError, "^invalid_statutory_rate_entry$"):
+            StatutoryRateEntry("sale_contract", "买卖合同", "1.0001")
+
+    def test_calculation_spec_requires_exactly_one_rate_source(self):
+        table = StatutoryRateTable(
+            "stamp_tax.tax_item",
+            (StatutoryRateEntry("sale_contract", "买卖合同", "0.0003"),),
+        )
+        with self.assertRaisesRegex(ValueError, "^invalid_calculation_spec$"):
+            CalculationSpec(
+                "generic.base_times_rate.v1",
+                "calc.tax_base",
+                "calc.rate",
+                rate_table=table,
+            )
+        with self.assertRaisesRegex(ValueError, "^invalid_calculation_spec$"):
+            CalculationSpec(
+                "generic.base_times_rate.v1",
+                "calc.tax_base",
+                None,
+            )
+
+    def test_statutory_selector_serializes_for_audit(self):
+        record = CalculationRecord(
+            "generic.base_times_rate.v1",
+            "100000.00",
+            "0.00",
+            "100000.00",
+            "0.0003",
+            "30.00",
+            ("contract-1",),
+            rate_selector="sale_contract",
+            rate_selector_label_zh="买卖合同",
+        )
+
+        payload = to_dict(record)
+
+        self.assertEqual(payload["rate_selector"], "sale_contract")
+        self.assertEqual(payload["rate_selector_label_zh"], "买卖合同")
+
     def test_calculation_contract_serializes_auditable_record(self):
         spec = CalculationSpec(
             "generic.base_minus_deductions_times_rate.v1",

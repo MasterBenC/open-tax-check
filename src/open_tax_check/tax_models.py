@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 import re
 
@@ -188,17 +189,65 @@ class FactRequirement:
 
 
 @dataclass(frozen=True, slots=True)
+class StatutoryRateEntry:
+    """One exact selector-to-rate mapping from a versioned official source."""
+
+    selector: str
+    label_zh: str
+    rate: str
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.selector)
+        if not isinstance(self.label_zh, str) or not self.label_zh.strip():
+            raise ValueError("invalid_statutory_rate_entry")
+        if not isinstance(self.rate, str) or not self.rate.strip():
+            raise ValueError("invalid_statutory_rate_entry")
+        try:
+            parsed = Decimal(self.rate)
+        except InvalidOperation as error:
+            raise ValueError("invalid_statutory_rate_entry") from error
+        if not parsed.is_finite() or parsed < 0 or parsed > 1:
+            raise ValueError("invalid_statutory_rate_entry")
+
+
+@dataclass(frozen=True, slots=True)
+class StatutoryRateTable:
+    """An immutable, exact-match statutory rate lookup."""
+
+    selector_fact_key: str
+    entries: tuple[StatutoryRateEntry, ...]
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.selector_fact_key)
+        entries = tuple(self.entries)
+        object.__setattr__(self, "entries", entries)
+        if (
+            not entries
+            or not all(isinstance(entry, StatutoryRateEntry) for entry in entries)
+            or len({entry.selector for entry in entries}) != len(entries)
+        ):
+            raise ValueError("invalid_statutory_rate_table")
+
+
+@dataclass(frozen=True, slots=True)
 class CalculationSpec:
     """Allowlisted fact bindings for a deterministic calculation evaluator."""
 
     formula_id: str
     tax_base_fact_key: str
-    rate_fact_key: str
+    rate_fact_key: str | None = None
     deductions_fact_key: str | None = None
+    rate_table: StatutoryRateTable | None = None
 
     def __post_init__(self) -> None:
-        for value in (self.formula_id, self.tax_base_fact_key, self.rate_fact_key):
+        for value in (self.formula_id, self.tax_base_fact_key):
             _require_identifier(value)
+        if (self.rate_fact_key is None) == (self.rate_table is None):
+            raise ValueError("invalid_calculation_spec")
+        if self.rate_fact_key is not None:
+            _require_identifier(self.rate_fact_key)
+        if self.rate_table is not None and not isinstance(self.rate_table, StatutoryRateTable):
+            raise ValueError("invalid_calculation_spec")
         if self.deductions_fact_key is not None:
             _require_identifier(self.deductions_fact_key)
 
@@ -214,6 +263,8 @@ class CalculationRecord:
     rate: str
     amount: str
     evidence_refs: tuple[str, ...]
+    rate_selector: str | None = None
+    rate_selector_label_zh: str | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.formula_id)
@@ -224,6 +275,12 @@ class CalculationRecord:
         if any(not isinstance(reference, str) or not reference.strip() for reference in refs):
             raise ValueError("invalid_calculation_record")
         object.__setattr__(self, "evidence_refs", refs)
+        if (self.rate_selector is None) != (self.rate_selector_label_zh is None):
+            raise ValueError("invalid_calculation_record")
+        if self.rate_selector is not None:
+            _require_identifier(self.rate_selector)
+            if not isinstance(self.rate_selector_label_zh, str) or not self.rate_selector_label_zh.strip():
+                raise ValueError("invalid_calculation_record")
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,10 +361,11 @@ class TaxPack:
             raise ValueError("invalid_calculation_spec")
         if self.calculation is not None:
             requirement_keys = {item.fact_key for item in self.requirements}
-            bound_keys = {
-                self.calculation.tax_base_fact_key,
-                self.calculation.rate_fact_key,
-            }
+            bound_keys = {self.calculation.tax_base_fact_key}
+            if self.calculation.rate_fact_key is not None:
+                bound_keys.add(self.calculation.rate_fact_key)
+            if self.calculation.rate_table is not None:
+                bound_keys.add(self.calculation.rate_table.selector_fact_key)
             if self.calculation.deductions_fact_key is not None:
                 bound_keys.add(self.calculation.deductions_fact_key)
             if not bound_keys.issubset(requirement_keys):
