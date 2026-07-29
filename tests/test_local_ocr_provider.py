@@ -103,7 +103,14 @@ def test_failed_scanned_page_produces_partial_result(tmp_path):
     assert any(issue.code == "pdf_page_render_failed" for issue in result.issues)
 
 
-def test_missing_local_ocr_dependencies_are_not_performed(tmp_path):
+def test_missing_local_ocr_dependencies_are_not_performed(monkeypatch, tmp_path):
+    def missing_dependencies():
+        raise OcrDependencyError("local_ocr_dependency_missing")
+
+    monkeypatch.setattr(
+        "open_tax_check.local_ocr.load_ocr_dependencies",
+        missing_dependencies,
+    )
     result = LocalOcrProvider().extract(image_source(tmp_path), ExtractionOptions())
 
     assert result.status == "not_performed"
