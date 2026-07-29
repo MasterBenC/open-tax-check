@@ -1,7 +1,11 @@
 from pathlib import Path
 from dataclasses import asdict
+import os
+
+import pytest
 
 from open_tax_check.document_extraction import AuthorizationRecord, DocumentPage, DocumentExtraction
+from open_tax_check import document_providers
 from open_tax_check.document_providers import ExtractionOptions, HostProvider, LocalDocumentSource, OffProvider
 
 
@@ -41,3 +45,26 @@ def test_host_provider_rejects_unsafe_path(tmp_path):
     result = HostProvider().import_result(unsafe, payload())
     assert result.status == "failed"
     assert result.issues[0].code == "unsafe_source_path"
+
+
+def test_host_provider_rejects_symlink_inside_case_input(tmp_path):
+    item = source(tmp_path)
+    link = item.case_input_dir / "linked.pdf"
+    try:
+        os.symlink(item.path, link)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    linked = LocalDocumentSource(item.source_id, link, item.media_type, item.case_input_dir)
+
+    result = HostProvider().import_result(linked, payload())
+
+    assert result.status == "failed"
+    assert result.issues[0].code == "unsafe_source_path"
+
+
+def test_windows_reparse_attribute_is_detected():
+    class ReparsePath:
+        def lstat(self):
+            return type("Stat", (), {"st_file_attributes": 0x400})()
+
+    assert document_providers._is_reparse_point(ReparsePath()) is True

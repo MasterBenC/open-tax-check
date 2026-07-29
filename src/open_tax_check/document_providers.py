@@ -51,18 +51,30 @@ def _failed(source: LocalDocumentSource, code: str) -> DocumentExtraction:
 
 def _safe_path(source: LocalDocumentSource) -> bool:
     try:
-        root = source.case_input_dir.resolve(strict=True)
-        path = source.path.resolve(strict=True)
+        original_root = source.case_input_dir.absolute()
+        original_path = source.path.absolute()
+        if original_path == original_root or original_root not in original_path.parents:
+            return False
+        current = original_path
+        while current != original_root:
+            if current.is_symlink() or _is_reparse_point(current):
+                return False
+            current = current.parent
+        root = original_root.resolve(strict=True)
+        path = original_path.resolve(strict=True)
     except OSError:
         return False
     if path == root or root not in path.parents:
         return False
-    current = path
-    while current != root:
-        if current.is_symlink():
-            return False
-        current = current.parent
     return True
+
+
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attributes & 0x400)
 
 
 class OffProvider:
@@ -111,4 +123,3 @@ class HostProvider:
             issues=result.issues,
             source_refs=(source.source_id,),
         )
-

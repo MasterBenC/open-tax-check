@@ -81,6 +81,11 @@ class PackageContractTests(unittest.TestCase):
             ["openpyxl>=3.1.5,<4", "xlrd>=2.0.2,<3", "defusedxml>=0.7.1,<1"],
         )
 
+    def test_document_extraction_contract_adds_no_runtime_dependency(self):
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertEqual(data["project"]["dependencies"], [])
+
     def test_init_cli_emits_review_period(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = Path(temp_dir) / "case"

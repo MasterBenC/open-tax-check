@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 
 from .case import init_case, set_case_scope
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
@@ -22,6 +24,24 @@ def _configure_utf8_output() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
             reconfigure(encoding="utf-8")
+
+
+def _write_json_atomic(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -205,8 +225,7 @@ def main() -> int:
             local = LocalDocumentSource(args.source, args.case / "input" / source["filename"], media_type, args.case / "input")
             value = HostProvider().import_result(local, payload)
             target = args.case / "work" / "document-extractions" / f"{args.source}.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(document_extraction_to_dict(value), ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+            _write_json_atomic(target, document_extraction_to_dict(value))
         except Exception:
             print(json.dumps({"status": "failed", "error_code": "invalid_document_extraction_import"}, ensure_ascii=False))
             return 2

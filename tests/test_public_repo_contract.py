@@ -287,6 +287,23 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("公开 Issue", text)
         self.assertIn("客户数据", text)
 
+    def test_document_extraction_contract_is_public_and_truthful(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        contract = (ROOT / "docs/document-extraction-contract.md").read_text(encoding="utf-8")
+
+        self.assertIn("docs/document-extraction-contract.md", readme)
+        for required in (
+            "document-extraction/v1",
+            "not_performed",
+            "partial",
+            "failed",
+            "逐文件或逐页",
+            "host",
+            "off",
+            "实际 PDF、图片 OCR provider 尚未实现",
+        ):
+            self.assertIn(required, contract)
+
 
 if __name__ == "__main__":
     unittest.main()
