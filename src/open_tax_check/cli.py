@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, is_dataclass
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,9 @@ import tempfile
 
 from .case import init_case, set_case_scope
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
-from .document_providers import HostProvider, LocalDocumentSource
+from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSource
+from .local_ocr import LocalOcrProvider
+from .ocr_runtime import OcrDependencyError, prepare_ocr_models
 from .pipeline import inspect_case, run_case
 from .reviews import (
     MappingReviewError,
@@ -42,6 +45,24 @@ def _write_json_atomic(path: Path, payload: object) -> None:
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
+
+
+def _safe_input_path(path: Path, input_dir: Path) -> bool:
+    try:
+        root = input_dir.absolute()
+        candidate = path.absolute()
+        if candidate == root or root not in candidate.parents:
+            return False
+        current = candidate
+        while current != root:
+            if current.is_symlink() or bool(getattr(current.lstat(), "st_file_attributes", 0) & 0x400):
+                return False
+            current = current.parent
+        resolved_root = root.resolve(strict=True)
+        resolved_path = candidate.resolve(strict=True)
+        return resolved_path != resolved_root and resolved_root in resolved_path.parents and resolved_path.is_file()
+    except OSError:
+        return False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,6 +119,13 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--case", required=True, type=Path)
     import_parser.add_argument("--source", required=True)
     import_parser.add_argument("--input", required=True, type=Path)
+    prepare_parser = subparsers.add_parser("prepare-ocr", help="Prepare and attest local OCR models")
+    prepare_parser.add_argument("--model-dir", required=True, type=Path)
+    extract_parser = subparsers.add_parser("extract-document", help="Extract text from a local document")
+    extract_parser.add_argument("--case", required=True, type=Path)
+    extract_parser.add_argument("--source", required=True)
+    extract_parser.add_argument("--provider", required=True, choices=["local-paddleocr"])
+    extract_parser.add_argument("--model-dir", required=True, type=Path)
     return parser
 
 
@@ -231,6 +259,54 @@ def main() -> int:
             return 2
         print(json.dumps({"status": value.status, "path": str(target)}, ensure_ascii=False))
         return 0
+    if args.command == "prepare-ocr":
+        try:
+            manifest = prepare_ocr_models(args.model_dir)
+        except OcrDependencyError as error:
+            print(json.dumps({"status": "failed", "error_code": str(error)}, ensure_ascii=False))
+            return 5
+        payload = asdict(manifest) if is_dataclass(manifest) else manifest
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "extract-document":
+        try:
+            inventory = json.loads((args.case / "work" / "workbook_inventory.json").read_text(encoding="utf-8"))
+            source = next(item for item in inventory.get("sources", []) if item.get("source_id") == args.source)
+            filename = Path(source["filename"])
+            if filename.is_absolute() or ".." in filename.parts:
+                raise ValueError("unsafe_source_path")
+            extension = filename.suffix.casefold()
+            media_type = {
+                ".pdf": "application/pdf",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+            }.get(extension)
+            if media_type is None:
+                raise ValueError("unsupported_document_media_type")
+            local = LocalDocumentSource(
+                args.source, args.case / "input" / filename, media_type, args.case / "input"
+            )
+            if not _safe_input_path(local.path, local.case_input_dir):
+                raise ValueError("unsafe_source_path")
+            value = LocalOcrProvider().extract(local, ExtractionOptions(model_dir=args.model_dir))
+            target = args.case / "work" / "document-extractions" / f"{args.source}.json"
+            _write_json_atomic(target, document_extraction_to_dict(value))
+        except OcrDependencyError as error:
+            print(json.dumps({"status": "failed", "error_code": str(error)}, ensure_ascii=False))
+            return 5
+        except (KeyError, StopIteration, OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+            code = str(error) if str(error) in {"unsafe_source_path", "unsupported_document_media_type"} else "invalid_document_source"
+            print(json.dumps({"status": "failed", "error_code": code}, ensure_ascii=False))
+            return 4
+        except Exception:
+            print(json.dumps({"status": "failed", "error_code": "local_ocr_failed"}, ensure_ascii=False))
+            return 3
+        print(json.dumps({"status": value.status, "path": str(target)}, ensure_ascii=False))
+        if value.status == "not_performed":
+            code = next((issue.code for issue in value.issues if issue.code in {"local_ocr_dependency_missing", "local_ocr_model_unavailable"}), "local_ocr_unavailable")
+            return 5 if code in {"local_ocr_dependency_missing", "local_ocr_model_unavailable"} else 3
+        return 0 if value.status in {"completed", "partial"} else 3
     return 2
 
 
