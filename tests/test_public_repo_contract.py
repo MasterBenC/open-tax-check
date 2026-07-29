@@ -308,12 +308,16 @@ class PublicRepositoryContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         contract = (ROOT / "docs/document-extraction-contract.md").read_text(encoding="utf-8")
         roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         for text in (readme, contract):
             self.assertIn('pip install -e ".[ocr]"', text)
             self.assertIn("prepare-ocr", text)
             self.assertIn("extract-document", text)
             self.assertIn("local-paddleocr", text)
         self.assertIn("OPEN_TAX_CHECK_RUN_OCR_SMOKE", readme)
+        self.assertIn("official mobile models", contract)
+        self.assertIn('PADDLE_PDX_MODEL_SOURCE: "BOS"', workflow)
+        self.assertIn("test_real_ocr_runtime_smoke", workflow)
 
 
 if __name__ == "__main__":

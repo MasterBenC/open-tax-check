@@ -151,7 +151,7 @@ from open_tax_check.tax_reporting import write_tax_health_report, write_tax_heal
 
 ### 本地 OCR（可选）
 
-离线 PDF/PNG/JPEG OCR 通过 `local-paddleocr` provider 提供。安装可选依赖：`pip install -e ".[ocr]"`；模型必须由操作者显式预热：`opentaxcheck prepare-ocr --model-dir PATH`；案件提取使用 `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`。案件运行不会联网下载模型，缺少依赖或模型会返回 `not_performed`。烟测只有在 `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` 时才会执行；默认结果是明确跳过。
+离线 PDF/PNG/JPEG OCR 通过 `local-paddleocr` provider 提供。安装可选依赖：`pip install -e ".[ocr]"`；模型必须由操作者显式预热：`opentaxcheck prepare-ocr --model-dir PATH`；案件提取使用 `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`。案件运行不会联网下载模型，缺少依赖或模型会返回 `not_performed`。烟测只有在 `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` 时才会执行；默认结果是明确跳过。专用 CI 烟测会在隔离环境中下载 PaddleOCR 官方移动模型并识别完全虚构的图片；一旦显式启用，依赖、下载或识别失败都会按失败处理，不再伪装成跳过。
 
 真实项目应按机构制度执行最小化、脱敏、访问控制、备份和安全删除。日志、截图、Issue、Discussion、测试、提交记录和示例均不得包含真实客户数据或凭证。
 

@@ -69,6 +69,7 @@ class PaddleOcrBackend:
             text_detection_model_dir=str(detection_dir),
             text_recognition_model_dir=str(recognition_dir),
             device="cpu",
+            enable_mkldnn=False,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
@@ -76,6 +77,8 @@ class PaddleOcrBackend:
 
     def predict(self, image: object) -> tuple[OcrLine, ...]:
         lines: list[OcrLine] = []
+        if isinstance(image, Path):
+            image = str(image)
         for result in self._pipeline.predict(image):
             payload = result.json if hasattr(result, "json") else result
             if callable(payload):

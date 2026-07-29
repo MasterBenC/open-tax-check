@@ -36,6 +36,8 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[ocr]"
-      - run: python -m pytest tests/test_ocr_smoke.py -q
+      - run: python -m pytest tests/test_ocr_smoke.py::test_real_ocr_runtime_smoke -q
         env:
           OPEN_TAX_CHECK_RUN_OCR_SMOKE: "1"
+          PADDLE_PDX_MODEL_SOURCE: "BOS"
+          PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"

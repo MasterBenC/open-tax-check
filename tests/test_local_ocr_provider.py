@@ -132,6 +132,7 @@ def test_paddle_backend_uses_separate_detection_and_recognition_model_dirs(tmp_p
         "text_detection_model_dir": str(det_dir),
         "text_recognition_model_dir": str(rec_dir),
         "device": "cpu",
+        "enable_mkldnn": False,
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "use_textline_orientation": False,
@@ -166,3 +167,19 @@ def test_paddle_backend_accepts_json_method_result(tmp_path):
     assert backend.predict("image") == (
         OcrLine("tax", ((1.0, 2.0), (11.0, 2.0), (11.0, 12.0), (1.0, 12.0)), 0.88),
     )
+
+
+def test_paddle_backend_converts_path_input_to_string(tmp_path):
+    received = []
+
+    class Pipeline:
+        def predict(self, image):
+            received.append(image)
+            return []
+
+    backend = object.__new__(PaddleOcrBackend)
+    backend._pipeline = Pipeline()
+
+    backend.predict(tmp_path / "note.png")
+
+    assert received == [str(tmp_path / "note.png")]

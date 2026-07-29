@@ -122,8 +122,8 @@ ALLOWED_BINARY_FIXTURES = {
         5632,
     ),
     "tests/fixtures/ocr/fictional-tax-note.png": (
-        "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
-        68,
+        "03d6e93972ea9e00e05feb596c5fd3f7b024b60f624b301148da6bb2269ff417",
+        22783,
     ),
     "tests/fixtures/ocr/fictional-digital.pdf": (
         "554f5147984d75fe7e43c6f15d08e3d52097907a122299c06613e84b3b4c8749",
