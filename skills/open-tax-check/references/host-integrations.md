@@ -39,3 +39,5 @@
 ## Structured question handoff
 
 The host Agent may call `build_agent_question_tasks(snapshot, max_questions=...)` and display only the Chinese presentation fields from each task. It must not invent confirmations. Convert a validated answer with `confirmation_from_task(task, value, confirmed_by=..., confirmed_at=..., evidence_refs=...)`, then pass the resulting confirmations to `continue_tax_health_check`. The Python core remains model-independent; no prompt text, token count, hidden reasoning, or provider metadata enters the business contract.
+
+Before attaching a file reference to a confirmation or calculation, call `verify_evidence_file(root, relative_path, expected_sha256)`. A hash mismatch, unsafe path, reparse point, unreadable file, or size limit is a failed evidence check and must remain visible to the customer.
