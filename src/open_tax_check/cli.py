@@ -14,6 +14,9 @@ from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSo
 from .local_ocr import LocalOcrProvider
 from .ocr_runtime import OcrDependencyError, prepare_ocr_models
 from .pipeline import inspect_case, run_case
+from .tax_health import run_tax_health_check
+from .tax_io import tax_request_from_dict
+from .tax_reporting import write_tax_health_report, write_tax_health_snapshot
 from .reviews import (
     MappingReviewError,
     ReviewError,
@@ -126,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument("--source", required=True)
     extract_parser.add_argument("--provider", required=True, choices=["local-paddleocr"])
     extract_parser.add_argument("--model-dir", required=True, type=Path)
+    health_parser = subparsers.add_parser("tax-health-check", help="Run the Chinese tax health self-check")
+    health_parser.add_argument("--request", required=True, type=Path)
+    health_parser.add_argument("--output-dir", required=True, type=Path)
     return parser
 
 
@@ -307,6 +313,27 @@ def main() -> int:
             code = next((issue.code for issue in value.issues if issue.code in {"local_ocr_dependency_missing", "local_ocr_model_unavailable"}), "local_ocr_unavailable")
             return 5 if code in {"local_ocr_dependency_missing", "local_ocr_model_unavailable"} else 3
         return 0 if value.status in {"completed", "partial"} else 3
+    if args.command == "tax-health-check":
+        try:
+            request_payload = json.loads(args.request.read_text(encoding="utf-8"))
+            request = tax_request_from_dict(request_payload)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            print(json.dumps({"status": "failed", "error_code": "invalid_tax_health_request"}, ensure_ascii=False))
+            return 4
+        try:
+            snapshot = run_tax_health_check(request)
+            report_path = write_tax_health_report(snapshot, args.output_dir / "税务健康检查报告.md")
+            snapshot_path = write_tax_health_snapshot(snapshot, args.output_dir / "tax-health-snapshot.json")
+        except Exception:
+            print(json.dumps({"status": "failed", "error_code": "tax_health_check_failed"}, ensure_ascii=False))
+            return 3
+        print(json.dumps({
+            "status": "completed",
+            "revision": snapshot.revision,
+            "report_path": str(report_path),
+            "snapshot_path": str(snapshot_path),
+        }, ensure_ascii=False))
+        return 0
     return 2
 
 

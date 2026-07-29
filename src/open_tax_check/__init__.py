@@ -29,3 +29,4 @@ from .tax_reporting import (
     write_tax_health_report,
     write_tax_health_snapshot,
 )
+from .tax_io import tax_request_from_dict, tax_request_to_dict
