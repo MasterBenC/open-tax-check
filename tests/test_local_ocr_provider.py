@@ -2,7 +2,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from open_tax_check.document_providers import ExtractionOptions, LocalDocumentSource
-from open_tax_check.local_ocr import LocalOcrProvider, OcrLine
+import pytest
+
+from open_tax_check.local_ocr import LocalOcrProvider, OcrLine, PaddleOcrBackend
+from open_tax_check.ocr_runtime import OcrDependencyError
 
 
 class FakeBackend:
@@ -105,3 +108,61 @@ def test_missing_local_ocr_dependencies_are_not_performed(tmp_path):
 
     assert result.status == "not_performed"
     assert result.issues[0].code == "local_ocr_dependency_missing"
+
+
+def test_paddle_backend_uses_separate_detection_and_recognition_model_dirs(tmp_path):
+    det_dir = tmp_path / "det"
+    rec_dir = tmp_path / "rec"
+    det_dir.mkdir()
+    rec_dir.mkdir()
+    calls = []
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def predict(self, image):
+            return []
+
+    dependencies = SimpleNamespace(paddleocr=SimpleNamespace(PaddleOCR=FakePaddleOCR))
+
+    PaddleOcrBackend(dependencies, tmp_path)
+
+    assert calls == [{
+        "text_detection_model_dir": str(det_dir),
+        "text_recognition_model_dir": str(rec_dir),
+        "device": "cpu",
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_textline_orientation": False,
+    }]
+
+
+def test_paddle_backend_rejects_missing_model_layout(tmp_path):
+    (tmp_path / "det").mkdir()
+
+    with pytest.raises(OcrDependencyError, match="local_ocr_model_unavailable"):
+        PaddleOcrBackend(SimpleNamespace(paddleocr=SimpleNamespace(PaddleOCR=lambda **_: None)), tmp_path)
+
+
+def test_paddle_backend_accepts_json_method_result(tmp_path):
+    class Result:
+        def json(self):
+            return {
+                "res": {
+                    "rec_texts": ["tax"],
+                    "rec_scores": [0.88],
+                    "rec_polys": [[ [1, 2], [11, 2], [11, 12], [1, 12] ]],
+                }
+            }
+
+    class Pipeline:
+        def predict(self, image):
+            return [Result()]
+
+    backend = object.__new__(PaddleOcrBackend)
+    backend._pipeline = Pipeline()
+
+    assert backend.predict("image") == (
+        OcrLine("tax", ((1.0, 2.0), (11.0, 2.0), (11.0, 12.0), (1.0, 12.0)), 0.88),
+    )

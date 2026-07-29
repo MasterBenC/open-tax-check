@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -62,17 +63,28 @@ class LocalOcrInspectionError(ValueError):
 
 class PaddleOcrBackend:
     def __init__(self, dependencies: object, model_dir: Path):
+        detection_dir, recognition_dir = _resolve_model_dirs(model_dir)
         self._dependencies = dependencies
         self._pipeline = dependencies.paddleocr.PaddleOCR(
-            text_detection_model_dir=str(model_dir),
-            text_recognition_model_dir=str(model_dir),
+            text_detection_model_dir=str(detection_dir),
+            text_recognition_model_dir=str(recognition_dir),
             device="cpu",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
         )
 
     def predict(self, image: object) -> tuple[OcrLine, ...]:
         lines: list[OcrLine] = []
         for result in self._pipeline.predict(image):
             payload = result.json if hasattr(result, "json") else result
+            if callable(payload):
+                payload = payload()
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = None
             if isinstance(payload, dict) and "res" in payload:
                 payload = payload["res"]
             if not isinstance(payload, dict):
@@ -89,6 +101,25 @@ class PaddleOcrBackend:
                 if len(points) == 4 and str(text).strip():
                     lines.append(OcrLine(str(text), points, float(score)))
         return tuple(lines)
+
+
+def _resolve_model_dirs(model_dir: Path) -> tuple[Path, Path]:
+    model_dir = model_dir.resolve()
+    detection_dir = model_dir / "det"
+    recognition_dir = model_dir / "rec"
+    has_detection = detection_dir.is_dir()
+    has_recognition = recognition_dir.is_dir()
+    if has_detection and has_recognition:
+        return detection_dir, recognition_dir
+    if has_detection or has_recognition:
+        raise OcrDependencyError("local_ocr_model_unavailable")
+    try:
+        has_root_files = any(path.is_file() for path in model_dir.iterdir())
+    except OSError as error:
+        raise OcrDependencyError("local_ocr_model_unavailable") from error
+    if not has_root_files:
+        raise OcrDependencyError("local_ocr_model_unavailable")
+    return model_dir, model_dir
 
 
 class PypdfiumRenderer:
