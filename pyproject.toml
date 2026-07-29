@@ -26,6 +26,13 @@ excel = [
   "xlrd>=2.0.2,<3",
   "defusedxml>=0.7.1,<1",
 ]
+ocr = [
+  "pypdf>=6.14.2,<7",
+  "pypdfium2>=5.12.1,<6",
+  "Pillow>=12.3,<13",
+  "paddleocr>=3.7,<4",
+  "paddlepaddle>=3.3.1,<4",
+]
 
 [project.scripts]
 opentaxcheck = "open_tax_check.cli:main"
