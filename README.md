@@ -140,6 +140,8 @@ from open_tax_check.tax_reporting import write_tax_health_report, write_tax_heal
 
 也可以直接使用 CLI 生成首版报告：`opentaxcheck tax-health-check --request request.json --output-dir output/`。请求 JSON 只接受期间、地区、结构化事实和输入哈希；输出为中文 Markdown 报告及机器可读快照。需要 Word 交付物时追加 `--include-docx`；DOCX 与 Markdown 共享同一快照，不会新增税务结论。
 
+通用税额计算内核只接受调用方明确提供、客户确认且带证据引用的计税基础、税率和扣除额；当前规则包未提供的法定税率不会由程序或 AI 猜测。
+
 ## 隐私与云端授权
 
 当前核心默认只在本地处理，不收集遥测，也不向 OpenTaxCheck 项目方上传资料。统一的宿主文档抽取 JSON、授权和导入边界见 [文档抽取合同](docs/document-extraction-contract.md)。
