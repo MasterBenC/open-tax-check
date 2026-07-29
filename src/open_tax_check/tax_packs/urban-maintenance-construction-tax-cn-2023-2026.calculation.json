@@ -16,7 +16,7 @@
       "critical": true
     },
     {
-      "fact_key": "urban_maintenance_construction_tax.location_category",
+      "fact_key": "urban_maintenance_construction_tax.rate_path",
       "answer_type": "choice",
       "evidence_types": ["registration_record", "provincial_location_rule"],
       "priority": 100,
@@ -35,6 +35,15 @@
       "document_number": "中华人民共和国主席令第五十一号",
       "article_refs": ["第二条", "第三条", "第四条", "第五条"],
       "verified_on": "2026-07-29"
+    },
+    {
+      "title": "关于进一步支持小微企业和个体工商户发展有关税费政策的公告",
+      "url": "https://tianjin.chinatax.gov.cn/11297000000/0100/010003/20230821105707732.shtml",
+      "published_on": "2023-08-02",
+      "issuer": "财政部、税务总局",
+      "document_number": "财政部 税务总局公告2023年第12号",
+      "article_refs": ["第二条", "第四条", "第五条"],
+      "verified_on": "2026-07-29"
     }
   ],
   "rule_version": "2026.1",
@@ -46,11 +55,14 @@
     "rate_fact_key": null,
     "deductions_fact_key": null,
     "rate_table": {
-      "selector_fact_key": "urban_maintenance_construction_tax.location_category",
+      "selector_fact_key": "urban_maintenance_construction_tax.rate_path",
       "entries": [
-        {"selector": "urban_area", "label_zh": "市区", "rate": "0.07"},
-        {"selector": "county_or_town", "label_zh": "县城、镇", "rate": "0.05"},
-        {"selector": "other", "label_zh": "其他地区", "rate": "0.01"}
+        {"selector": "urban_area_standard", "label_zh": "市区（标准征收）", "rate": "0.07"},
+        {"selector": "urban_area_half_relief", "label_zh": "市区（符合减半征收条件）", "rate": "0.035"},
+        {"selector": "county_or_town_standard", "label_zh": "县城、镇（标准征收）", "rate": "0.05"},
+        {"selector": "county_or_town_half_relief", "label_zh": "县城、镇（符合减半征收条件）", "rate": "0.025"},
+        {"selector": "other_standard", "label_zh": "其他地区（标准征收）", "rate": "0.01"},
+        {"selector": "other_half_relief", "label_zh": "其他地区（符合减半征收条件）", "rate": "0.005"}
       ]
     }
   }

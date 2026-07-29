@@ -88,15 +88,22 @@ class TaxPromptTests(unittest.TestCase):
         self.assertIn("不得由AI", prompt.help_zh)
         self.assertEqual(prompt.choices, ())
 
-    def test_builtin_urban_maintenance_location_prompt_has_three_legal_categories(self):
+    def test_builtin_urban_maintenance_prompt_combines_location_and_relief_path(self):
         prompt = load_builtin_fact_catalog()[
-            "urban_maintenance_construction_tax.location_category"
+            "urban_maintenance_construction_tax.rate_path"
         ]
 
         self.assertEqual(prompt.answer_type, "choice")
         self.assertEqual(
-            tuple((choice.value, choice.label_zh) for choice in prompt.choices),
-            (("urban_area", "市区"), ("county_or_town", "县城、镇"), ("other", "其他地区")),
+            tuple(choice.value for choice in prompt.choices),
+            (
+                "urban_area_standard",
+                "urban_area_half_relief",
+                "county_or_town_standard",
+                "county_or_town_half_relief",
+                "other_standard",
+                "other_half_relief",
+            ),
         )
         self.assertIn("不得由AI", prompt.help_zh)
 

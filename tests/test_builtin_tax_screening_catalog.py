@@ -162,19 +162,26 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
 
         self.assertEqual(len(packs), 1)
         table = packs[0].calculation.rate_table
-        self.assertEqual(table.selector_fact_key, "urban_maintenance_construction_tax.location_category")
+        self.assertEqual(table.selector_fact_key, "urban_maintenance_construction_tax.rate_path")
         self.assertEqual(
             {entry.selector: entry.rate for entry in table.entries},
-            {"urban_area": "0.07", "county_or_town": "0.05", "other": "0.01"},
+            {
+                "urban_area_standard": "0.07",
+                "urban_area_half_relief": "0.035",
+                "county_or_town_standard": "0.05",
+                "county_or_town_half_relief": "0.025",
+                "other_standard": "0.01",
+                "other_half_relief": "0.005",
+            },
         )
         self.assertEqual(packs[0].sources[0].article_refs, ("第二条", "第三条", "第四条", "第五条"))
 
     def test_education_surcharge_packs_use_official_fixed_rates(self):
         expected = {
-            "education_surcharge": "0.03",
-            "local_education_surcharge": "0.02",
+            "education_surcharge": {"standard": "0.03", "qualified_half_relief": "0.015"},
+            "local_education_surcharge": {"standard": "0.02", "qualified_half_relief": "0.01"},
         }
-        for tax_id, rate in expected.items():
+        for tax_id, rates in expected.items():
             with self.subTest(tax_id=tax_id):
                 packs = tuple(
                     pack for pack in self.packs
@@ -182,7 +189,13 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
                     and pack.maturity is PackMaturity.CALCULATION
                 )
                 self.assertEqual(len(packs), 1)
-                self.assertEqual(packs[0].calculation.fixed_rate, rate)
+                self.assertEqual(
+                    {
+                        entry.selector: entry.rate
+                        for entry in packs[0].calculation.rate_table.entries
+                    },
+                    rates,
+                )
                 self.assertEqual(
                     packs[0].calculation.tax_base_fact_key,
                     "surcharge.vat_consumption_tax_base",

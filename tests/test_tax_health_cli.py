@@ -173,7 +173,9 @@ def test_tax_health_check_cli_calculates_three_vat_consumption_tax_addons(monkey
         "facts": [
             {"key": "tax.has_vat_or_consumption_tax_payable", "value": True, "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
             {"key": "policy.local_education_surcharge_rule", "value": "当地现行地方教育附加政策", "state": "confirmed", "evidence_refs": ["local-policy"], "confirmed_by": "customer", "confirmed_at": timestamp},
-            {"key": "urban_maintenance_construction_tax.location_category", "value": "urban_area", "state": "confirmed", "evidence_refs": ["registration"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "urban_maintenance_construction_tax.rate_path", "value": "urban_area_standard", "state": "confirmed", "evidence_refs": ["registration"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "education_surcharge.rate_path", "value": "standard", "state": "confirmed", "evidence_refs": ["qualification"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "local_education_surcharge.rate_path", "value": "standard", "state": "confirmed", "evidence_refs": ["qualification"], "confirmed_by": "customer", "confirmed_at": timestamp},
             {"key": "surcharge.vat_consumption_tax_base", "value": "10000.00", "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
         ],
     }), encoding="utf-8")
