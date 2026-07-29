@@ -65,6 +65,8 @@ registry 只禁止同一税种、同一地区、同一成熟度的正式包发�
 
 内置 bundle 同时加载 screening 与 calculation 包。问题目录增加税基和印花税税目的中文问题，使 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 都沿用现有共同任务合同提问。
 
+为保持 `1.2.0` 显式计算包兼容，调用方只提供 calculation 包且没有 screening 包时，协调器直接执行 calculation 阶段；只有内置两阶段 bundle 才要求先完成适用性判断。
+
 ## 印花税正式包
 
 税率表覆盖《中华人民共和国印花税法》附件列明的合同、产权转移书据、营业账簿和证券交易税目。税目代码保持稳定英文标识，客户问题和报告使用中文标签。
