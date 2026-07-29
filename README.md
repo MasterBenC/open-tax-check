@@ -126,11 +126,8 @@ from open_tax_check.tax_health import (
     continue_tax_health_check,
     run_tax_health_check,
 )
-from open_tax_check.tax_reporting import (
-    render_tax_health_report,
-    write_tax_health_report,
-    write_tax_health_snapshot,
-)
+from open_tax_check.tax_reporting import render_tax_health_report
+from open_tax_check.tax_reporting import write_tax_health_report, write_tax_health_snapshot
 ```
 
 宿主 Agent 负责将客户答复或补充资料转换为结构化确认；Python 核心不依赖任何模型，并以确定性接口校验确认和执行增量重跑。报告会在首次检查后立即生成；`needs_evidence`、`needs_local_policy` 和 `blocked` 等未解决项目会继续保留在后续渐进式报告中。
