@@ -1,4 +1,6 @@
 import json
+import os
+import pytest
 
 from open_tax_check import cli
 
@@ -91,6 +93,36 @@ def test_tax_health_check_cli_rejects_invalid_explicit_pack(monkeypatch, tmp_pat
     pack_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(cli.sys, "argv", [
         "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(tmp_path / "output"), "--pack", str(pack_path)
+    ])
+
+    assert cli.main() == 4
+    assert json.loads(capsys.readouterr().out)["error_code"] == "invalid_tax_rule_pack"
+
+
+def test_tax_health_check_cli_rejects_symlink_explicit_pack(monkeypatch, tmp_path, capsys):
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request_payload()), encoding="utf-8")
+    target = tmp_path / "target-pack.json"
+    target.write_text(json.dumps({
+        "schema_version": "1.2.0", "pack_id": "vat-calculation-v1", "tax_id": "vat",
+        "jurisdiction": "CN", "effective_from": "2026-01-01", "effective_to": "2026-12-31",
+        "maturity": "calculation", "requirements": [
+            {"fact_key": "calc.tax_base", "answer_type": "decimal", "evidence_types": ["vat_return"], "priority": 100, "blocking": True, "critical": True},
+            {"fact_key": "calc.rate", "answer_type": "decimal", "evidence_types": ["rule_source"], "priority": 100, "blocking": True, "critical": True},
+        ], "local_parameter_keys": [],
+        "evaluator_id": "generic.calculation.base_minus_deductions_times_rate.v1",
+        "sources": [{"title": "Official VAT source", "url": "https://example.test/vat", "published_on": "2026-01-01", "issuer": "Official issuer", "document_number": "DOC-2026", "article_refs": ["Article 1"], "verified_on": "2026-01-01"}],
+        "rule_version": "2026.1", "fact_catalog_version": "zh-CN.v1", "applicability_fact_keys": [],
+        "calculation": {"formula_id": "generic.base_minus_deductions_times_rate.v1", "tax_base_fact_key": "calc.tax_base", "rate_fact_key": "calc.rate", "deductions_fact_key": None},
+    }), encoding="utf-8")
+    pack_path = tmp_path / "linked-pack.json"
+    try:
+        os.symlink(target, pack_path)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable")
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck", "tax-health-check", "--request", str(request_path),
+        "--output-dir", str(tmp_path / "output"), "--pack", str(pack_path),
     ])
 
     assert cli.main() == 4

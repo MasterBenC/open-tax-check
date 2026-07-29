@@ -76,6 +76,24 @@ def _safe_input_path(path: Path, input_dir: Path) -> bool:
         return False
 
 
+def _safe_pack_path(path: Path) -> bool:
+    """Reject explicit rule-pack links/reparse points before reading them."""
+    try:
+        candidate = path.absolute()
+        if not candidate.is_file():
+            return False
+        current = candidate
+        while True:
+            if current.is_symlink() or bool(getattr(current.lstat(), "st_file_attributes", 0) & 0x400):
+                return False
+            if current.parent == current:
+                break
+            current = current.parent
+        return True
+    except OSError:
+        return False
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="opentaxcheck",
@@ -334,6 +352,8 @@ def main() -> int:
         try:
             explicit_packs = None
             if args.pack:
+                if any(not _safe_pack_path(path) for path in args.pack):
+                    raise TaxPackError("unsafe_tax_rule_pack_path")
                 explicit_packs = tuple(
                     validate_pack_payload(json.loads(path.read_text(encoding="utf-8")))
                     for path in args.pack

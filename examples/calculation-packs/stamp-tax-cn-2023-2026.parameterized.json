@@ -16,5 +16,5 @@
   "rule_version": "2026.1",
   "fact_catalog_version": "zh-CN.v1",
   "applicability_fact_keys": [],
-  "calculation": {"formula_id": "generic.base_minus_deductions_times_rate.v1", "tax_base_fact_key": "calc.tax_base", "rate_fact_key": "calc.rate", "deductions_fact_key": null}
+  "calculation": {"formula_id": "generic.base_times_rate.v1", "tax_base_fact_key": "calc.tax_base", "rate_fact_key": "calc.rate", "deductions_fact_key": null}
 }

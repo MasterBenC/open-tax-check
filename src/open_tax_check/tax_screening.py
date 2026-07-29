@@ -211,7 +211,10 @@ def generic_screening_evaluator(context: TaxEvaluationContext) -> EvaluationOutc
 def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOutcome:
     """Calculate a confirmed base/rate pair using a pack-bound formula spec."""
     specs = tuple(pack.calculation for pack in context.packs if pack.calculation is not None)
-    if len(specs) != 1 or specs[0].formula_id != "generic.base_minus_deductions_times_rate.v1":
+    if len(specs) != 1 or specs[0].formula_id not in {
+        "generic.base_minus_deductions_times_rate.v1",
+        "generic.base_times_rate.v1",
+    }:
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     spec = specs[0]
     keys = [spec.tax_base_fact_key, spec.rate_fact_key]
@@ -260,7 +263,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
     except ValueError as error:
         raise _EvaluationOutcomeValidationError(str(error)) from error
     calculation = CalculationRecord(
-        formula_id=result.formula_id,
+        formula_id=spec.formula_id,
         tax_base=f"{request.tax_base:.2f}",
         deductions=f"{request.deductions:.2f}",
         net_base=f"{result.net_base:.2f}",

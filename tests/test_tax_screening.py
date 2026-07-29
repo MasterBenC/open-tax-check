@@ -224,6 +224,41 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.calculation.amount, "117.00")
         self.assertEqual(result.calculation.formula_id, "generic.base_minus_deductions_times_rate.v1")
         self.assertEqual(result.calculation.evidence_refs, ("vat-return-2026", "rule-source-2026"))
+
+    def test_base_times_rate_formula_returns_amount_without_deductions(self) -> None:
+        calculation_pack = TaxPack(
+            pack_id="stamp-calculation-v1",
+            tax_id="stamp_tax",
+            jurisdiction="CN",
+            effective_period=PERIOD,
+            maturity=PackMaturity.CALCULATION,
+            requirements=(
+                FactRequirement("calc.tax_base", "decimal", ("contract",), 100, True, True),
+                FactRequirement("calc.rate", "decimal", ("rule_source",), 100, True, True),
+            ),
+            local_parameter_keys=(),
+            evaluator_id="generic.calculation.base_minus_deductions_times_rate.v1",
+            sources=(RuleSource("official stamp source", "https://example.test/stamp", date(2026, 1, 1)),),
+            calculation=CalculationSpec(
+                "generic.base_times_rate.v1", "calc.tax_base", "calc.rate"
+            ),
+        )
+        request_value = TaxCheckRequest(
+            PERIOD,
+            "CN",
+            (
+                TaxFact("calc.tax_base", "1000.00", FactState.CONFIRMED, ("contract-2026",), "customer", "2026-01-02T00:00:00+08:00"),
+                TaxFact("calc.rate", "0.03", FactState.CONFIRMED, ("rule-source-2026",), "customer", "2026-01-02T00:00:00+08:00"),
+            ),
+        )
+
+        result = screen_tax_items(
+            request_value, (calculation_pack,), builtin_tax_evaluators(), tax_ids=("stamp_tax",)
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.CALCULATED)
+        self.assertEqual(result.calculation.amount, "30.00")
+        self.assertEqual(result.calculation.formula_id, "generic.base_times_rate.v1")
     def test_direct_generic_evaluator_rejects_inferred_applicability_fact(self) -> None:
         inferred = TaxFact(
             "activity.has_vat_taxable_transaction",
