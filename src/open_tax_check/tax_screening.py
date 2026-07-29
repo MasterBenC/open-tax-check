@@ -129,19 +129,20 @@ def _calculation_confirmation_gaps(
     selected_packs: tuple[TaxPack, ...], facts: Mapping[str, TaxFact]
 ) -> tuple[FactGap, ...]:
     """Require customer confirmation for every fact bound into a calculation."""
-    keys = {
-        key
-        for pack in selected_packs
-        if pack.calculation is not None
-        for key in (
-            pack.calculation.tax_base_fact_key,
-            pack.calculation.rate_fact_key,
-        )
-    }
+    keys: set[str] = set()
     for pack in selected_packs:
-        if pack.calculation is not None and pack.calculation.deductions_fact_key is not None:
-            if pack.calculation.deductions_fact_key in facts:
-                keys.add(pack.calculation.deductions_fact_key)
+        if pack.calculation is None:
+            continue
+        keys.add(pack.calculation.tax_base_fact_key)
+        if pack.calculation.rate_fact_key is not None:
+            keys.add(pack.calculation.rate_fact_key)
+        if pack.calculation.rate_table is not None:
+            keys.add(pack.calculation.rate_table.selector_fact_key)
+        if (
+            pack.calculation.deductions_fact_key is not None
+            and pack.calculation.deductions_fact_key in facts
+        ):
+            keys.add(pack.calculation.deductions_fact_key)
     requirements = {
         requirement.fact_key: requirement
         for pack in selected_packs
@@ -211,16 +212,40 @@ def generic_screening_evaluator(context: TaxEvaluationContext) -> EvaluationOutc
 def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOutcome:
     """Calculate a confirmed base/rate pair using a pack-bound formula spec."""
     specs = tuple(pack.calculation for pack in context.packs if pack.calculation is not None)
-    if len(specs) != 1 or specs[0].formula_id not in {
+    if not specs or any(spec.formula_id not in {
         "generic.base_minus_deductions_times_rate.v1",
         "generic.base_times_rate.v1",
-    }:
+    } for spec in specs):
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     spec = specs[0]
+    if any(
+        item.formula_id != spec.formula_id
+        or item.tax_base_fact_key != spec.tax_base_fact_key
+        or item.deductions_fact_key != spec.deductions_fact_key
+        or (item.rate_fact_key is None) != (spec.rate_fact_key is None)
+        for item in specs
+    ):
+        raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     if spec.formula_id == "generic.base_times_rate.v1" and spec.deductions_fact_key is not None:
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
-    keys = [spec.tax_base_fact_key, spec.rate_fact_key]
-    facts = [context.facts.get(key) for key in keys]
+    base_fact = context.facts.get(spec.tax_base_fact_key)
+    selector_fact = None
+    rate_fact = None
+    rate_selector = None
+    rate_selector_label_zh = None
+    if spec.rate_fact_key is not None:
+        if any(item.rate_fact_key != spec.rate_fact_key for item in specs):
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        rate_fact = context.facts.get(spec.rate_fact_key)
+    else:
+        rate_tables = tuple(item.rate_table for item in specs)
+        if any(table is None for table in rate_tables):
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        selector_key = rate_tables[0].selector_fact_key
+        if any(table.selector_fact_key != selector_key for table in rate_tables):
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        selector_fact = context.facts.get(selector_key)
+    facts = [base_fact, rate_fact if rate_fact is not None else selector_fact]
     deductions_fact = (
         context.facts.get(spec.deductions_fact_key)
         if spec.deductions_fact_key is not None
@@ -244,7 +269,32 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
             raise _EvaluationOutcomeValidationError("invalid_calculation_fact")
         return value
 
-    base_fact, rate_fact = facts[0], facts[1]
+    base_fact = facts[0]
+    if rate_fact is not None:
+        rate = decimal_value(rate_fact)
+    else:
+        if not isinstance(selector_fact.value, str) or not selector_fact.value.strip():
+            raise _EvaluationOutcomeValidationError("invalid_rate_selector_fact")
+        selected_entries = []
+        for item in specs:
+            match = next(
+                (
+                    entry
+                    for entry in item.rate_table.entries
+                    if entry.selector == selector_fact.value
+                ),
+                None,
+            )
+            if match is None:
+                raise _EvaluationOutcomeValidationError("unknown_statutory_rate_selector")
+            selected_entries.append(match)
+        if len({entry.rate for entry in selected_entries}) != 1:
+            raise _EvaluationOutcomeValidationError("calculation_period_requires_split")
+        if len({entry.label_zh for entry in selected_entries}) != 1:
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        rate = Decimal(selected_entries[0].rate)
+        rate_selector = selected_entries[0].selector
+        rate_selector_label_zh = selected_entries[0].label_zh
     evidence_refs = tuple(dict.fromkeys(
         reference
         for fact in facts
@@ -255,7 +305,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
     request = TaxCalculationRequest(
         tax_id=context.tax_id,
         tax_base=decimal_value(base_fact),
-        rate=decimal_value(rate_fact),
+        rate=rate,
         deductions=decimal_value(deductions_fact) if deductions_fact is not None else Decimal("0"),
         confirmed=all(fact.state is FactState.CONFIRMED for fact in facts),
         evidence_refs=evidence_refs,
@@ -272,6 +322,8 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         rate=f"{result.rate:.6f}".rstrip("0").rstrip("."),
         amount=f"{result.amount:.2f}",
         evidence_refs=result.evidence_refs,
+        rate_selector=rate_selector,
+        rate_selector_label_zh=rate_selector_label_zh,
     )
     return EvaluationOutcome(
         TaxStatus.CALCULATED,
@@ -343,23 +395,14 @@ def _is_safe_evaluator_outcome(
     )
 
 
-def _screen_one_tax(
+def _evaluate_selected_packs(
     tax_id: str,
     request: TaxCheckRequest,
-    packs: tuple[TaxPack, ...],
+    selected_packs: tuple[TaxPack, ...],
     evaluators: Mapping[str, RuleEvaluator],
     facts: Mapping[str, TaxFact],
 ) -> TaxResult:
-    selection = select_pack_segments(
-        packs,
-        tax_id=tax_id,
-        jurisdiction=request.jurisdiction,
-        period=request.period,
-    )
-    selected_packs = tuple(segment.pack for segment in selection.segments)
     pack_ids, sources = _selected_pack_details(selected_packs)
-    if selection.uncovered_periods:
-        return _blocked_result(tax_id, "rule_pack_unavailable", pack_ids, sources)
 
     applicability_keys = frozenset(
         key for pack in selected_packs for key in pack.applicability_fact_keys
@@ -409,7 +452,13 @@ def _screen_one_tax(
     context = TaxEvaluationContext(tax_id, request, selected_packs, facts)
     try:
         outcome = evaluator(context)
-    except _EvaluationOutcomeValidationError:
+    except _EvaluationOutcomeValidationError as error:
+        diagnostic = str(error)
+        if diagnostic in {
+            "unknown_statutory_rate_selector",
+            "calculation_period_requires_split",
+        }:
+            return _blocked_result(tax_id, diagnostic, pack_ids, sources)
         return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
     except Exception:
         return _blocked_result(tax_id, "rule_evaluator_failed", pack_ids, sources)
@@ -423,6 +472,71 @@ def _screen_one_tax(
         evidence_refs=outcome.evidence_refs,
         rule_sources=sources,
         calculation=outcome.calculation,
+    )
+
+
+def _screen_one_tax(
+    tax_id: str,
+    request: TaxCheckRequest,
+    packs: tuple[TaxPack, ...],
+    evaluators: Mapping[str, RuleEvaluator],
+    facts: Mapping[str, TaxFact],
+) -> TaxResult:
+    screening = select_pack_segments(
+        packs,
+        tax_id=tax_id,
+        jurisdiction=request.jurisdiction,
+        period=request.period,
+        maturity=PackMaturity.SCREENING,
+    )
+    if screening.segments:
+        selected_screening = tuple(segment.pack for segment in screening.segments)
+        if screening.uncovered_periods:
+            pack_ids, sources = _selected_pack_details(selected_screening)
+            return _blocked_result(
+                tax_id, "rule_pack_unavailable", pack_ids, sources
+            )
+        screening_result = _evaluate_selected_packs(
+            tax_id, request, selected_screening, evaluators, facts
+        )
+        if screening_result.status is TaxStatus.NOT_APPLICABLE:
+            return screening_result
+        if (
+            screening_result.status is not TaxStatus.NEEDS_EVIDENCE
+            or screening_result.gaps
+            or screening_result.diagnostics != ("calculation_rule_unavailable",)
+        ):
+            return screening_result
+        calculation = select_pack_segments(
+            packs,
+            tax_id=tax_id,
+            jurisdiction=request.jurisdiction,
+            period=request.period,
+            maturity=PackMaturity.CALCULATION,
+        )
+        if calculation.uncovered_periods:
+            return screening_result
+        return _evaluate_selected_packs(
+            tax_id,
+            request,
+            tuple(segment.pack for segment in calculation.segments),
+            evaluators,
+            facts,
+        )
+
+    calculation = select_pack_segments(
+        packs,
+        tax_id=tax_id,
+        jurisdiction=request.jurisdiction,
+        period=request.period,
+        maturity=PackMaturity.CALCULATION,
+    )
+    selected_calculation = tuple(segment.pack for segment in calculation.segments)
+    if calculation.uncovered_periods:
+        pack_ids, sources = _selected_pack_details(selected_calculation)
+        return _blocked_result(tax_id, "rule_pack_unavailable", pack_ids, sources)
+    return _evaluate_selected_packs(
+        tax_id, request, selected_calculation, evaluators, facts
     )
 
 

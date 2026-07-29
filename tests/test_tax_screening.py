@@ -18,6 +18,8 @@ from open_tax_check.tax_models import (
     PromptChoice,
     Question,
     RuleSource,
+    StatutoryRateEntry,
+    StatutoryRateTable,
     TaxCheckRequest,
     TaxFact,
     TaxPack,
@@ -145,7 +147,224 @@ def applicability_request(
     )
 
 
+def confirmed_fact(key: str, value: str | bool, evidence_ref: str) -> TaxFact:
+    return TaxFact(
+        key,
+        value,
+        FactState.CONFIRMED,
+        (evidence_ref,),
+        "customer",
+        "2026-01-02T00:00:00+08:00",
+    )
+
+
+def stamp_screening_pack(period: DateRange) -> TaxPack:
+    key = "activity.has_stamp_taxable_instrument_or_securities_transaction"
+    return TaxPack(
+        "stamp-tax-screening",
+        "stamp_tax",
+        "CN",
+        period,
+        PackMaturity.SCREENING,
+        (FactRequirement(key, "boolean", ("contract_register",), 100, True, True),),
+        (),
+        GENERIC_SCREENING_EVALUATOR_ID,
+        (SOURCE,),
+        "2026.1",
+        "zh-CN.v1",
+        (key,),
+    )
+
+
+def stamp_rate_pack(
+    pack_id: str,
+    period: DateRange,
+    *,
+    securities_rate: str = "0.0005",
+) -> TaxPack:
+    return TaxPack(
+        pack_id,
+        "stamp_tax",
+        "CN",
+        period,
+        PackMaturity.CALCULATION,
+        (
+            FactRequirement("calc.tax_base", "decimal", ("contract_register",), 100, True, True),
+            FactRequirement("stamp_tax.tax_item", "choice", ("taxable_instrument",), 100, True, True),
+        ),
+        (),
+        "generic.calculation.base_minus_deductions_times_rate.v1",
+        (SOURCE,),
+        calculation=CalculationSpec(
+            "generic.base_times_rate.v1",
+            "calc.tax_base",
+            rate_table=StatutoryRateTable(
+                "stamp_tax.tax_item",
+                (
+                    StatutoryRateEntry("sale_contract", "买卖合同", "0.0003"),
+                    StatutoryRateEntry("securities_transaction", "证券交易", securities_rate),
+                ),
+            ),
+        ),
+    )
+
+
 class TaxScreeningTests(unittest.TestCase):
+    def test_staged_stamp_screening_uses_confirmed_statutory_rate(self) -> None:
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        result = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                (
+                    confirmed_fact(
+                        "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                        True,
+                        "contract-register",
+                    ),
+                    confirmed_fact("calc.tax_base", "100000.00", "contract-1"),
+                    confirmed_fact("stamp_tax.tax_item", "sale_contract", "contract-1"),
+                ),
+            ),
+            (stamp_screening_pack(period), stamp_rate_pack("stamp-rate", period)),
+            builtin_tax_evaluators(),
+            tax_ids=("stamp_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.CALCULATED)
+        self.assertEqual(result.calculation.rate, "0.0003")
+        self.assertEqual(result.calculation.amount, "30.00")
+        self.assertEqual(result.calculation.rate_selector, "sale_contract")
+        self.assertEqual(result.calculation.rate_selector_label_zh, "买卖合同")
+
+    def test_negative_stamp_applicability_does_not_request_calculation_facts(self) -> None:
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        result = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                (confirmed_fact(
+                    "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                    False,
+                    "contract-register",
+                ),),
+            ),
+            (stamp_screening_pack(period), stamp_rate_pack("stamp-rate", period)),
+            builtin_tax_evaluators(),
+            tax_ids=("stamp_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NOT_APPLICABLE)
+        self.assertEqual(result.gaps, ())
+
+    def test_positive_stamp_applicability_requests_calculation_facts(self) -> None:
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        result = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                (confirmed_fact(
+                    "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                    True,
+                    "contract-register",
+                ),),
+            ),
+            (stamp_screening_pack(period), stamp_rate_pack("stamp-rate", period)),
+            builtin_tax_evaluators(),
+            tax_ids=("stamp_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+        self.assertEqual(
+            {gap.fact_key for gap in result.gaps},
+            {"calc.tax_base", "stamp_tax.tax_item"},
+        )
+
+    def test_unknown_statutory_rate_selector_is_blocked(self) -> None:
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        result = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                (
+                    confirmed_fact(
+                        "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                        True,
+                        "contract-register",
+                    ),
+                    confirmed_fact("calc.tax_base", "100000.00", "contract-1"),
+                    confirmed_fact("stamp_tax.tax_item", "unknown", "contract-1"),
+                ),
+            ),
+            (stamp_screening_pack(period), stamp_rate_pack("stamp-rate", period)),
+            builtin_tax_evaluators(),
+            tax_ids=("stamp_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("unknown_statutory_rate_selector",))
+
+    def test_rate_change_with_aggregate_base_requires_period_split(self) -> None:
+        period = DateRange(date(2023, 1, 1), date(2023, 12, 31))
+        first_period = DateRange(date(2023, 1, 1), date(2023, 8, 27))
+        second_period = DateRange(date(2023, 8, 28), date(2023, 12, 31))
+        result = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                (
+                    confirmed_fact(
+                        "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                        True,
+                        "securities-ledger",
+                    ),
+                    confirmed_fact("calc.tax_base", "100000.00", "securities-ledger"),
+                    confirmed_fact("stamp_tax.tax_item", "securities_transaction", "securities-ledger"),
+                ),
+            ),
+            (
+                stamp_screening_pack(period),
+                stamp_rate_pack("stamp-rate-before", first_period, securities_rate="0.001"),
+                stamp_rate_pack("stamp-rate-after", second_period, securities_rate="0.0005"),
+            ),
+            builtin_tax_evaluators(),
+            tax_ids=("stamp_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("calculation_period_requires_split",))
+
+    def test_unchanged_rate_across_segments_accepts_aggregate_base(self) -> None:
+        period = DateRange(date(2023, 1, 1), date(2023, 12, 31))
+        first_period = DateRange(date(2023, 1, 1), date(2023, 8, 27))
+        second_period = DateRange(date(2023, 8, 28), date(2023, 12, 31))
+        result = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                (
+                    confirmed_fact(
+                        "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                        True,
+                        "contract-register",
+                    ),
+                    confirmed_fact("calc.tax_base", "100000.00", "contract-register"),
+                    confirmed_fact("stamp_tax.tax_item", "sale_contract", "contract-register"),
+                ),
+            ),
+            (
+                stamp_screening_pack(period),
+                stamp_rate_pack("stamp-rate-before", first_period, securities_rate="0.001"),
+                stamp_rate_pack("stamp-rate-after", second_period, securities_rate="0.0005"),
+            ),
+            builtin_tax_evaluators(),
+            tax_ids=("stamp_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.CALCULATED)
+        self.assertEqual(result.calculation.rate, "0.0003")
+        self.assertEqual(result.calculation.amount, "30.00")
+
     def test_calculation_pack_requires_confirmation_before_amount_calculation(self) -> None:
         calculation_pack = TaxPack(
             pack_id="vat-calculation-v1",
