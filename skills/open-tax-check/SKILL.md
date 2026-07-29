@@ -110,7 +110,7 @@ python <skill-dir>/scripts/opentaxcheck.py run --case <case-dir> --ai-mode off
 opentaxcheck tax-health-check --request request.json --output-dir output
 ```
 
-需要 Word 时追加 `--include-docx`；宿主已安装 LibreOffice 时可追加 `--include-pdf`。需要对全部 20 个税费项目启用参数化计算模板时追加 `--include-parameterized-packs`。参数化模板不提供统一法定税率，税基、税率和扣除额必须由客户确认并绑定证据。
+需要 Word 时追加 `--include-docx`；宿主已安装 LibreOffice 时可追加 `--include-pdf`。默认流程已内置 2023–2026 年正式印花税税率表：先确认是否存在应税事项，再由客户选择法定税目并确认本条计税依据；AI 不得自动判断税目。跨 2023-08-28 证券交易税率变更期间时必须拆分计算。需要对全部 20 个税费项目启用参数化计算模板时追加 `--include-parameterized-packs`；这些模板不提供统一法定税率，税基、税率和扣除额必须由客户确认并绑定证据。
 
 首次报告可以包含“待补充资料”“待确认当地政策”和“暂时无法判断”。宿主 Agent 只展示中文问题字段，通过 `build_agent_question_tasks` 生成任务，用 `confirmation_from_task` 构造确认，再调用 `continue_tax_health_check` 增量重跑。AI 不得猜测事实、税率、地方政策或把未解决状态改写成“无风险”。
 

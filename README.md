@@ -134,16 +134,16 @@ from open_tax_check.tax_reporting import write_tax_health_report, write_tax_heal
 
 该报告仅供客户内部自查，不属于涉税鉴证、专业税务意见或纳税申报结论。不以税务专业人员复核、签字或盖章作为生成条件；是否申报、调整或另行咨询专业机构由客户自行决定。这个自查 API 与上文仍要求专业复核的 Phase 2B 客户交付工作流相互独立。
 
-全国 20 个税种的 2023–2026 年适用性筛查规则包已经随版本内置，按税种、地区和期间选择；税额计算、地方政策参数和专业复核仍不完整。客户不需要单独安装规则包，升级 OpenTaxCheck 包即可获得新版官方规则包。规则包之外的第三方内容不会自动信任。
+全国 20 个税种的 2023–2026 年适用性筛查规则包已经随版本内置，按税种、地区和期间选择。印花税另有正式法定税率表计算包，覆盖 17 个法定税目，并按 2023-08-28 证券交易税率调整分段；其他税种的税额计算、地方政策参数和专业复核仍不完整。客户不需要单独安装规则包，升级 OpenTaxCheck 包即可获得新版官方规则包。规则包之外的第三方内容不会自动信任。
 
 宿主 Agent 接入见 [七生态接入契约](skills/open-tax-check/references/host-integrations.md)。Python 核心同时提供 `build_agent_question_tasks`、`task_payload` 和 `confirmation_from_task`，用于把缺口问题交给客户宿主 Agent 对话，再把结构化确认交回确定性核心。该契约覆盖 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 的共同业务字段，但不声明平台认证，也未实现 MCP/HTTP 部署、认证或租户隔离。
 
 也可以直接使用 CLI 生成首版报告：`opentaxcheck tax-health-check --request request.json --output-dir output/`。请求 JSON 只接受期间、地区、结构化事实和输入哈希；输出为中文 Markdown 报告及机器可读快照。需要 Word 交付物时追加 `--include-docx`；在安装 LibreOffice 的宿主环境中可再追加 `--include-pdf`。DOCX/PDF 与 Markdown 共享同一快照，不会新增税务结论。
 
-通用税额计算内核只接受调用方明确提供、客户确认且带证据引用的计税基础、税率和扣除额；当前规则包未提供的法定税率不会由程序或 AI 猜测。
+通用税额计算内核只接受调用方明确提供、客户确认且带证据引用的计税基础、税目、税率和扣除额。印花税法定税率只按客户确认的精确税目选择；AI 不得自动分类，当前规则包未提供的税率和地方政策不会由程序或 AI 猜测。
 
 参数化规则包的安装、调用、公式和交付边界见 [`docs/calculation-packs.md`](docs/calculation-packs.md)。
-需要一次启用全部 20 个参数化计算模板时，可在 CLI 追加 `--include-parameterized-packs`；默认筛查不会自动计算税额。
+需要一次启用全部 20 个参数化计算模板时，可在 CLI 追加 `--include-parameterized-packs`；默认流程只会在印花税适用性、税目、计税依据及证据均确认后执行已内置的正式计算。
 
 ## 隐私与云端授权
 

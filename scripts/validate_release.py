@@ -363,14 +363,15 @@ def validate_pack_release_surface(root: Path) -> str | None:
         catalog = validate_fact_catalog_payload(catalog_payload)
     except Exception:
         return "tax_pack_release_invalid:invalid_fact_catalog"
-    formal_packs = []
+    screening_packs = []
+    calculation_packs = []
     for manifest in manifests:
         try:
             payload = json.loads(manifest.read_text(encoding="utf-8"))
             pack = validate_pack_payload(payload)
         except Exception:
             return "tax_pack_release_invalid:invalid_pack_manifest"
-        if pack.maturity is PackMaturity.SCREENING:
+        if pack.maturity in {PackMaturity.SCREENING, PackMaturity.CALCULATION}:
             for requirement in pack.requirements:
                 prompt = catalog.get(requirement.fact_key)
                 if prompt is None:
@@ -387,19 +388,40 @@ def validate_pack_release_surface(root: Path) -> str | None:
                 for source in pack.sources
             ):
                 return "tax_pack_release_invalid:incomplete_source_metadata"
-            formal_packs.append(pack)
+            if pack.maturity is PackMaturity.SCREENING:
+                screening_packs.append(pack)
+            else:
+                calculation_packs.append(pack)
     expected_tax_ids = {item.tax_id for item in TAX_DEFINITIONS}
-    actual_tax_ids = {pack.tax_id for pack in formal_packs}
+    actual_tax_ids = {pack.tax_id for pack in screening_packs}
     if actual_tax_ids != expected_tax_ids:
         return "tax_pack_release_invalid:formal_tax_id_coverage"
     period = DateRange(FORMAL_PERIOD_START, FORMAL_PERIOD_END)
     for tax_id in expected_tax_ids:
         try:
-            selection = select_pack_segments(tuple(formal_packs), tax_id=tax_id, jurisdiction="CN", period=period)
+            selection = select_pack_segments(
+                tuple(screening_packs),
+                tax_id=tax_id,
+                jurisdiction="CN",
+                period=period,
+                maturity=PackMaturity.SCREENING,
+            )
         except Exception:
             return "tax_pack_release_invalid:period_overlap"
         if selection.uncovered_periods:
             return "tax_pack_release_invalid:period_gap"
+    try:
+        stamp_calculation = select_pack_segments(
+            tuple(calculation_packs),
+            tax_id="stamp_tax",
+            jurisdiction="CN",
+            period=period,
+            maturity=PackMaturity.CALCULATION,
+        )
+    except Exception:
+        return "tax_pack_release_invalid:stamp_calculation_period_overlap"
+    if stamp_calculation.uncovered_periods:
+        return "tax_pack_release_invalid:stamp_calculation_period_gap"
     try:
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         package_data = pyproject.get("tool", {}).get("setuptools", {}).get("package-data", {})

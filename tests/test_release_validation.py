@@ -1,6 +1,8 @@
 import contextlib
 import io
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -88,6 +90,51 @@ class ReleaseValidationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("release validation passed", proc.stdout.lower())
+
+    def test_tax_pack_release_surface_accepts_formal_stamp_calculation_bundle(self):
+        self.assertIsNone(validate_release.validate_pack_release_surface(ROOT))
+
+    def test_tax_pack_release_surface_rejects_stamp_calculation_period_gap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(
+                ROOT / "src/open_tax_check/tax_packs",
+                root / "src/open_tax_check/tax_packs",
+            )
+            shutil.copy2(ROOT / "pyproject.toml", root / "pyproject.toml")
+            (
+                root
+                / "src/open_tax_check/tax_packs/"
+                "stamp-tax-cn-2023-08-27.calculation.json"
+            ).unlink()
+
+            result = validate_release.validate_pack_release_surface(root)
+
+        self.assertEqual(
+            result,
+            "tax_pack_release_invalid:stamp_calculation_period_gap",
+        )
+
+    def test_tax_pack_release_surface_rejects_non_official_calculation_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(
+                ROOT / "src/open_tax_check/tax_packs",
+                root / "src/open_tax_check/tax_packs",
+            )
+            shutil.copy2(ROOT / "pyproject.toml", root / "pyproject.toml")
+            manifest = (
+                root
+                / "src/open_tax_check/tax_packs/"
+                "stamp-tax-cn-2023-08-27.calculation.json"
+            )
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload["sources"][0]["url"] = "https://example.test/not-official"
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+            result = validate_release.validate_pack_release_surface(root)
+
+        self.assertEqual(result, "tax_pack_release_invalid:non_official_source")
 
     def test_script_emits_utf8_when_inherited_encoding_cannot_encode_chinese(self):
         env = os.environ.copy()
