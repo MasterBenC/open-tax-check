@@ -1,0 +1,24 @@
+{
+  "schema_version":"1.2.0",
+  "pack_id":"environmental-protection-tax-cn-2023-2026-calculation-v1",
+  "tax_id":"environmental_protection_tax",
+  "jurisdiction":"CN",
+  "effective_from":"2023-01-01",
+  "effective_to":"2026-12-31",
+  "maturity":"calculation",
+  "requirements":[
+    {"fact_key":"environmental_protection_tax.taxable_quantity","answer_type":"decimal","evidence_types":["pollutant_monitoring_record","environmental_tax_return","calculation_workpaper"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"environmental_protection_tax.applicable_unit_amount","answer_type":"decimal","evidence_types":["local_policy","statutory_tariff","tax_authority_confirmation","environmental_tax_return"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"environmental_protection_tax.confirmed_tariff_scope","answer_type":"text","evidence_types":["pollutant_monitoring_record","local_policy","statutory_tariff"],"priority":95,"blocking":true,"critical":true},
+    {"fact_key":"policy.environmental_protection_tax_local_rule","answer_type":"text","evidence_types":["local_policy"],"priority":90,"blocking":true,"critical":true}
+  ],
+  "local_parameter_keys":["environmental_protection_tax.applicable_unit_amount","policy.environmental_protection_tax_local_rule"],
+  "evaluator_id":"generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources":[
+    {"title":"中华人民共和国环境保护税法","url":"https://fgk.chinatax.gov.cn/zcfgk/c100009/c5193032/content.html","published_on":"2025-10-28","issuer":"全国人民代表大会常务委员会","document_number":"中华人民共和国主席令第六十二号","article_refs":["第六条","第七条","第十一条"],"verified_on":"2026-07-29"}
+  ],
+  "rule_version":"2026.1",
+  "fact_catalog_version":"zh-CN.v1",
+  "applicability_fact_keys":[],
+  "calculation":{"formula_id":"generic.quantity_times_unit_amount.v1","tax_base_fact_key":"environmental_protection_tax.taxable_quantity","rate_fact_key":"environmental_protection_tax.applicable_unit_amount","deductions_fact_key":null}
+}

@@ -74,3 +74,30 @@ def test_progressive_formula_subtracts_statutory_quick_deduction():
 
     assert result.amount == Decimal("7480.00")
     assert result.net_base == Decimal("100000")
+
+
+def test_quantity_formula_accepts_unit_amount_greater_than_one():
+    result = calculate_tax_amount(
+        TaxCalculationRequest(
+            tax_id="urban_land_use_tax",
+            tax_base=Decimal("1000"),
+            rate=Decimal("12"),
+            confirmed=True,
+            evidence_refs=("local-policy", "land-register"),
+            formula_id="generic.quantity_times_unit_amount.v1",
+        )
+    )
+
+    assert result.amount == Decimal("12000.00")
+    assert result.rate == Decimal("12")
+
+
+def test_percentage_formula_still_rejects_rate_greater_than_one():
+    with pytest.raises(ValueError, match="^invalid_tax_rate$"):
+        TaxCalculationRequest(
+            tax_id="vat",
+            tax_base=Decimal("1000"),
+            rate=Decimal("12"),
+            confirmed=True,
+            evidence_refs=("vat-return",),
+        )

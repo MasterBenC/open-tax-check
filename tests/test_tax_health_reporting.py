@@ -197,6 +197,35 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("计税基础乘税率后减速算扣除数", report)
         self.assertIn("- 速算扣除数: 2520.00", report)
 
+    def test_quantity_formula_labels_unit_amount_without_percentage_conversion(self) -> None:
+        snapshot = TaxCheckSnapshot(
+            request=TaxCheckRequest(PERIOD, "CN"),
+            results=(
+                TaxResult(
+                    "urban_land_use_tax",
+                    TaxStatus.CALCULATED,
+                    calculation=CalculationRecord(
+                        "generic.quantity_times_unit_amount.v1",
+                        "1250.50",
+                        "0.00",
+                        "1250.50",
+                        "12.00",
+                        "15006.00",
+                        ("land-workpaper", "local-tariff"),
+                    ),
+                ),
+            ),
+            questions=(),
+            audit_events=(),
+            revision=1,
+        )
+
+        report = render_tax_health_report(snapshot)
+
+        self.assertIn("计税数量乘适用单位税额", report)
+        self.assertIn("- 适用单位税额: 12.00", report)
+        self.assertNotIn("- 适用税率: 1200%", report)
+
     def test_report_contains_the_fixed_self_use_disclaimer(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
 

@@ -1,0 +1,23 @@
+{
+  "schema_version":"1.2.0",
+  "pack_id":"vessel-tonnage-tax-cn-2023-2026-calculation-v1",
+  "tax_id":"vessel_tonnage_tax",
+  "jurisdiction":"CN",
+  "effective_from":"2023-01-01",
+  "effective_to":"2026-12-31",
+  "maturity":"calculation",
+  "requirements":[
+    {"fact_key":"vessel_tonnage_tax.net_tonnage","answer_type":"decimal","evidence_types":["vessel_certificate","port_entry_record","customs_declaration"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"vessel_tonnage_tax.applicable_unit_amount","answer_type":"decimal","evidence_types":["statutory_tariff","customs_confirmation","tax_payment_record"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"vessel_tonnage_tax.confirmed_tariff_scope","answer_type":"text","evidence_types":["vessel_certificate","statutory_tariff","treaty_record","customs_confirmation"],"priority":95,"blocking":true,"critical":true}
+  ],
+  "local_parameter_keys":["vessel_tonnage_tax.applicable_unit_amount"],
+  "evaluator_id":"generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources":[
+    {"title":"中华人民共和国船舶吨税法","url":"https://www.chinatax.gov.cn/n810341/n810755/c3286747/content.html","published_on":"2017-12-27","issuer":"全国人民代表大会常务委员会","document_number":"中华人民共和国主席令第八十五号","article_refs":["第二条","第三条","第四条","第五条"],"verified_on":"2026-07-29"}
+  ],
+  "rule_version":"2026.1",
+  "fact_catalog_version":"zh-CN.v1",
+  "applicability_fact_keys":[],
+  "calculation":{"formula_id":"generic.quantity_times_unit_amount.v1","tax_base_fact_key":"vessel_tonnage_tax.net_tonnage","rate_fact_key":"vessel_tonnage_tax.applicable_unit_amount","deductions_fact_key":null}
+}

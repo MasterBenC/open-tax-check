@@ -345,6 +345,127 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
                 self.assertEqual(packs[0].calculation.tax_base_fact_key, base_key)
                 self.assertEqual(packs[0].calculation.fixed_rate, rate)
 
+    def test_unit_amount_taxes_require_customer_confirmed_quantity_and_unit_amount(self):
+        expected = {
+            "urban_land_use_tax": (
+                "urban_land_use_tax.taxable_area_year_equivalent",
+                "urban_land_use_tax.applicable_unit_amount",
+            ),
+            "cultivated_land_occupation_tax": (
+                "cultivated_land_occupation_tax.taxable_area",
+                "cultivated_land_occupation_tax.applicable_unit_amount",
+            ),
+            "vehicle_vessel_tax": (
+                "vehicle_vessel_tax.taxable_unit_equivalent",
+                "vehicle_vessel_tax.applicable_unit_amount",
+            ),
+            "environmental_protection_tax": (
+                "environmental_protection_tax.taxable_quantity",
+                "environmental_protection_tax.applicable_unit_amount",
+            ),
+            "vessel_tonnage_tax": (
+                "vessel_tonnage_tax.net_tonnage",
+                "vessel_tonnage_tax.applicable_unit_amount",
+            ),
+        }
+        for tax_id, (quantity_key, unit_amount_key) in expected.items():
+            with self.subTest(tax_id=tax_id):
+                packs = tuple(
+                    pack
+                    for pack in self.packs
+                    if pack.tax_id == tax_id
+                    and pack.maturity is PackMaturity.CALCULATION
+                )
+                self.assertEqual(len(packs), 1)
+                pack = packs[0]
+                self.assertEqual(pack.effective_period, PERIOD)
+                self.assertEqual(
+                    pack.calculation.formula_id,
+                    "generic.quantity_times_unit_amount.v1",
+                )
+                self.assertEqual(pack.calculation.tax_base_fact_key, quantity_key)
+                self.assertEqual(pack.calculation.rate_fact_key, unit_amount_key)
+                self.assertIn(unit_amount_key, pack.local_parameter_keys)
+                self.assertTrue(
+                    any(
+                        item.fact_key.endswith("confirmed_tariff_scope")
+                        for item in pack.requirements
+                    )
+                )
+
+    def test_unit_amount_tax_calculates_only_with_matching_confirmed_scope_and_local_policy(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        timestamp = "2026-07-29T10:00:00+08:00"
+        common_facts = (
+            TaxFact(
+                "assets.uses_urban_taxable_land",
+                True,
+                FactState.CONFIRMED,
+                ("land-register",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "urban_land_use_tax.taxable_area_year_equivalent",
+                "1250.5",
+                FactState.CONFIRMED,
+                ("land-workpaper",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "urban_land_use_tax.applicable_unit_amount",
+                "12.00",
+                FactState.CONFIRMED,
+                ("local-tariff",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "urban_land_use_tax.confirmed_tariff_scope",
+                "A地三级土地，2026年度，无减免",
+                FactState.CONFIRMED,
+                ("land-workpaper", "local-tariff"),
+                "customer",
+                timestamp,
+            ),
+        )
+
+        missing_policy = screen_tax_items(
+            TaxCheckRequest(period, "CN", common_facts),
+            self.packs,
+            builtin_tax_evaluators(),
+            tax_ids=("urban_land_use_tax",),
+        )[0]
+        calculated = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                common_facts
+                + (
+                    TaxFact(
+                        "policy.urban_land_use_tax_local_rule",
+                        "客户已核对2026年度有效地方税额文件",
+                        FactState.CONFIRMED,
+                        ("local-tariff",),
+                        "customer",
+                        timestamp,
+                    ),
+                ),
+            ),
+            self.packs,
+            builtin_tax_evaluators(),
+            tax_ids=("urban_land_use_tax",),
+        )[0]
+
+        self.assertEqual(missing_policy.status, TaxStatus.NEEDS_LOCAL_POLICY)
+        self.assertEqual(calculated.status, TaxStatus.CALCULATED)
+        self.assertEqual(calculated.calculation.amount, "15006.00")
+        self.assertEqual(
+            calculated.calculation.formula_id,
+            "generic.quantity_times_unit_amount.v1",
+        )
+
     def test_house_property_tax_pack_uses_common_statutory_rate_paths(self):
         packs = tuple(
             pack

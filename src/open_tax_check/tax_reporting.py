@@ -42,6 +42,7 @@ _FORMULA_LABELS_ZH = {
     "generic.base_times_rate.v1": "计税基础乘税率",
     "generic.base_times_rate_minus_credits.v1": "计税基础乘税率后减允许抵扣税额",
     "generic.base_times_rate_minus_quick_deduction.v1": "计税基础乘税率后减速算扣除数",
+    "generic.quantity_times_unit_amount.v1": "计税数量乘适用单位税额",
 }
 
 
@@ -121,7 +122,12 @@ def _result_lines(result: TaxResult) -> list[str]:
                 f"- \u8ba1\u7a0e\u57fa\u7840: {calculation.tax_base}",
                 f"- {deductions_label}: {calculation.deductions}",
                 f"- \u51c0\u8ba1\u7a0e\u57fa\u7840: {calculation.net_base}",
-                f"- \u9002\u7528\u7a0e\u7387: {_format_rate_zh(calculation.rate)}",
+                (
+                    f"- 适用单位税额: {calculation.rate}"
+                    if calculation.formula_id
+                    == "generic.quantity_times_unit_amount.v1"
+                    else f"- \u9002\u7528\u7a0e\u7387: {_format_rate_zh(calculation.rate)}"
+                ),
                 f"- \u8ba1\u7b97\u91d1\u989d: {calculation.amount}",
                 f"- \u8ba1\u7b97\u8bc1\u636e: {', '.join(calculation.evidence_refs)}",
             )

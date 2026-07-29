@@ -217,6 +217,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         "generic.base_times_rate.v1",
         "generic.base_times_rate_minus_credits.v1",
         "generic.base_times_rate_minus_quick_deduction.v1",
+        "generic.quantity_times_unit_amount.v1",
     } for spec in specs):
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     spec = specs[0]

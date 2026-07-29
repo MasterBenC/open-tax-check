@@ -28,15 +28,19 @@ class TaxCalculationRequest:
         for value in (self.tax_base, self.rate, self.deductions):
             if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
                 raise ValueError("invalid_tax_calculation_operand")
-        if self.rate > Decimal("1"):
-            raise ValueError("invalid_tax_rate")
         if self.formula_id not in {
             "generic.base_minus_deductions_times_rate.v1",
             "generic.base_times_rate.v1",
             "generic.base_times_rate_minus_credits.v1",
             "generic.base_times_rate_minus_quick_deduction.v1",
+            "generic.quantity_times_unit_amount.v1",
         }:
             raise ValueError("invalid_tax_calculation_formula")
+        if (
+            self.formula_id != "generic.quantity_times_unit_amount.v1"
+            and self.rate > Decimal("1")
+        ):
+            raise ValueError("invalid_tax_rate")
         if (
             self.formula_id == "generic.base_minus_deductions_times_rate.v1"
             and self.deductions > self.tax_base

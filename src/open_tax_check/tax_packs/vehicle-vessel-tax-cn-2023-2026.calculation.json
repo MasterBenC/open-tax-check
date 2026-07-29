@@ -1,0 +1,24 @@
+{
+  "schema_version":"1.2.0",
+  "pack_id":"vehicle-vessel-tax-cn-2023-2026-calculation-v1",
+  "tax_id":"vehicle_vessel_tax",
+  "jurisdiction":"CN",
+  "effective_from":"2023-01-01",
+  "effective_to":"2026-12-31",
+  "maturity":"calculation",
+  "requirements":[
+    {"fact_key":"vehicle_vessel_tax.taxable_unit_equivalent","answer_type":"decimal","evidence_types":["vehicle_register","vessel_certificate","tax_return","calculation_workpaper"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"vehicle_vessel_tax.applicable_unit_amount","answer_type":"decimal","evidence_types":["local_policy","statutory_tariff","tax_authority_confirmation","tax_return"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"vehicle_vessel_tax.confirmed_tariff_scope","answer_type":"text","evidence_types":["vehicle_register","vessel_certificate","local_policy","statutory_tariff"],"priority":95,"blocking":true,"critical":true},
+    {"fact_key":"policy.vehicle_vessel_tax_local_rule","answer_type":"text","evidence_types":["local_policy"],"priority":90,"blocking":true,"critical":true}
+  ],
+  "local_parameter_keys":["vehicle_vessel_tax.applicable_unit_amount","policy.vehicle_vessel_tax_local_rule"],
+  "evaluator_id":"generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources":[
+    {"title":"中华人民共和国车船税法实施条例","url":"https://fgk.chinatax.gov.cn/zcfgk/c100010/c5194446/content.html","published_on":"2019-03-02","issuer":"国务院","document_number":"国务院令第611号","article_refs":["第三条","第四条","第五条"],"verified_on":"2026-07-29"}
+  ],
+  "rule_version":"2026.1",
+  "fact_catalog_version":"zh-CN.v1",
+  "applicability_fact_keys":[],
+  "calculation":{"formula_id":"generic.quantity_times_unit_amount.v1","tax_base_fact_key":"vehicle_vessel_tax.taxable_unit_equivalent","rate_fact_key":"vehicle_vessel_tax.applicable_unit_amount","deductions_fact_key":null}
+}
