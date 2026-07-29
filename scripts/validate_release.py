@@ -435,6 +435,7 @@ def validate_pack_release_surface(root: Path) -> str | None:
     if deed_calculation.uncovered_periods:
         return "tax_pack_release_invalid:deed_calculation_period_gap"
     for tax_id, error_prefix in (
+        ("vat", "vat"),
         ("urban_maintenance_construction_tax", "urban_maintenance_construction_tax"),
         ("education_surcharge", "education_surcharge"),
         ("local_education_surcharge", "local_education_surcharge"),

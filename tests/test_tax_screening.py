@@ -304,6 +304,57 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.status, TaxStatus.BLOCKED)
         self.assertEqual(result.diagnostics, ("unknown_statutory_rate_selector",))
 
+    def test_selector_specific_maximum_deductions_blocks_small_scale_vat_credit(self) -> None:
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        vat_pack = TaxPack(
+            "vat-rate",
+            "vat",
+            "CN",
+            period,
+            PackMaturity.CALCULATION,
+            (
+                FactRequirement("vat.taxable_sales", "decimal", ("vat_return",), 100, True, True),
+                FactRequirement("vat.input_tax_credits", "decimal", ("vat_return",), 100, True, True),
+                FactRequirement("vat.rate_path", "choice", ("vat_return",), 100, True, True),
+            ),
+            (),
+            "generic.calculation.base_minus_deductions_times_rate.v1",
+            (SOURCE,),
+            calculation=CalculationSpec(
+                "generic.base_times_rate_minus_credits.v1",
+                "vat.taxable_sales",
+                deductions_fact_key="vat.input_tax_credits",
+                rate_table=StatutoryRateTable(
+                    "vat.rate_path",
+                    (
+                        StatutoryRateEntry(
+                            "small_scale_reduced_1",
+                            "小规模纳税人减按1%征收",
+                            "0.01",
+                            maximum_deductions="0",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        result = screen_tax_items(
+            TaxCheckRequest(
+                period,
+                "CN",
+                (
+                    confirmed_fact("vat.taxable_sales", "100000.00", "vat-return"),
+                    confirmed_fact("vat.input_tax_credits", "100.00", "vat-return"),
+                    confirmed_fact("vat.rate_path", "small_scale_reduced_1", "vat-return"),
+                ),
+            ),
+            (vat_pack,),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("deductions_outside_statutory_range",))
+
     def test_rate_change_with_aggregate_base_requires_period_split(self) -> None:
         period = DateRange(date(2023, 1, 1), date(2023, 12, 31))
         first_period = DateRange(date(2023, 1, 1), date(2023, 8, 27))

@@ -196,6 +196,7 @@ class StatutoryRateEntry:
     label_zh: str
     rate: str
     maximum_tax_base: str | None = None
+    maximum_deductions: str | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.selector)
@@ -215,6 +216,13 @@ class StatutoryRateEntry:
             except (InvalidOperation, TypeError) as error:
                 raise ValueError("invalid_statutory_rate_entry") from error
             if not maximum_tax_base.is_finite() or maximum_tax_base < 0:
+                raise ValueError("invalid_statutory_rate_entry")
+        if self.maximum_deductions is not None:
+            try:
+                maximum_deductions = Decimal(self.maximum_deductions)
+            except (InvalidOperation, TypeError) as error:
+                raise ValueError("invalid_statutory_rate_entry") from error
+            if not maximum_deductions.is_finite() or maximum_deductions < 0:
                 raise ValueError("invalid_statutory_rate_entry")
 
 

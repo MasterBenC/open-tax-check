@@ -41,3 +41,19 @@ def test_generic_calculation_rejects_deduction_above_base_and_invalid_rate():
         )
     with pytest.raises(ValueError, match="invalid_tax_rate"):
         TaxCalculationRequest(tax_id="vat", tax_base=Decimal("10"), rate=Decimal("1.01"))
+
+
+def test_vat_formula_subtracts_confirmed_input_tax_after_output_tax():
+    result = calculate_tax_amount(TaxCalculationRequest(
+        tax_id="vat",
+        tax_base=Decimal("100000.00"),
+        rate=Decimal("0.13"),
+        deductions=Decimal("8000.00"),
+        confirmed=True,
+        evidence_refs=("vat-return",),
+        formula_id="generic.base_times_rate_minus_credits.v1",
+    ))
+
+    assert result.amount == Decimal("5000.00")
+    assert result.net_base == Decimal("100000.00")
+    assert result.formula_id == "generic.base_times_rate_minus_credits.v1"

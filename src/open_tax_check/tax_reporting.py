@@ -40,6 +40,7 @@ _FIXED_DISCLAIMER = (
 _FORMULA_LABELS_ZH = {
     "generic.base_minus_deductions_times_rate.v1": "计税基础减扣除额后乘税率",
     "generic.base_times_rate.v1": "计税基础乘税率",
+    "generic.base_times_rate_minus_credits.v1": "计税基础乘税率后减允许抵扣税额",
 }
 
 
@@ -107,13 +108,18 @@ def _result_lines(result: TaxResult) -> list[str]:
     if result.calculation is not None:
         calculation = result.calculation
         formula_label = _FORMULA_LABELS_ZH.get(calculation.formula_id, "参数化计算公式")
+        deductions_label = (
+            "允许抵扣进项税额"
+            if calculation.formula_id == "generic.base_times_rate_minus_credits.v1"
+            else "扣除额"
+        )
         if calculation.rate_selector_label_zh is not None:
             lines.append(f"- 适用税目: {calculation.rate_selector_label_zh}")
         lines.extend(
             (
                 f"- 计算公式: {formula_label}（{calculation.formula_id}）",
                 f"- \u8ba1\u7a0e\u57fa\u7840: {calculation.tax_base}",
-                f"- \u6263\u9664\u989d: {calculation.deductions}",
+                f"- {deductions_label}: {calculation.deductions}",
                 f"- \u51c0\u8ba1\u7a0e\u57fa\u7840: {calculation.net_base}",
                 f"- \u9002\u7528\u7a0e\u7387: {_format_rate_zh(calculation.rate)}",
                 f"- \u8ba1\u7b97\u91d1\u989d: {calculation.amount}",

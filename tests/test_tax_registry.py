@@ -185,6 +185,17 @@ class TaxRegistryTests(unittest.TestCase):
         self.assertEqual(pack.calculation.rate_table.selector_fact_key, "stamp_tax.tax_item")
         self.assertEqual(pack.calculation.rate_table.entries[0].rate, "0.0003")
 
+    def test_schema_1_3_parses_selector_specific_maximum_deductions(self) -> None:
+        value = statutory_calculation_payload()
+        value["calculation"]["rate_table"]["entries"][0]["maximum_deductions"] = "0"
+
+        pack = validate_pack_payload(value)
+
+        self.assertEqual(
+            pack.calculation.rate_table.entries[0].maximum_deductions,
+            "0",
+        )
+
     def test_schema_1_3_rejects_duplicate_rate_selectors(self) -> None:
         value = statutory_calculation_payload()
         value["calculation"]["rate_table"]["entries"].append({
@@ -499,7 +510,13 @@ class TaxRegistryTests(unittest.TestCase):
         packs = load_builtin_tax_packs()
         period = DateRange(date(2023, 1, 1), date(2026, 12, 31))
 
-        excluded = select_pack_segments(packs, tax_id="vat", jurisdiction="CN", period=period)
+        excluded = select_pack_segments(
+            packs,
+            tax_id="vat",
+            jurisdiction="CN",
+            period=period,
+            maturity=PackMaturity.SCREENING,
+        )
         included = select_pack_segments(
             packs, tax_id="vat", jurisdiction="CN", period=period, include_prototypes=True
         )

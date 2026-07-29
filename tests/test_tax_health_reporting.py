@@ -141,6 +141,34 @@ class TaxHealthReportingTests(unittest.TestCase):
         for prohibited in ("calculated", "not_applicable", "needs_evidence", "needs_local_policy", "blocked", "fact_key", "question-", "rule_evaluator_unavailable", "vat-cn-2026"):
             self.assertNotIn(prohibited, report)
 
+    def test_vat_formula_labels_deductions_as_input_tax_credits(self) -> None:
+        snapshot = TaxCheckSnapshot(
+            request=TaxCheckRequest(PERIOD, "CN"),
+            results=(
+                TaxResult(
+                    "vat",
+                    TaxStatus.CALCULATED,
+                    calculation=CalculationRecord(
+                        "generic.base_times_rate_minus_credits.v1",
+                        "100000.00",
+                        "8000.00",
+                        "100000.00",
+                        "0.13",
+                        "5000.00",
+                        ("vat-return",),
+                    ),
+                ),
+            ),
+            questions=(),
+            audit_events=(),
+            revision=1,
+        )
+
+        report = render_tax_health_report(snapshot)
+
+        self.assertIn("- 允许抵扣进项税额: 8000.00", report)
+        self.assertNotIn("- 扣除额: 8000.00", report)
+
     def test_report_contains_the_fixed_self_use_disclaimer(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
 

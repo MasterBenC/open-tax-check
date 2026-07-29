@@ -20,6 +20,7 @@ class TaxCalculationRequest:
     deductions: Decimal = Decimal("0")
     confirmed: bool = False
     evidence_refs: tuple[str, ...] = ()
+    formula_id: str = "generic.base_minus_deductions_times_rate.v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.tax_id, str) or not self.tax_id.strip():
@@ -29,7 +30,16 @@ class TaxCalculationRequest:
                 raise ValueError("invalid_tax_calculation_operand")
         if self.rate > Decimal("1"):
             raise ValueError("invalid_tax_rate")
-        if self.deductions > self.tax_base:
+        if self.formula_id not in {
+            "generic.base_minus_deductions_times_rate.v1",
+            "generic.base_times_rate.v1",
+            "generic.base_times_rate_minus_credits.v1",
+        }:
+            raise ValueError("invalid_tax_calculation_formula")
+        if (
+            self.formula_id == "generic.base_minus_deductions_times_rate.v1"
+            and self.deductions > self.tax_base
+        ):
             raise ValueError("deductions_exceed_base")
         if not isinstance(self.confirmed, bool):
             raise ValueError("invalid_calculation_confirmation")
@@ -53,16 +63,24 @@ class TaxCalculationResult:
 def calculate_tax_amount(request: TaxCalculationRequest) -> TaxCalculationResult:
     if not request.confirmed or not request.evidence_refs:
         raise ValueError("calculation_requires_confirmed_evidence")
-    net_base = exact_subtract(request.tax_base, request.deductions)
-    amount = exact_multiply(net_base, request.rate).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+    if request.formula_id == "generic.base_times_rate_minus_credits.v1":
+        net_base = request.tax_base
+        gross_tax = exact_multiply(request.tax_base, request.rate)
+        amount = max(
+            exact_subtract(gross_tax, request.deductions),
+            Decimal("0"),
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    else:
+        net_base = exact_subtract(request.tax_base, request.deductions)
+        amount = exact_multiply(net_base, request.rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
     return TaxCalculationResult(
         tax_id=request.tax_id,
         status="calculated",
         amount=amount,
         net_base=net_base,
         rate=request.rate,
-        formula_id="generic.base_minus_deductions_times_rate.v1",
+        formula_id=request.formula_id,
         evidence_refs=request.evidence_refs,
     )

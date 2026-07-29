@@ -135,6 +135,108 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
             },
         )
 
+    def test_vat_calculation_packs_cover_supported_statutory_paths(self):
+        packs = tuple(
+            pack
+            for pack in self.packs
+            if pack.tax_id == "vat"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(
+            tuple((pack.effective_period.start, pack.effective_period.end) for pack in packs),
+            (
+                (date(2023, 1, 1), date(2025, 12, 31)),
+                (date(2026, 1, 1), date(2026, 12, 31)),
+            ),
+        )
+        for pack in packs:
+            with self.subTest(pack_id=pack.pack_id):
+                self.assertEqual(
+                    pack.calculation.formula_id,
+                    "generic.base_times_rate_minus_credits.v1",
+                )
+                self.assertEqual(pack.calculation.tax_base_fact_key, "vat.taxable_sales")
+                self.assertEqual(
+                    pack.calculation.deductions_fact_key,
+                    "vat.input_tax_credits",
+                )
+                self.assertEqual(
+                    pack.calculation.rate_table.selector_fact_key,
+                    "vat.rate_path",
+                )
+                entries = {
+                    entry.selector: entry
+                    for entry in pack.calculation.rate_table.entries
+                }
+                self.assertEqual(
+                    {key: entry.rate for key, entry in entries.items()},
+                    {
+                        "general_taxpayer_13": "0.13",
+                        "general_taxpayer_9": "0.09",
+                        "general_taxpayer_6": "0.06",
+                        "small_scale_reduced_1": "0.01",
+                    },
+                )
+                self.assertEqual(
+                    entries["small_scale_reduced_1"].maximum_deductions,
+                    "0",
+                )
+
+    def test_vat_general_and_small_scale_paths_calculate_from_confirmed_facts(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 1, 31))
+        timestamp = "2026-07-29T10:00:00+08:00"
+        cases = (
+            ("general_taxpayer_13", "8000.00", "5000.00"),
+            ("small_scale_reduced_1", "0", "1000.00"),
+        )
+        for rate_path, input_credits, expected_amount in cases:
+            with self.subTest(rate_path=rate_path):
+                facts = (
+                    TaxFact(
+                        "activity.has_vat_taxable_transaction",
+                        True,
+                        FactState.CONFIRMED,
+                        ("vat-return",),
+                        "customer",
+                        timestamp,
+                    ),
+                    TaxFact(
+                        "vat.taxable_sales",
+                        "100000.00",
+                        FactState.CONFIRMED,
+                        ("vat-return",),
+                        "customer",
+                        timestamp,
+                    ),
+                    TaxFact(
+                        "vat.input_tax_credits",
+                        input_credits,
+                        FactState.CONFIRMED,
+                        ("vat-return",),
+                        "customer",
+                        timestamp,
+                    ),
+                    TaxFact(
+                        "vat.rate_path",
+                        rate_path,
+                        FactState.CONFIRMED,
+                        ("vat-return",),
+                        "customer",
+                        timestamp,
+                    ),
+                )
+
+                result = screen_tax_items(
+                    TaxCheckRequest(period, "CN", facts),
+                    self.packs,
+                    builtin_tax_evaluators(),
+                    tax_ids=("vat",),
+                )[0]
+
+                self.assertEqual(result.status, TaxStatus.CALCULATED)
+                self.assertEqual(result.calculation.amount, expected_amount)
+
     def test_deed_tax_calculation_pack_requires_confirmed_local_rate(self):
         packs = tuple(
             pack for pack in self.packs

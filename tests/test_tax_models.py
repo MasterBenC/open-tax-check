@@ -68,6 +68,23 @@ class TaxModelTests(unittest.TestCase):
                 maximum_tax_base="-1",
             )
 
+    def test_statutory_rate_entry_validates_optional_maximum_deductions(self):
+        entry = StatutoryRateEntry(
+            "small_scale_reduced_1",
+            "小规模纳税人减按1%征收",
+            "0.01",
+            maximum_deductions="0",
+        )
+
+        self.assertEqual(entry.maximum_deductions, "0")
+        with self.assertRaisesRegex(ValueError, "^invalid_statutory_rate_entry$"):
+            StatutoryRateEntry(
+                "small_scale_reduced_1",
+                "小规模纳税人减按1%征收",
+                "0.01",
+                maximum_deductions="-1",
+            )
+
     def test_calculation_spec_requires_exactly_one_rate_source(self):
         table = StatutoryRateTable(
             "stamp_tax.tax_item",

@@ -215,6 +215,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
     if not specs or any(spec.formula_id not in {
         "generic.base_minus_deductions_times_rate.v1",
         "generic.base_times_rate.v1",
+        "generic.base_times_rate_minus_credits.v1",
     } for spec in specs):
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     spec = specs[0]
@@ -320,6 +321,20 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
             raise _EvaluationOutcomeValidationError(
                 "tax_base_outside_statutory_range"
             )
+        maximum_deductions_values = {
+            entry.maximum_deductions for entry in selected_entries
+        }
+        if len(maximum_deductions_values) != 1:
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        maximum_deductions = next(iter(maximum_deductions_values))
+        if (
+            maximum_deductions is not None
+            and deductions_fact is not None
+            and decimal_value(deductions_fact) > Decimal(maximum_deductions)
+        ):
+            raise _EvaluationOutcomeValidationError(
+                "deductions_outside_statutory_range"
+            )
         rate = Decimal(selected_entries[0].rate)
         rate_selector = selected_entries[0].selector
         rate_selector_label_zh = selected_entries[0].label_zh
@@ -343,6 +358,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         deductions=decimal_value(deductions_fact) if deductions_fact is not None else Decimal("0"),
         confirmed=all(fact.state is FactState.CONFIRMED for fact in facts),
         evidence_refs=evidence_refs,
+        formula_id=spec.formula_id,
     )
     try:
         result = calculate_tax_amount(request)
@@ -493,6 +509,7 @@ def _evaluate_selected_packs(
             "calculation_period_requires_split",
             "rate_outside_statutory_range",
             "tax_base_outside_statutory_range",
+            "deductions_outside_statutory_range",
         }:
             return _blocked_result(tax_id, diagnostic, pack_ids, sources)
         return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)
