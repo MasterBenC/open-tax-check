@@ -1,0 +1,23 @@
+{
+  "schema_version":"1.2.0",
+  "pack_id":"customs-duty-cn-2023-2024-11-calculation-v1",
+  "tax_id":"customs_duty",
+  "jurisdiction":"CN",
+  "effective_from":"2023-01-01",
+  "effective_to":"2024-11-30",
+  "maturity":"calculation",
+  "requirements":[
+    {"fact_key":"customs_duty.confirmed_tax_base","answer_type":"decimal","evidence_types":["customs_declaration","customs_valuation","import_export_contract","calculation_workpaper"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"customs_duty.applicable_parameter","answer_type":"decimal","evidence_types":["customs_tariff","origin_document","customs_confirmation","payment_record"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"customs_duty.confirmed_tariff_scope","answer_type":"text","evidence_types":["customs_declaration","customs_tariff","origin_document","customs_confirmation"],"priority":95,"blocking":true,"critical":true}
+  ],
+  "local_parameter_keys":[],
+  "evaluator_id":"generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources":[
+    {"title":"中华人民共和国进出口关税条例","url":"https://jdjc.mof.gov.cn/fgzd/202201/t20220126_3785020.htm","published_on":"2017-03-01","issuer":"国务院","document_number":"国务院令第392号","article_refs":["第十五条","第三十六条"],"verified_on":"2026-07-29"}
+  ],
+  "rule_version":"2026.1",
+  "fact_catalog_version":"zh-CN.v1",
+  "applicability_fact_keys":[],
+  "calculation":{"formula_id":"generic.base_times_applicable_parameter.v1","tax_base_fact_key":"customs_duty.confirmed_tax_base","rate_fact_key":"customs_duty.applicable_parameter","deductions_fact_key":null}
+}

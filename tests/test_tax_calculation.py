@@ -101,3 +101,29 @@ def test_percentage_formula_still_rejects_rate_greater_than_one():
             confirmed=True,
             evidence_refs=("vat-return",),
         )
+
+
+def test_applicable_parameter_formula_accepts_percentage_or_unit_amount():
+    percentage = calculate_tax_amount(
+        TaxCalculationRequest(
+            tax_id="resource_tax",
+            tax_base=Decimal("100000"),
+            rate=Decimal("0.06"),
+            confirmed=True,
+            evidence_refs=("resource-return",),
+            formula_id="generic.base_times_applicable_parameter.v1",
+        )
+    )
+    unit_amount = calculate_tax_amount(
+        TaxCalculationRequest(
+            tax_id="resource_tax",
+            tax_base=Decimal("1000"),
+            rate=Decimal("12"),
+            confirmed=True,
+            evidence_refs=("resource-return",),
+            formula_id="generic.base_times_applicable_parameter.v1",
+        )
+    )
+
+    assert percentage.amount == Decimal("6000.00")
+    assert unit_amount.amount == Decimal("12000.00")

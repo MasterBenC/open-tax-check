@@ -466,6 +466,51 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
             "generic.quantity_times_unit_amount.v1",
         )
 
+    def test_resource_and_customs_packs_use_confirmed_applicable_parameters(self):
+        expected = {
+            "resource_tax": (
+                1,
+                "resource_tax.confirmed_tax_base",
+                "resource_tax.applicable_parameter",
+            ),
+            "customs_duty": (
+                2,
+                "customs_duty.confirmed_tax_base",
+                "customs_duty.applicable_parameter",
+            ),
+        }
+        for tax_id, (count, base_key, parameter_key) in expected.items():
+            with self.subTest(tax_id=tax_id):
+                packs = tuple(
+                    pack
+                    for pack in self.packs
+                    if pack.tax_id == tax_id
+                    and pack.maturity is PackMaturity.CALCULATION
+                )
+                self.assertEqual(len(packs), count)
+                self.assertTrue(
+                    all(
+                        pack.calculation.formula_id
+                        == "generic.base_times_applicable_parameter.v1"
+                        for pack in packs
+                    )
+                )
+                self.assertTrue(
+                    all(pack.calculation.tax_base_fact_key == base_key for pack in packs)
+                )
+                self.assertTrue(
+                    all(pack.calculation.rate_fact_key == parameter_key for pack in packs)
+                )
+                self.assertTrue(
+                    all(
+                        any(
+                            item.fact_key.endswith("confirmed_tariff_scope")
+                            for item in pack.requirements
+                        )
+                        for pack in packs
+                    )
+                )
+
     def test_house_property_tax_pack_uses_common_statutory_rate_paths(self):
         packs = tuple(
             pack

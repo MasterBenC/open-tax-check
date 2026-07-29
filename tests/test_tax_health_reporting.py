@@ -226,6 +226,35 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("- 适用单位税额: 12.00", report)
         self.assertNotIn("- 适用税率: 1200%", report)
 
+    def test_applicable_parameter_formula_does_not_assume_percentage_or_unit_semantics(self) -> None:
+        snapshot = TaxCheckSnapshot(
+            request=TaxCheckRequest(PERIOD, "CN"),
+            results=(
+                TaxResult(
+                    "resource_tax",
+                    TaxStatus.CALCULATED,
+                    calculation=CalculationRecord(
+                        "generic.base_times_applicable_parameter.v1",
+                        "1000.00",
+                        "0.00",
+                        "1000.00",
+                        "12.00",
+                        "12000.00",
+                        ("resource-return", "local-tariff"),
+                    ),
+                ),
+            ),
+            questions=(),
+            audit_events=(),
+            revision=1,
+        )
+
+        report = render_tax_health_report(snapshot)
+
+        self.assertIn("已确认计税依据乘适用计税参数", report)
+        self.assertIn("- 适用计税参数: 12.00", report)
+        self.assertNotIn("- 适用税率: 1200%", report)
+
     def test_report_contains_the_fixed_self_use_disclaimer(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
 

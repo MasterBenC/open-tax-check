@@ -34,10 +34,15 @@ class TaxCalculationRequest:
             "generic.base_times_rate_minus_credits.v1",
             "generic.base_times_rate_minus_quick_deduction.v1",
             "generic.quantity_times_unit_amount.v1",
+            "generic.base_times_applicable_parameter.v1",
         }:
             raise ValueError("invalid_tax_calculation_formula")
         if (
-            self.formula_id != "generic.quantity_times_unit_amount.v1"
+            self.formula_id
+            not in {
+                "generic.quantity_times_unit_amount.v1",
+                "generic.base_times_applicable_parameter.v1",
+            }
             and self.rate > Decimal("1")
         ):
             raise ValueError("invalid_tax_rate")

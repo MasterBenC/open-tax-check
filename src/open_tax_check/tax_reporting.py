@@ -43,6 +43,7 @@ _FORMULA_LABELS_ZH = {
     "generic.base_times_rate_minus_credits.v1": "计税基础乘税率后减允许抵扣税额",
     "generic.base_times_rate_minus_quick_deduction.v1": "计税基础乘税率后减速算扣除数",
     "generic.quantity_times_unit_amount.v1": "计税数量乘适用单位税额",
+    "generic.base_times_applicable_parameter.v1": "已确认计税依据乘适用计税参数",
 }
 
 
@@ -126,6 +127,9 @@ def _result_lines(result: TaxResult) -> list[str]:
                     f"- 适用单位税额: {calculation.rate}"
                     if calculation.formula_id
                     == "generic.quantity_times_unit_amount.v1"
+                    else f"- 适用计税参数: {calculation.rate}"
+                    if calculation.formula_id
+                    == "generic.base_times_applicable_parameter.v1"
                     else f"- \u9002\u7528\u7a0e\u7387: {_format_rate_zh(calculation.rate)}"
                 ),
                 f"- \u8ba1\u7b97\u91d1\u989d: {calculation.amount}",

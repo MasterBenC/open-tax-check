@@ -63,6 +63,12 @@
     {"fact_key":"environmental_protection_tax.confirmed_tariff_scope","question_zh":"请确认本条环境保护税的污染物、排放口、计税单位、地区税额及减免口径。","help_zh":"该说明必须与应税数量和单位税额完全对应；不同口径必须拆分。","answer_type":"text","choices":[],"evidence_help_zh":"请提供监测、排放、地方税额、法定附表和减免资料。"},
     {"fact_key":"vessel_tonnage_tax.net_tonnage","question_zh":"本条船舶吨税对应船舶吨位证明书载明的净吨位是多少？","help_zh":"必须使用有效船舶吨位证明书的净吨位，并按同一船舶种类、吨位档次、执照期限和税率类型拆分。","answer_type":"decimal","choices":[],"evidence_help_zh":"请提供船舶吨位证明、国籍证书、入境记录和海关申报资料。"},
     {"fact_key":"vessel_tonnage_tax.applicable_unit_amount","question_zh":"本条船舶吨税适用的每净吨单位税额是多少元？","help_zh":"必须依据船舶种类、净吨位档次、30日或90日执照期限以及普通或优惠税率由客户确认，不得由AI自动选择。","answer_type":"decimal","choices":[],"evidence_help_zh":"请提供法定吨税税目税率表、条约待遇依据、海关确认或完税资料。"},
-    {"fact_key":"vessel_tonnage_tax.confirmed_tariff_scope","question_zh":"请确认本条船舶吨税的船舶种类、净吨位档次、执照期限及普通或优惠税率口径。","help_zh":"该说明必须与净吨位和单位税额完全对应；不同口径必须拆分。","answer_type":"text","choices":[],"evidence_help_zh":"请提供船舶证书、法定税率表、条约待遇和海关资料。"}
+    {"fact_key":"vessel_tonnage_tax.confirmed_tariff_scope","question_zh":"请确认本条船舶吨税的船舶种类、净吨位档次、执照期限及普通或优惠税率口径。","help_zh":"该说明必须与净吨位和单位税额完全对应；不同口径必须拆分。","answer_type":"text","choices":[],"evidence_help_zh":"请提供船舶证书、法定税率表、条约待遇和海关资料。"},
+    {"fact_key":"resource_tax.confirmed_tax_base","question_zh":"本条资源税已确认的计税依据是多少？","help_zh":"从价计征填写不含增值税的应税产品销售额，从量计征填写销售数量；必须按税目、原矿或选矿、计征方式、税率和减免口径拆分，不得混用金额与数量。","answer_type":"decimal","choices":[],"evidence_help_zh":"请提供资源许可证、销售或生产台账、申报表和计算底稿。"},
+    {"fact_key":"resource_tax.applicable_parameter","question_zh":"本条资源税已确认的适用计税参数是多少？","help_zh":"从价计征填写小数比例税率，从量计征填写每计税单位定额税率；必须依据法定税目税率表及有效省级规定由客户确认，不得由AI选择。","answer_type":"decimal","choices":[],"evidence_help_zh":"请提供法定税目税率表、省级具体税率、税务机关确认或申报资料。"},
+    {"fact_key":"resource_tax.confirmed_tariff_scope","question_zh":"请确认本条资源税的应税产品、原矿或选矿、从价或从量、计税单位、期间及减免口径。","help_zh":"该说明必须与计税依据和适用参数完全对应；不同税目或口径必须拆分，免减税项目须单独核算。","answer_type":"text","choices":[],"evidence_help_zh":"请提供资源分类、地方政策、税目税率表、减免资格和申报资料。"},
+    {"fact_key":"customs_duty.confirmed_tax_base","question_zh":"本条关税已确认的计税依据是多少？","help_zh":"从价计征填写海关确认的计税价格，从量计征填写法定货物数量；这里只覆盖单一从价或单一从量组成，复合计征必须拆为另行受控计算，不得直接套用本项。","answer_type":"decimal","choices":[],"evidence_help_zh":"请提供报关单、海关估价资料、合同、发票、运保费和计算底稿。"},
+    {"fact_key":"customs_duty.applicable_parameter","question_zh":"本条关税已确认的适用计税参数是多少？","help_zh":"从价计征填写小数比例税率，从量计征填写单位税额；必须按申报日、税则号列、原产地、税率类型及贸易措施由客户依据海关资料确认，不得由AI归类或选税率。","answer_type":"decimal","choices":[],"evidence_help_zh":"请提供当期税则、原产地资料、海关确认、协定待遇和完税资料。"},
+    {"fact_key":"customs_duty.confirmed_tariff_scope","question_zh":"请确认本条关税的进出口方向、申报日、税则号列、原产地、税率类型、计征方式及减免口径。","help_zh":"该说明必须与计税依据和适用参数完全对应；反倾销、反补贴、保障、报复性关税、配额、暂定税率和复合计征不得在未拆分时套用。","answer_type":"text","choices":[],"evidence_help_zh":"请提供报关单、商品归类、原产地、当期税则、贸易措施和优惠证明。"}
   ]
 }
