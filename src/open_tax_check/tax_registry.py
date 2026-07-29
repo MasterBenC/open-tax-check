@@ -240,6 +240,8 @@ def validate_pack_payload(payload: object) -> TaxPack:
                 bound_keys.add(calculation.deductions_fact_key)
             if not bound_keys.issubset(requirement_keys):
                 raise TaxPackError("invalid_calculation_spec")
+            if calculation.formula_id == "generic.base_times_rate.v1" and calculation.deductions_fact_key is not None:
+                raise TaxPackError("invalid_calculation_spec")
             if maturity is not PackMaturity.CALCULATION or evaluator_id != "generic.calculation.base_minus_deductions_times_rate.v1":
                 raise TaxPackError("invalid_calculation_spec")
     try:

@@ -142,6 +142,8 @@ from open_tax_check.tax_reporting import write_tax_health_report, write_tax_heal
 
 通用税额计算内核只接受调用方明确提供、客户确认且带证据引用的计税基础、税率和扣除额；当前规则包未提供的法定税率不会由程序或 AI 猜测。
 
+参数化规则包的安装、调用、公式和交付边界见 [`docs/calculation-packs.md`](docs/calculation-packs.md)。
+
 ## 隐私与云端授权
 
 当前核心默认只在本地处理，不收集遥测，也不向 OpenTaxCheck 项目方上传资料。统一的宿主文档抽取 JSON、授权和导入边界见 [文档抽取合同](docs/document-extraction-contract.md)。

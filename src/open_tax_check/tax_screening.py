@@ -217,6 +217,8 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
     }:
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     spec = specs[0]
+    if spec.formula_id == "generic.base_times_rate.v1" and spec.deductions_fact_key is not None:
+        raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
     keys = [spec.tax_base_fact_key, spec.rate_fact_key]
     facts = [context.facts.get(key) for key in keys]
     deductions_fact = (

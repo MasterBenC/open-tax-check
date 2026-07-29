@@ -312,6 +312,11 @@ class TaxPack:
                 bound_keys.add(self.calculation.deductions_fact_key)
             if not bound_keys.issubset(requirement_keys):
                 raise ValueError("invalid_calculation_spec")
+            if (
+                self.calculation.formula_id == "generic.base_times_rate.v1"
+                and self.calculation.deductions_fact_key is not None
+            ):
+                raise ValueError("invalid_calculation_spec")
 
 
 @dataclass(frozen=True, slots=True)
