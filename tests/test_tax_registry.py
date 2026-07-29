@@ -122,7 +122,113 @@ def screening_payload(**overrides: object) -> dict[str, object]:
     return result
 
 
+def statutory_calculation_payload(**overrides: object) -> dict[str, object]:
+    result = payload(
+        schema_version="1.3.0",
+        pack_id="stamp-tax-statutory-calculation",
+        tax_id="stamp_tax",
+        evaluator_id="generic.calculation.base_minus_deductions_times_rate.v1",
+        requirements=[
+            {
+                "fact_key": "calc.tax_base",
+                "answer_type": "decimal",
+                "evidence_types": ["contract_register"],
+                "priority": 100,
+                "blocking": True,
+                "critical": True,
+            },
+            {
+                "fact_key": "stamp_tax.tax_item",
+                "answer_type": "choice",
+                "evidence_types": ["taxable_instrument"],
+                "priority": 100,
+                "blocking": True,
+                "critical": True,
+            },
+        ],
+        sources=[{
+            "title": "中华人民共和国印花税法",
+            "url": "https://fgk.chinatax.gov.cn/zcfgk/c100009/c5193058/content.html",
+            "published_on": "2021-06-10",
+            "issuer": "全国人民代表大会常务委员会",
+            "document_number": "中华人民共和国主席令第八十九号",
+            "article_refs": ["第四条", "印花税税目税率表"],
+            "verified_on": "2026-07-29",
+        }],
+        rule_version="2026.1",
+        fact_catalog_version="zh-CN.v1",
+        applicability_fact_keys=[],
+        calculation={
+            "formula_id": "generic.base_times_rate.v1",
+            "tax_base_fact_key": "calc.tax_base",
+            "rate_fact_key": None,
+            "deductions_fact_key": None,
+            "rate_table": {
+                "selector_fact_key": "stamp_tax.tax_item",
+                "entries": [{
+                    "selector": "sale_contract",
+                    "label_zh": "买卖合同",
+                    "rate": "0.0003",
+                }],
+            },
+        },
+    )
+    result.update(overrides)
+    return result
+
+
 class TaxRegistryTests(unittest.TestCase):
+    def test_schema_1_3_parses_statutory_rate_table(self) -> None:
+        pack = validate_pack_payload(statutory_calculation_payload())
+
+        self.assertEqual(pack.calculation.rate_fact_key, None)
+        self.assertEqual(pack.calculation.rate_table.selector_fact_key, "stamp_tax.tax_item")
+        self.assertEqual(pack.calculation.rate_table.entries[0].rate, "0.0003")
+
+    def test_schema_1_3_rejects_duplicate_rate_selectors(self) -> None:
+        value = statutory_calculation_payload()
+        value["calculation"]["rate_table"]["entries"].append({
+            "selector": "sale_contract",
+            "label_zh": "重复税目",
+            "rate": "0.0005",
+        })
+
+        with self.assertRaisesRegex(TaxPackError, "^invalid_calculation_spec$"):
+            validate_pack_payload(value)
+
+    def test_screening_and_calculation_packs_may_overlap_by_maturity(self) -> None:
+        screening = validate_pack_payload(screening_payload(
+            tax_id="stamp_tax",
+            pack_id="stamp-tax-screening",
+        ))
+        calculation = validate_pack_payload(statutory_calculation_payload())
+
+        validate_pack_set((screening, calculation))
+
+        screening_selection = select_pack_segments(
+            (screening, calculation),
+            tax_id="stamp_tax",
+            jurisdiction="CN",
+            period=DateRange(date(2023, 1, 1), date(2023, 12, 31)),
+            maturity=PackMaturity.SCREENING,
+        )
+        calculation_selection = select_pack_segments(
+            (screening, calculation),
+            tax_id="stamp_tax",
+            jurisdiction="CN",
+            period=DateRange(date(2023, 1, 1), date(2023, 12, 31)),
+            maturity=PackMaturity.CALCULATION,
+        )
+
+        self.assertEqual(
+            tuple(segment.pack.pack_id for segment in screening_selection.segments),
+            ("stamp-tax-screening",),
+        )
+        self.assertEqual(
+            tuple(segment.pack.pack_id for segment in calculation_selection.segments),
+            ("stamp-tax-statutory-calculation",),
+        )
+
     def test_parameterized_calculation_pack_examples_are_strictly_valid(self) -> None:
         root = __import__("pathlib").Path("examples/calculation-packs")
         paths = sorted(root.glob("*.json"))

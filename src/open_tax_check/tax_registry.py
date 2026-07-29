@@ -16,6 +16,8 @@ from .tax_models import (
     PackSegment,
     PackSelection,
     RuleSource,
+    StatutoryRateEntry,
+    StatutoryRateTable,
     TaxDefinition,
     TaxPack,
 )
@@ -52,6 +54,7 @@ _PACK_V1_1_KEYS = _PACK_V1_KEYS | frozenset({
     "rule_version", "fact_catalog_version", "applicability_fact_keys",
 })
 _PACK_V1_2_KEYS = _PACK_V1_1_KEYS | frozenset({"calculation"})
+_PACK_V1_3_KEYS = _PACK_V1_2_KEYS
 _MAX_PACK_MANIFEST_BYTES = 256 * 1024
 _MAX_PACK_MANIFESTS = 64
 _TAX_IDS = frozenset(item.tax_id for item in TAX_DEFINITIONS)
@@ -120,11 +123,11 @@ def _parse_requirement(value: object) -> FactRequirement:
 
 def _parse_source(value: object, *, schema_version: str) -> RuleSource:
     required = {"title", "url", "published_on"}
-    if schema_version in {"1.1.0", "1.2.0"}:
+    if schema_version in {"1.1.0", "1.2.0", "1.3.0"}:
         required |= {"issuer", "document_number", "article_refs", "verified_on"}
     if not isinstance(value, dict) or set(value) != required:
-        raise TaxPackError("invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0"} else "invalid_source")
-    metadata_code = "invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0"} else "invalid_source_url"
+        raise TaxPackError("invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0"} else "invalid_source")
+    metadata_code = "invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0"} else "invalid_source_url"
     url = _required_string(value["url"], metadata_code)
     if not url.startswith("https://"):
         raise TaxPackError(metadata_code)
@@ -148,16 +151,17 @@ def _parse_source(value: object, *, schema_version: str) -> RuleSource:
 
 
 def validate_pack_payload(payload: object) -> TaxPack:
-    """Strictly parse one schema 1.0.0 or 1.1.0 JSON manifest into a TaxPack."""
+    """Strictly parse one supported JSON manifest into a TaxPack."""
     if not isinstance(payload, dict) or not isinstance(payload.get("schema_version"), str):
         raise TaxPackError("unsupported_schema_version")
     schema_version = payload["schema_version"]
-    if schema_version not in {"1.0.0", "1.1.0", "1.2.0"}:
+    if schema_version not in {"1.0.0", "1.1.0", "1.2.0", "1.3.0"}:
         raise TaxPackError("unsupported_schema_version")
     expected_keys = (
         _PACK_V1_KEYS if schema_version == "1.0.0"
         else _PACK_V1_1_KEYS if schema_version == "1.1.0"
-        else _PACK_V1_2_KEYS
+        else _PACK_V1_2_KEYS if schema_version == "1.2.0"
+        else _PACK_V1_3_KEYS
     )
     if set(payload) != expected_keys:
         raise TaxPackError("invalid_pack_keys")
@@ -201,7 +205,7 @@ def validate_pack_payload(payload: object) -> TaxPack:
     fact_catalog_version = ""
     applicability_fact_keys: tuple[str, ...] = ()
     calculation = None
-    if schema_version in {"1.1.0", "1.2.0"}:
+    if schema_version in {"1.1.0", "1.2.0", "1.3.0"}:
         rule_version = _required_string(payload["rule_version"], "missing_rule_version")
         fact_catalog_version = _required_string(payload["fact_catalog_version"], "missing_fact_catalog_version")
         raw_applicability = payload["applicability_fact_keys"]
@@ -221,21 +225,45 @@ def validate_pack_payload(payload: object) -> TaxPack:
             not raw_applicability or evaluator_id != "generic.applicability.screening.v1"
         ):
             raise TaxPackError("invalid_screening_evaluator")
-        if schema_version == "1.2.0":
+        if schema_version in {"1.2.0", "1.3.0"}:
             raw_calculation = payload["calculation"]
-            if not isinstance(raw_calculation, dict) or set(raw_calculation) != {
+            expected_calculation_keys = {
                 "formula_id", "tax_base_fact_key", "rate_fact_key", "deductions_fact_key"
-            }:
+            }
+            if schema_version == "1.3.0":
+                expected_calculation_keys.add("rate_table")
+            if not isinstance(raw_calculation, dict) or set(raw_calculation) != expected_calculation_keys:
                 raise TaxPackError("invalid_calculation_spec")
             try:
-                calculation = CalculationSpec(**raw_calculation)
+                calculation_values = dict(raw_calculation)
+                if schema_version == "1.3.0":
+                    raw_rate_table = calculation_values.pop("rate_table")
+                    if not isinstance(raw_rate_table, dict) or set(raw_rate_table) != {
+                        "selector_fact_key", "entries"
+                    }:
+                        raise ValueError("invalid_calculation_spec")
+                    raw_entries = raw_rate_table["entries"]
+                    if not isinstance(raw_entries, list):
+                        raise ValueError("invalid_calculation_spec")
+                    entries = []
+                    for raw_entry in raw_entries:
+                        if not isinstance(raw_entry, dict) or set(raw_entry) != {
+                            "selector", "label_zh", "rate"
+                        }:
+                            raise ValueError("invalid_calculation_spec")
+                        entries.append(StatutoryRateEntry(**raw_entry))
+                    calculation_values["rate_table"] = StatutoryRateTable(
+                        raw_rate_table["selector_fact_key"], tuple(entries)
+                    )
+                calculation = CalculationSpec(**calculation_values)
             except (TypeError, ValueError) as error:
                 raise TaxPackError("invalid_calculation_spec") from error
             requirement_keys = {item.fact_key for item in requirements}
-            bound_keys = {
-                calculation.tax_base_fact_key,
-                calculation.rate_fact_key,
-            }
+            bound_keys = {calculation.tax_base_fact_key}
+            if calculation.rate_fact_key is not None:
+                bound_keys.add(calculation.rate_fact_key)
+            if calculation.rate_table is not None:
+                bound_keys.add(calculation.rate_table.selector_fact_key)
             if calculation.deductions_fact_key is not None:
                 bound_keys.add(calculation.deductions_fact_key)
             if not bound_keys.issubset(requirement_keys):
@@ -277,6 +305,7 @@ def validate_pack_set(packs: tuple[TaxPack, ...]) -> None:
                 and second.maturity is not PackMaturity.PROTOTYPE
                 and first.tax_id == second.tax_id
                 and first.jurisdiction == second.jurisdiction
+                and first.maturity is second.maturity
                 and _periods_overlap(first.effective_period, second.effective_period)
             ):
                 raise TaxPackError("overlapping_tax_packs")
@@ -417,12 +446,14 @@ def select_pack_segments(
     jurisdiction: str,
     period: DateRange,
     include_prototypes: bool = False,
+    maturity: PackMaturity | None = None,
 ) -> PackSelection:
     """Select exact-jurisdiction, then national packs across an inclusive period."""
     validate_pack_set(packs)
     candidates = [
         pack for pack in packs
         if pack.tax_id == tax_id
+        and (maturity is None or pack.maturity is maturity)
         and (include_prototypes or pack.maturity is not PackMaturity.PROTOTYPE)
         and _periods_overlap(pack.effective_period, period)
     ]
