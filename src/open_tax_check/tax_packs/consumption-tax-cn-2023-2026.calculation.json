@@ -1,0 +1,23 @@
+{
+  "schema_version":"1.2.0",
+  "pack_id":"consumption-tax-cn-2023-2026-calculation-v1",
+  "tax_id":"consumption_tax",
+  "jurisdiction":"CN",
+  "effective_from":"2023-01-01",
+  "effective_to":"2026-12-31",
+  "maturity":"calculation",
+  "requirements":[
+    {"fact_key":"consumption_tax.confirmed_single_component_base","answer_type":"decimal","evidence_types":["tax_return","production_ledger","sales_ledger","customs_declaration","calculation_workpaper"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"consumption_tax.applicable_parameter","answer_type":"decimal","evidence_types":["statutory_tariff","tax_authority_confirmation","tax_return"],"priority":100,"blocking":true,"critical":true},
+    {"fact_key":"consumption_tax.confirmed_tariff_scope","answer_type":"text","evidence_types":["product_classification","statutory_tariff","tax_return","customs_declaration"],"priority":95,"blocking":true,"critical":true}
+  ],
+  "local_parameter_keys":[],
+  "evaluator_id":"generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources":[
+    {"title":"中华人民共和国消费税暂行条例","url":"https://fgk.chinatax.gov.cn/zcfgk/c100010/c5194422/content.html","published_on":"2008-11-10","issuer":"国务院","document_number":"国务院令第539号","article_refs":["第二条","第三条","第五条","第六条","第七条","第八条","第九条"],"verified_on":"2026-07-29"}
+  ],
+  "rule_version":"2026.1",
+  "fact_catalog_version":"zh-CN.v1",
+  "applicability_fact_keys":[],
+  "calculation":{"formula_id":"generic.base_times_applicable_parameter.v1","tax_base_fact_key":"consumption_tax.confirmed_single_component_base","rate_fact_key":"consumption_tax.applicable_parameter","deductions_fact_key":null}
+}

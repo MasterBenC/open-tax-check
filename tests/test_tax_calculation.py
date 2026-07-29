@@ -127,3 +127,20 @@ def test_applicable_parameter_formula_accepts_percentage_or_unit_amount():
 
     assert percentage.amount == Decimal("6000.00")
     assert unit_amount.amount == Decimal("12000.00")
+
+
+def test_confirmed_deduction_formula_subtracts_customer_confirmed_amount():
+    result = calculate_tax_amount(
+        TaxCalculationRequest(
+            tax_id="land_appreciation_tax",
+            tax_base=Decimal("500000"),
+            rate=Decimal("0.40"),
+            deductions=Decimal("50000"),
+            confirmed=True,
+            evidence_refs=("lat-return", "lat-workpaper"),
+            formula_id="generic.base_times_rate_minus_confirmed_deduction.v1",
+        )
+    )
+
+    assert result.amount == Decimal("150000.00")
+    assert result.net_base == Decimal("500000")

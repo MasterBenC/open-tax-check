@@ -44,6 +44,7 @@ _FORMULA_LABELS_ZH = {
     "generic.base_times_rate_minus_quick_deduction.v1": "计税基础乘税率后减速算扣除数",
     "generic.quantity_times_unit_amount.v1": "计税数量乘适用单位税额",
     "generic.base_times_applicable_parameter.v1": "已确认计税依据乘适用计税参数",
+    "generic.base_times_rate_minus_confirmed_deduction.v1": "增值额乘确认税率后减确认速算扣除额",
 }
 
 
@@ -114,6 +115,7 @@ def _result_lines(result: TaxResult) -> list[str]:
         deductions_label = {
             "generic.base_times_rate_minus_credits.v1": "允许抵扣进项税额",
             "generic.base_times_rate_minus_quick_deduction.v1": "速算扣除数",
+            "generic.base_times_rate_minus_confirmed_deduction.v1": "确认速算扣除额",
         }.get(calculation.formula_id, "扣除额")
         if calculation.rate_selector_label_zh is not None:
             lines.append(f"- 适用税目: {calculation.rate_selector_label_zh}")

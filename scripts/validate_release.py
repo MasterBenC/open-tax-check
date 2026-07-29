@@ -410,41 +410,25 @@ def validate_pack_release_surface(root: Path) -> str | None:
             return "tax_pack_release_invalid:period_overlap"
         if selection.uncovered_periods:
             return "tax_pack_release_invalid:period_gap"
-    try:
-        stamp_calculation = select_pack_segments(
-            tuple(calculation_packs),
-            tax_id="stamp_tax",
-            jurisdiction="CN",
-            period=period,
-            maturity=PackMaturity.CALCULATION,
-        )
-    except Exception:
-        return "tax_pack_release_invalid:stamp_calculation_period_overlap"
-    if stamp_calculation.uncovered_periods:
-        return "tax_pack_release_invalid:stamp_calculation_period_gap"
-    try:
-        deed_calculation = select_pack_segments(
-            tuple(calculation_packs),
-            tax_id="deed_tax",
-            jurisdiction="CN",
-            period=period,
-            maturity=PackMaturity.CALCULATION,
-        )
-    except Exception:
-        return "tax_pack_release_invalid:deed_calculation_period_overlap"
-    if deed_calculation.uncovered_periods:
-        return "tax_pack_release_invalid:deed_calculation_period_gap"
-    for tax_id, error_prefix in (
-        ("vat", "vat"),
-        ("urban_maintenance_construction_tax", "urban_maintenance_construction_tax"),
-        ("education_surcharge", "education_surcharge"),
-        ("local_education_surcharge", "local_education_surcharge"),
-        ("enterprise_income_tax", "enterprise_income_tax"),
-        ("vehicle_purchase_tax", "vehicle_purchase_tax"),
-        ("tobacco_tax", "tobacco_tax"),
-        ("house_property_tax", "house_property_tax"),
-        ("individual_income_tax", "individual_income_tax"),
-    ):
+    calculation_tax_ids = {pack.tax_id for pack in calculation_packs}
+    if calculation_tax_ids != expected_tax_ids:
+        missing_tax_ids = expected_tax_ids - calculation_tax_ids
+        if missing_tax_ids:
+            missing_tax_id = sorted(missing_tax_ids)[0]
+            error_prefix = {
+                "deed_tax": "deed",
+                "stamp_tax": "stamp",
+            }.get(missing_tax_id, missing_tax_id)
+            return (
+                "tax_pack_release_invalid:"
+                f"{error_prefix}_calculation_period_gap"
+            )
+        return "tax_pack_release_invalid:calculation_tax_id_coverage"
+    for tax_id in sorted(expected_tax_ids):
+        error_prefix = {
+            "deed_tax": "deed",
+            "stamp_tax": "stamp",
+        }.get(tax_id, tax_id)
         try:
             calculation_selection = select_pack_segments(
                 tuple(calculation_packs),

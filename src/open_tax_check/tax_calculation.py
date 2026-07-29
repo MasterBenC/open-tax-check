@@ -35,6 +35,7 @@ class TaxCalculationRequest:
             "generic.base_times_rate_minus_quick_deduction.v1",
             "generic.quantity_times_unit_amount.v1",
             "generic.base_times_applicable_parameter.v1",
+            "generic.base_times_rate_minus_confirmed_deduction.v1",
         }:
             raise ValueError("invalid_tax_calculation_formula")
         if (
@@ -76,6 +77,7 @@ def calculate_tax_amount(request: TaxCalculationRequest) -> TaxCalculationResult
     if request.formula_id in {
         "generic.base_times_rate_minus_credits.v1",
         "generic.base_times_rate_minus_quick_deduction.v1",
+        "generic.base_times_rate_minus_confirmed_deduction.v1",
     }:
         net_base = request.tax_base
         gross_tax = exact_multiply(request.tax_base, request.rate)

@@ -511,6 +511,128 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
                     )
                 )
 
+    def test_consumption_tax_pack_excludes_unseparated_compound_calculation(self):
+        packs = tuple(
+            pack
+            for pack in self.packs
+            if pack.tax_id == "consumption_tax"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(len(packs), 1)
+        pack = packs[0]
+        self.assertEqual(
+            pack.calculation.formula_id,
+            "generic.base_times_applicable_parameter.v1",
+        )
+        self.assertEqual(
+            pack.calculation.tax_base_fact_key,
+            "consumption_tax.confirmed_single_component_base",
+        )
+        self.assertEqual(
+            pack.calculation.rate_fact_key,
+            "consumption_tax.applicable_parameter",
+        )
+
+    def test_land_appreciation_tax_pack_requires_confirmed_bracket_inputs(self):
+        packs = tuple(
+            pack
+            for pack in self.packs
+            if pack.tax_id == "land_appreciation_tax"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(len(packs), 1)
+        pack = packs[0]
+        self.assertEqual(
+            pack.calculation.formula_id,
+            "generic.base_times_rate_minus_confirmed_deduction.v1",
+        )
+        self.assertEqual(
+            pack.calculation.tax_base_fact_key,
+            "land_appreciation_tax.appreciation_amount",
+        )
+        self.assertEqual(
+            pack.calculation.rate_table.selector_fact_key,
+            "land_appreciation_tax.confirmed_bracket",
+        )
+        self.assertEqual(
+            pack.calculation.deductions_fact_key,
+            "land_appreciation_tax.confirmed_quick_deduction",
+        )
+        self.assertEqual(
+            {
+                entry.selector: entry.rate
+                for entry in pack.calculation.rate_table.entries
+            },
+            {
+                "ratio_up_to_50": "0.30",
+                "ratio_over_50_up_to_100": "0.40",
+                "ratio_over_100_up_to_200": "0.50",
+                "ratio_over_200": "0.60",
+            },
+        )
+
+    def test_land_appreciation_tax_calculates_only_from_confirmed_bracket_and_deduction(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        timestamp = "2026-07-29T10:00:00+08:00"
+        facts = (
+            TaxFact(
+                "activity.has_real_estate_transfer",
+                True,
+                FactState.CONFIRMED,
+                ("property-transfer",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "land_appreciation_tax.appreciation_amount",
+                "500000",
+                FactState.CONFIRMED,
+                ("lat-workpaper",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "land_appreciation_tax.confirmed_bracket",
+                "ratio_over_50_up_to_100",
+                FactState.CONFIRMED,
+                ("lat-workpaper",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "land_appreciation_tax.confirmed_quick_deduction",
+                "50000",
+                FactState.CONFIRMED,
+                ("lat-workpaper",),
+                "customer",
+                timestamp,
+            ),
+            TaxFact(
+                "land_appreciation_tax.confirmed_tariff_scope",
+                "清算项目A，增值率超过50%且不超过100%，速算扣除系数5%",
+                FactState.CONFIRMED,
+                ("lat-workpaper", "lat-return"),
+                "customer",
+                timestamp,
+            ),
+        )
+
+        result = screen_tax_items(
+            TaxCheckRequest(period, "CN", facts),
+            self.packs,
+            builtin_tax_evaluators(),
+            tax_ids=("land_appreciation_tax",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.CALCULATED)
+        self.assertEqual(result.calculation.amount, "150000.00")
+        self.assertEqual(
+            result.calculation.rate_selector,
+            "ratio_over_50_up_to_100",
+        )
+
     def test_house_property_tax_pack_uses_common_statutory_rate_paths(self):
         packs = tuple(
             pack

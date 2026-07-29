@@ -255,6 +255,37 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("- 适用计税参数: 12.00", report)
         self.assertNotIn("- 适用税率: 1200%", report)
 
+    def test_confirmed_deduction_formula_uses_customer_safe_chinese_labels(self) -> None:
+        snapshot = TaxCheckSnapshot(
+            request=TaxCheckRequest(PERIOD, "CN"),
+            results=(
+                TaxResult(
+                    "land_appreciation_tax",
+                    TaxStatus.CALCULATED,
+                    calculation=CalculationRecord(
+                        "generic.base_times_rate_minus_confirmed_deduction.v1",
+                        "500000.00",
+                        "50000.00",
+                        "500000.00",
+                        "0.40",
+                        "150000.00",
+                        ("lat-return", "lat-workpaper"),
+                        "ratio_over_50_up_to_100",
+                        "增值率超过50%且不超过100%（税率40%）",
+                    ),
+                ),
+            ),
+            questions=(),
+            audit_events=(),
+            revision=1,
+        )
+
+        report = render_tax_health_report(snapshot)
+
+        self.assertIn("增值额乘确认税率后减确认速算扣除额", report)
+        self.assertIn("- 确认速算扣除额: 50000.00", report)
+        self.assertIn("增值率超过50%且不超过100%", report)
+
     def test_report_contains_the_fixed_self_use_disclaimer(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
 
