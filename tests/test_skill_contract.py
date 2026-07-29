@@ -74,7 +74,8 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("才具备进入客户报告的资格", text)
         self.assertIn("`report_status`", methodology)
         self.assertIn("恰为 `approved`", methodology)
-        self.assertIn("不生成正式客户报告", methodology)
+        self.assertIn("独立的《税务健康检查报告》", methodology)
+        self.assertIn("不以税务专业人员复核、签字或盖章作为生成条件", methodology)
 
     def test_skill_requires_unambiguous_csv_selection_and_explains_run_history(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -94,7 +95,7 @@ class SkillContractTests(unittest.TestCase):
             1,
         )[0]
         csv = text.split("## 3. CSV 走兼容流程", 1)[1].split(
-            "## 4. 专业复核与交付边界",
+            "## 4. 客户内部《税务健康检查报告》",
             1,
         )[0]
 
@@ -134,7 +135,8 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("资料覆盖矩阵", methodology)
         self.assertIn("Phase 2A 自身止于安全盘点", schema)
         self.assertIn("当前 Phase 2B", schema)
-        self.assertIn("不生成正式客户报告", schema)
+        self.assertIn("旧 finding 交付", schema)
+        self.assertIn("独立的《税务健康检查报告》", schema)
         self.assertIn("PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现", text)
 
     def test_skill_application_contract_requires_confirmed_mapping_for_phase_2b(self):
