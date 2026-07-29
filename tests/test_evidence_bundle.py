@@ -1,3 +1,5 @@
+import os
+
 from open_tax_check.evidence_bundle import (
     EvidenceBundleError,
     EvidenceManifest,
@@ -78,3 +80,16 @@ def test_parse_evidence_manifest_rejects_duplicate_ids_paths_and_more_than_500_i
     for payload in (duplicate_id, duplicate_path, duplicate_windows_path, too_many):
         with pytest.raises(EvidenceBundleError, match="^invalid_evidence_manifest$"):
             parse_evidence_manifest(payload)
+
+
+def test_parse_evidence_manifest_rejects_windows_equivalent_paths_on_every_host(
+    monkeypatch,
+):
+    monkeypatch.setattr(os.path, "normcase", lambda path: path)
+    payload = manifest_payload(
+        item_payload("a", "Returns/VAT.pdf"),
+        item_payload("b", "returns\\vat.pdf"),
+    )
+
+    with pytest.raises(EvidenceBundleError, match="^invalid_evidence_manifest$"):
+        parse_evidence_manifest(payload)

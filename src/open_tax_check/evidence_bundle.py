@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
-from pathlib import Path
 import re
 
 
@@ -67,7 +65,7 @@ def parse_evidence_manifest(payload: object) -> EvidenceManifest:
     if len({item.source_id for item in items}) != len(items):
         raise EvidenceBundleError("invalid_evidence_manifest")
     normalized_paths = {
-        os.path.normcase(str(Path(item.relative_path))) for item in items
+        item.relative_path.replace("\\", "/").casefold() for item in items
     }
     if len(normalized_paths) != len(items):
         raise EvidenceBundleError("invalid_evidence_manifest")
