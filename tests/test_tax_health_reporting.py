@@ -1,6 +1,7 @@
 """Boundary tests for the progressive, customer-safe tax-health report."""
 
 from datetime import date
+import json
 import unittest
 
 from open_tax_check.tax_models import (
@@ -15,7 +16,11 @@ from open_tax_check.tax_models import (
     TaxStatus,
 )
 from open_tax_check.tax_registry import TAX_DEFINITIONS
-from open_tax_check.tax_reporting import render_tax_health_report
+from open_tax_check.tax_reporting import (
+    render_tax_health_report,
+    write_tax_health_report,
+    write_tax_health_snapshot,
+)
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
@@ -126,6 +131,22 @@ class TaxHealthReportingTests(unittest.TestCase):
             "资料或政策不足的项目未形成确定结论；客户自行决定是否申报、调整或另行咨询专业机构",
         ):
             self.assertIn(line, report)
+
+    def test_report_exports_are_atomic_and_machine_payload_is_allowlisted(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            markdown_path = root / "report.md"
+            json_path = root / "snapshot.json"
+
+            self.assertEqual(write_tax_health_report(snapshot_with_every_status(), markdown_path), markdown_path)
+            self.assertEqual(write_tax_health_snapshot(snapshot_with_every_status(), json_path), json_path)
+            self.assertTrue(markdown_path.read_text(encoding="utf-8").startswith("# "))
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
+            self.assertEqual(list(root.glob("*.tmp")), [])
 
 
 if __name__ == "__main__":

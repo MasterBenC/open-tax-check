@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
+import os
+from pathlib import Path
+import tempfile
 
 from .schemas import to_dict
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
@@ -148,3 +152,35 @@ def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
     lines.extend(("", "## 局限性与声明"))
     lines.extend(f"- {line}" for line in _FIXED_DISCLAIMER)
     return "\n".join(lines) + "\n"
+
+
+def _write_text_atomic(path: Path, content: str) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+    return path
+
+
+def write_tax_health_report(snapshot: TaxCheckSnapshot, path: Path) -> Path:
+    """Atomically write the Chinese customer self-check Markdown report."""
+    return _write_text_atomic(Path(path), render_tax_health_report(snapshot))
+
+
+def write_tax_health_snapshot(snapshot: TaxCheckSnapshot, path: Path) -> Path:
+    """Atomically write the allowlisted machine snapshot payload as JSON."""
+    content = json.dumps(
+        tax_snapshot_payload(snapshot), ensure_ascii=False, sort_keys=True
+    ) + "\n"
+    return _write_text_atomic(Path(path), content)
