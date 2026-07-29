@@ -223,6 +223,8 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         or item.tax_base_fact_key != spec.tax_base_fact_key
         or item.deductions_fact_key != spec.deductions_fact_key
         or (item.rate_fact_key is None) != (spec.rate_fact_key is None)
+        or (item.rate_table is None) != (spec.rate_table is None)
+        or item.fixed_rate != spec.fixed_rate
         or item.rate_range != spec.rate_range
         for item in specs
     ):
@@ -238,7 +240,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         if any(item.rate_fact_key != spec.rate_fact_key for item in specs):
             raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
         rate_fact = context.facts.get(spec.rate_fact_key)
-    else:
+    elif spec.rate_table is not None:
         rate_tables = tuple(item.rate_table for item in specs)
         if any(table is None for table in rate_tables):
             raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
@@ -246,7 +248,11 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         if any(table.selector_fact_key != selector_key for table in rate_tables):
             raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
         selector_fact = context.facts.get(selector_key)
-    facts = [base_fact, rate_fact if rate_fact is not None else selector_fact]
+    facts = [base_fact]
+    if rate_fact is not None:
+        facts.append(rate_fact)
+    elif selector_fact is not None:
+        facts.append(selector_fact)
     deductions_fact = (
         context.facts.get(spec.deductions_fact_key)
         if spec.deductions_fact_key is not None
@@ -281,7 +287,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
             raise _EvaluationOutcomeValidationError(
                 "rate_outside_statutory_range"
             )
-    else:
+    elif selector_fact is not None:
         if not isinstance(selector_fact.value, str) or not selector_fact.value.strip():
             raise _EvaluationOutcomeValidationError("invalid_rate_selector_fact")
         selected_entries = []
@@ -304,6 +310,12 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         rate = Decimal(selected_entries[0].rate)
         rate_selector = selected_entries[0].selector
         rate_selector_label_zh = selected_entries[0].label_zh
+    else:
+        if spec.fixed_rate is None or any(
+            item.fixed_rate != spec.fixed_rate for item in specs
+        ):
+            raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
+        rate = Decimal(spec.fixed_rate)
     evidence_refs = tuple(dict.fromkeys(
         reference
         for fact in facts

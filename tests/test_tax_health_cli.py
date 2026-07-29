@@ -164,6 +164,33 @@ def test_tax_health_check_cli_calculates_deed_tax_only_with_confirmed_local_rate
     assert "\u9002\u7528\u7a0e\u7387: 3%" in report
 
 
+def test_tax_health_check_cli_calculates_three_vat_consumption_tax_addons(monkeypatch, tmp_path, capsys):
+    request_path = tmp_path / "request.json"
+    output_dir = tmp_path / "output"
+    timestamp = "2026-01-02T00:00:00+08:00"
+    request_path.write_text(json.dumps({
+        **request_payload(),
+        "facts": [
+            {"key": "tax.has_vat_or_consumption_tax_payable", "value": True, "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "policy.local_education_surcharge_rule", "value": "当地现行地方教育附加政策", "state": "confirmed", "evidence_refs": ["local-policy"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "urban_maintenance_construction_tax.location_category", "value": "urban_area", "state": "confirmed", "evidence_refs": ["registration"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "calc.tax_base", "value": "10000.00", "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck", "tax-health-check", "--request", str(request_path),
+        "--output-dir", str(output_dir),
+    ])
+
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "completed"
+    snapshot = json.loads((output_dir / "tax-health-snapshot.json").read_text(encoding="utf-8"))
+    results = {item["tax_id"]: item for item in snapshot["results"]}
+    assert results["urban_maintenance_construction_tax"]["calculation"]["amount"] == "700.00"
+    assert results["education_surcharge"]["calculation"]["amount"] == "300.00"
+    assert results["local_education_surcharge"]["calculation"]["amount"] == "200.00"
+
+
 def test_tax_health_check_cli_includes_parameterized_templates_for_all_tax_items(monkeypatch, tmp_path, capsys):
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request_payload()), encoding="utf-8")

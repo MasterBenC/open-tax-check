@@ -262,11 +262,15 @@ class CalculationSpec:
     deductions_fact_key: str | None = None
     rate_table: StatutoryRateTable | None = None
     rate_range: StatutoryRateRange | None = None
+    fixed_rate: str | None = None
 
     def __post_init__(self) -> None:
         for value in (self.formula_id, self.tax_base_fact_key):
             _require_identifier(value)
-        if (self.rate_fact_key is None) == (self.rate_table is None):
+        if sum(
+            source is not None
+            for source in (self.rate_fact_key, self.rate_table, self.fixed_rate)
+        ) != 1:
             raise ValueError("invalid_calculation_spec")
         if self.rate_fact_key is not None:
             _require_identifier(self.rate_fact_key)
@@ -275,9 +279,21 @@ class CalculationSpec:
         if self.rate_range is not None and (
             self.rate_fact_key is None
             or self.rate_table is not None
+            or self.fixed_rate is not None
             or not isinstance(self.rate_range, StatutoryRateRange)
         ):
             raise ValueError("invalid_calculation_spec")
+        if self.fixed_rate is not None:
+            try:
+                parsed_fixed_rate = Decimal(self.fixed_rate)
+            except (InvalidOperation, TypeError) as error:
+                raise ValueError("invalid_calculation_spec") from error
+            if (
+                not parsed_fixed_rate.is_finite()
+                or parsed_fixed_rate < 0
+                or parsed_fixed_rate > 1
+            ):
+                raise ValueError("invalid_calculation_spec")
         if self.deductions_fact_key is not None:
             _require_identifier(self.deductions_fact_key)
 

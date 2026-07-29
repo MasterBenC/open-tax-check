@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.3.0",
+  "pack_id": "local-education-surcharge-cn-2023-2026-calculation-v1",
+  "tax_id": "local_education_surcharge",
+  "jurisdiction": "CN",
+  "effective_from": "2023-01-01",
+  "effective_to": "2026-12-31",
+  "maturity": "calculation",
+  "requirements": [{"fact_key":"calc.tax_base","answer_type":"decimal","evidence_types":["vat_return","consumption_tax_return","tax_payment_record"],"priority":100,"blocking":true,"critical":true}],
+  "local_parameter_keys": [],
+  "evaluator_id": "generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources": [{"title":"关于统一地方教育附加政策有关问题的通知","url":"https://sx.mof.gov.cn/bszn/zhengcefagui/201011/t20101123_355143.htm","published_on":"2010-11-07","issuer":"财政部","document_number":"财综〔2010〕98号","article_refs":["第二条"],"verified_on":"2026-07-29"}],
+  "rule_version": "2026.1",
+  "fact_catalog_version": "zh-CN.v1",
+  "applicability_fact_keys": [],
+  "calculation": {"formula_id":"generic.base_times_rate.v1","tax_base_fact_key":"calc.tax_base","rate_fact_key":null,"deductions_fact_key":null,"fixed_rate":"0.02"}
+}

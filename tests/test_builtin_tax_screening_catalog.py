@@ -153,6 +153,38 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
         self.assertEqual(pack.sources[0].document_number, "中华人民共和国主席令第五十二号")
         self.assertEqual(pack.sources[0].article_refs, ("第三条", "第四条", "第五条"))
 
+    def test_urban_maintenance_tax_pack_uses_statutory_location_rates(self):
+        packs = tuple(
+            pack for pack in self.packs
+            if pack.tax_id == "urban_maintenance_construction_tax"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(len(packs), 1)
+        table = packs[0].calculation.rate_table
+        self.assertEqual(table.selector_fact_key, "urban_maintenance_construction_tax.location_category")
+        self.assertEqual(
+            {entry.selector: entry.rate for entry in table.entries},
+            {"urban_area": "0.07", "county_or_town": "0.05", "other": "0.01"},
+        )
+        self.assertEqual(packs[0].sources[0].article_refs, ("第二条", "第三条", "第四条", "第五条"))
+
+    def test_education_surcharge_packs_use_official_fixed_rates(self):
+        expected = {
+            "education_surcharge": "0.03",
+            "local_education_surcharge": "0.02",
+        }
+        for tax_id, rate in expected.items():
+            with self.subTest(tax_id=tax_id):
+                packs = tuple(
+                    pack for pack in self.packs
+                    if pack.tax_id == tax_id
+                    and pack.maturity is PackMaturity.CALCULATION
+                )
+                self.assertEqual(len(packs), 1)
+                self.assertEqual(packs[0].calculation.fixed_rate, rate)
+                self.assertEqual(packs[0].calculation.tax_base_fact_key, "calc.tax_base")
+
 
 if __name__ == "__main__":
     unittest.main()

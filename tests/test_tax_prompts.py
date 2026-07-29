@@ -88,6 +88,18 @@ class TaxPromptTests(unittest.TestCase):
         self.assertIn("不得由AI", prompt.help_zh)
         self.assertEqual(prompt.choices, ())
 
+    def test_builtin_urban_maintenance_location_prompt_has_three_legal_categories(self):
+        prompt = load_builtin_fact_catalog()[
+            "urban_maintenance_construction_tax.location_category"
+        ]
+
+        self.assertEqual(prompt.answer_type, "choice")
+        self.assertEqual(
+            tuple((choice.value, choice.label_zh) for choice in prompt.choices),
+            (("urban_area", "市区"), ("county_or_town", "县城、镇"), ("other", "其他地区")),
+        )
+        self.assertIn("不得由AI", prompt.help_zh)
+
     def test_builtin_catalog_is_immutable_mapping(self):
         prompts = load_builtin_fact_catalog()
         self.assertEqual(prompts["activity.has_vat_taxable_transaction"].question_zh, "2023至2026年是否发生过销售货物、服务、无形资产、不动产或者进口货物？")

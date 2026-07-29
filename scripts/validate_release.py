@@ -434,6 +434,23 @@ def validate_pack_release_surface(root: Path) -> str | None:
         return "tax_pack_release_invalid:deed_calculation_period_overlap"
     if deed_calculation.uncovered_periods:
         return "tax_pack_release_invalid:deed_calculation_period_gap"
+    for tax_id, error_prefix in (
+        ("urban_maintenance_construction_tax", "urban_maintenance_construction_tax"),
+        ("education_surcharge", "education_surcharge"),
+        ("local_education_surcharge", "local_education_surcharge"),
+    ):
+        try:
+            calculation_selection = select_pack_segments(
+                tuple(calculation_packs),
+                tax_id=tax_id,
+                jurisdiction="CN",
+                period=period,
+                maturity=PackMaturity.CALCULATION,
+            )
+        except Exception:
+            return f"tax_pack_release_invalid:{error_prefix}_calculation_period_overlap"
+        if calculation_selection.uncovered_periods:
+            return f"tax_pack_release_invalid:{error_prefix}_calculation_period_gap"
     try:
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         package_data = pyproject.get("tool", {}).get("setuptools", {}).get("package-data", {})

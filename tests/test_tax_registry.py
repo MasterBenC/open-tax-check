@@ -220,6 +220,21 @@ class TaxRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(TaxPackError, "^invalid_calculation_spec$"):
             validate_pack_payload(value)
 
+    def test_schema_1_3_parses_fixed_statutory_rate(self) -> None:
+        value = statutory_calculation_payload()
+        value["requirements"] = value["requirements"][:1]
+        value["calculation"] = {
+            "formula_id": "generic.base_times_rate.v1",
+            "tax_base_fact_key": "calc.tax_base",
+            "rate_fact_key": None,
+            "deductions_fact_key": None,
+            "fixed_rate": "0.03",
+        }
+
+        pack = validate_pack_payload(value)
+
+        self.assertEqual(pack.calculation.fixed_rate, "0.03")
+
     def test_screening_and_calculation_packs_may_overlap_by_maturity(self) -> None:
         screening = validate_pack_payload(screening_payload(
             tax_id="stamp_tax",

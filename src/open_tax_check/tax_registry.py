@@ -238,6 +238,7 @@ def validate_pack_payload(payload: object) -> TaxPack:
                 valid_key_sets = (
                     expected_calculation_keys | {"rate_table"},
                     expected_calculation_keys | {"rate_range"},
+                    expected_calculation_keys | {"fixed_rate"},
                 )
                 if calculation_keys not in valid_key_sets:
                     raise TaxPackError("invalid_calculation_spec")
@@ -429,6 +430,7 @@ _PACK_FILENAME_TAX_IDS = {
     "individual-income-tax-cn-2023-2026.screening.json": "individual_income_tax",
     "resource-tax-cn-2023-2026.screening.json": "resource_tax",
     "urban-maintenance-construction-tax-cn-2023-2026.screening.json": "urban_maintenance_construction_tax",
+    "urban-maintenance-construction-tax-cn-2023-2026.calculation.json": "urban_maintenance_construction_tax",
     "house-property-tax-cn-2023-2026.screening.json": "house_property_tax",
     "stamp-tax-cn-2023-2026.screening.json": "stamp_tax",
     "stamp-tax-cn-2023-08-27.calculation.json": "stamp_tax",
@@ -445,7 +447,9 @@ _PACK_FILENAME_TAX_IDS = {
     "environmental-protection-tax-cn-2023-2026.screening.json": "environmental_protection_tax",
     "customs-duty-cn-2023-2026.screening.json": "customs_duty",
     "education-surcharge-cn-2023-2026.screening.json": "education_surcharge",
+    "education-surcharge-cn-2023-2026.calculation.json": "education_surcharge",
     "local-education-surcharge-cn-2023-2026.screening.json": "local_education_surcharge",
+    "local-education-surcharge-cn-2023-2026.calculation.json": "local_education_surcharge",
 }
 
 

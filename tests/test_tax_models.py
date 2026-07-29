@@ -70,6 +70,22 @@ class TaxModelTests(unittest.TestCase):
                 None,
             )
 
+    def test_calculation_spec_accepts_one_fixed_statutory_rate(self):
+        spec = CalculationSpec(
+            "generic.base_times_rate.v1",
+            "calc.tax_base",
+            fixed_rate="0.03",
+        )
+
+        self.assertEqual(spec.fixed_rate, "0.03")
+        with self.assertRaisesRegex(ValueError, "^invalid_calculation_spec$"):
+            CalculationSpec(
+                "generic.base_times_rate.v1",
+                "calc.tax_base",
+                "calc.rate",
+                fixed_rate="0.03",
+            )
+
     def test_statutory_selector_serializes_for_audit(self):
         record = CalculationRecord(
             "generic.base_times_rate.v1",
