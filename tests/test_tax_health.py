@@ -29,6 +29,22 @@ from open_tax_check.tax_screening import GENERIC_SCREENING_EVALUATOR_ID
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
 OCCURRED_AT = "2026-07-28T10:00:00+08:00"
+
+
+def test_builtin_deed_tax_blocks_rate_outside_statutory_range():
+    timestamp = "2026-07-29T10:00:00+08:00"
+    facts = (
+        TaxFact("activity.acquired_land_or_building_rights", True, FactState.CONFIRMED, ("title",), "customer", timestamp),
+        TaxFact("policy.deed_tax_local_rule", "\u7701\u7ea7\u653f\u7b56", FactState.CONFIRMED, ("policy",), "customer", timestamp),
+        TaxFact("deed_tax.applicable_rate", "0.10", FactState.CONFIRMED, ("policy",), "customer", timestamp),
+        TaxFact("calc.tax_base", "100000.00", FactState.CONFIRMED, ("contract",), "customer", timestamp),
+    )
+
+    snapshot = run_tax_health_check(TaxCheckRequest(PERIOD, "CN", facts))
+    deed_tax = next(item for item in snapshot.results if item.tax_id == "deed_tax")
+
+    assert deed_tax.status is TaxStatus.BLOCKED
+    assert deed_tax.diagnostics == ("rate_outside_statutory_range",)
 SOURCE = RuleSource("国家税务总局", "https://www.chinatax.gov.cn/example", date(2026, 1, 1))
 
 

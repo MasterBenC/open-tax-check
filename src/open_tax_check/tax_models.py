@@ -230,6 +230,29 @@ class StatutoryRateTable:
 
 
 @dataclass(frozen=True, slots=True)
+class StatutoryRateRange:
+    """Inclusive statutory bounds for a customer-confirmed local rate."""
+
+    minimum: str
+    maximum: str
+
+    def __post_init__(self) -> None:
+        try:
+            minimum = Decimal(self.minimum)
+            maximum = Decimal(self.maximum)
+        except (InvalidOperation, TypeError) as error:
+            raise ValueError("invalid_statutory_rate_range") from error
+        if (
+            not minimum.is_finite()
+            or not maximum.is_finite()
+            or minimum < 0
+            or maximum > 1
+            or minimum > maximum
+        ):
+            raise ValueError("invalid_statutory_rate_range")
+
+
+@dataclass(frozen=True, slots=True)
 class CalculationSpec:
     """Allowlisted fact bindings for a deterministic calculation evaluator."""
 
@@ -238,6 +261,7 @@ class CalculationSpec:
     rate_fact_key: str | None = None
     deductions_fact_key: str | None = None
     rate_table: StatutoryRateTable | None = None
+    rate_range: StatutoryRateRange | None = None
 
     def __post_init__(self) -> None:
         for value in (self.formula_id, self.tax_base_fact_key):
@@ -247,6 +271,12 @@ class CalculationSpec:
         if self.rate_fact_key is not None:
             _require_identifier(self.rate_fact_key)
         if self.rate_table is not None and not isinstance(self.rate_table, StatutoryRateTable):
+            raise ValueError("invalid_calculation_spec")
+        if self.rate_range is not None and (
+            self.rate_fact_key is None
+            or self.rate_table is not None
+            or not isinstance(self.rate_range, StatutoryRateRange)
+        ):
             raise ValueError("invalid_calculation_spec")
         if self.deductions_fact_key is not None:
             _require_identifier(self.deductions_fact_key)

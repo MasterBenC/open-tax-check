@@ -18,6 +18,7 @@ from open_tax_check.tax_models import (
     Question,
     RuleSource,
     StatutoryRateEntry,
+    StatutoryRateRange,
     StatutoryRateTable,
     TaxCheckRequest,
     TaxCheckSnapshot,
@@ -30,6 +31,12 @@ from open_tax_check.tax_models import (
 
 
 class TaxModelTests(unittest.TestCase):
+    def test_statutory_rate_range_rejects_invalid_bounds(self):
+        for minimum, maximum in (("0.05", "0.03"), ("-0.01", "0.03"), ("0.03", "1.01")):
+            with self.subTest(minimum=minimum, maximum=maximum):
+                with self.assertRaisesRegex(ValueError, "^invalid_statutory_rate_range$"):
+                    StatutoryRateRange(minimum, maximum)
+
     def test_statutory_rate_table_rejects_duplicate_selectors(self):
         with self.assertRaisesRegex(ValueError, "^invalid_statutory_rate_table$"):
             StatutoryRateTable(

@@ -423,6 +423,18 @@ def validate_pack_release_surface(root: Path) -> str | None:
     if stamp_calculation.uncovered_periods:
         return "tax_pack_release_invalid:stamp_calculation_period_gap"
     try:
+        deed_calculation = select_pack_segments(
+            tuple(calculation_packs),
+            tax_id="deed_tax",
+            jurisdiction="CN",
+            period=period,
+            maturity=PackMaturity.CALCULATION,
+        )
+    except Exception:
+        return "tax_pack_release_invalid:deed_calculation_period_overlap"
+    if deed_calculation.uncovered_periods:
+        return "tax_pack_release_invalid:deed_calculation_period_gap"
+    try:
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         package_data = pyproject.get("tool", {}).get("setuptools", {}).get("package-data", {})
     except Exception:

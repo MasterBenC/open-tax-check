@@ -135,6 +135,24 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
             },
         )
 
+    def test_deed_tax_calculation_pack_requires_confirmed_local_rate(self):
+        packs = tuple(
+            pack for pack in self.packs
+            if pack.tax_id == "deed_tax"
+            and pack.maturity is PackMaturity.CALCULATION
+        )
+
+        self.assertEqual(len(packs), 1)
+        pack = packs[0]
+        self.assertEqual(pack.effective_period, PERIOD)
+        self.assertEqual(pack.calculation.formula_id, "generic.base_times_rate.v1")
+        self.assertEqual(pack.calculation.tax_base_fact_key, "calc.tax_base")
+        self.assertEqual(pack.calculation.rate_fact_key, "deed_tax.applicable_rate")
+        self.assertIsNone(pack.calculation.rate_table)
+        self.assertEqual(pack.local_parameter_keys, ("deed_tax.applicable_rate",))
+        self.assertEqual(pack.sources[0].document_number, "中华人民共和国主席令第五十二号")
+        self.assertEqual(pack.sources[0].article_refs, ("第三条", "第四条", "第五条"))
+
 
 if __name__ == "__main__":
     unittest.main()

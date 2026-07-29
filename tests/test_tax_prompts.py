@@ -79,6 +79,15 @@ class TaxPromptTests(unittest.TestCase):
         self.assertIn("计税依据", prompt.question_zh)
         self.assertEqual(prompt.choices, ())
 
+    def test_builtin_deed_tax_rate_prompt_requires_local_policy_evidence(self):
+        prompt = load_builtin_fact_catalog()["deed_tax.applicable_rate"]
+
+        self.assertEqual(prompt.answer_type, "decimal")
+        self.assertIn("省级", prompt.question_zh)
+        self.assertIn("3%至5%", prompt.help_zh)
+        self.assertIn("不得由AI", prompt.help_zh)
+        self.assertEqual(prompt.choices, ())
+
     def test_builtin_catalog_is_immutable_mapping(self):
         prompts = load_builtin_fact_catalog()
         self.assertEqual(prompts["activity.has_vat_taxable_transaction"].question_zh, "2023至2026年是否发生过销售货物、服务、无形资产、不动产或者进口货物？")

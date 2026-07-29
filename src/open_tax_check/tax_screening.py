@@ -223,6 +223,7 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
         or item.tax_base_fact_key != spec.tax_base_fact_key
         or item.deductions_fact_key != spec.deductions_fact_key
         or (item.rate_fact_key is None) != (spec.rate_fact_key is None)
+        or item.rate_range != spec.rate_range
         for item in specs
     ):
         raise _EvaluationOutcomeValidationError("invalid_calculation_spec")
@@ -272,6 +273,14 @@ def generic_calculation_evaluator(context: TaxEvaluationContext) -> EvaluationOu
     base_fact = facts[0]
     if rate_fact is not None:
         rate = decimal_value(rate_fact)
+        if spec.rate_range is not None and not (
+            Decimal(spec.rate_range.minimum)
+            <= rate
+            <= Decimal(spec.rate_range.maximum)
+        ):
+            raise _EvaluationOutcomeValidationError(
+                "rate_outside_statutory_range"
+            )
     else:
         if not isinstance(selector_fact.value, str) or not selector_fact.value.strip():
             raise _EvaluationOutcomeValidationError("invalid_rate_selector_fact")
@@ -457,6 +466,7 @@ def _evaluate_selected_packs(
         if diagnostic in {
             "unknown_statutory_rate_selector",
             "calculation_period_requires_split",
+            "rate_outside_statutory_range",
         }:
             return _blocked_result(tax_id, diagnostic, pack_ids, sources)
         return _blocked_result(tax_id, "invalid_evaluator_outcome", pack_ids, sources)

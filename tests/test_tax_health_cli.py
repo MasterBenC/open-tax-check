@@ -136,6 +136,34 @@ def test_tax_health_check_cli_runs_builtin_stamp_tax_rate_table(monkeypatch, tmp
     assert "sale_contract" not in report
 
 
+def test_tax_health_check_cli_calculates_deed_tax_only_with_confirmed_local_rate(monkeypatch, tmp_path, capsys):
+    request_path = tmp_path / "request.json"
+    output_dir = tmp_path / "output"
+    timestamp = "2026-01-02T00:00:00+08:00"
+    request_path.write_text(json.dumps({
+        **request_payload(),
+        "facts": [
+            {"key": "activity.acquired_land_or_building_rights", "value": True, "state": "confirmed", "evidence_refs": ["title-transfer"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "policy.deed_tax_local_rule", "value": "当地现行契税具体适用税率文件", "state": "confirmed", "evidence_refs": ["provincial-policy"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "deed_tax.applicable_rate", "value": "0.03", "state": "confirmed", "evidence_refs": ["provincial-policy"], "confirmed_by": "customer", "confirmed_at": timestamp},
+            {"key": "calc.tax_base", "value": "100000.00", "state": "confirmed", "evidence_refs": ["property-contract"], "confirmed_by": "customer", "confirmed_at": timestamp},
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck", "tax-health-check", "--request", str(request_path),
+        "--output-dir", str(output_dir),
+    ])
+
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "completed"
+    snapshot = json.loads((output_dir / "tax-health-snapshot.json").read_text(encoding="utf-8"))
+    deed_tax = next(item for item in snapshot["results"] if item["tax_id"] == "deed_tax")
+    assert deed_tax["calculation"]["amount"] == "3000.00"
+    assert deed_tax["calculation"]["rate"] == "0.03"
+    report = (output_dir / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md").read_text(encoding="utf-8")
+    assert "\u9002\u7528\u7a0e\u7387: 3%" in report
+
+
 def test_tax_health_check_cli_includes_parameterized_templates_for_all_tax_items(monkeypatch, tmp_path, capsys):
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request_payload()), encoding="utf-8")

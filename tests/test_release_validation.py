@@ -115,6 +115,27 @@ class ReleaseValidationTests(unittest.TestCase):
             "tax_pack_release_invalid:stamp_calculation_period_gap",
         )
 
+    def test_tax_pack_release_surface_rejects_deed_calculation_period_gap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(
+                ROOT / "src/open_tax_check/tax_packs",
+                root / "src/open_tax_check/tax_packs",
+            )
+            shutil.copy2(ROOT / "pyproject.toml", root / "pyproject.toml")
+            (
+                root
+                / "src/open_tax_check/tax_packs/"
+                "deed-tax-cn-2023-2026.calculation.json"
+            ).unlink()
+
+            result = validate_release.validate_pack_release_surface(root)
+
+        self.assertEqual(
+            result,
+            "tax_pack_release_invalid:deed_calculation_period_gap",
+        )
+
     def test_tax_pack_release_surface_rejects_non_official_calculation_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -196,6 +196,30 @@ class TaxRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(TaxPackError, "^invalid_calculation_spec$"):
             validate_pack_payload(value)
 
+    def test_schema_1_3_parses_confirmed_rate_with_statutory_range(self) -> None:
+        value = statutory_calculation_payload()
+        value["requirements"][1]["fact_key"] = "deed_tax.applicable_rate"
+        value["requirements"][1]["answer_type"] = "decimal"
+        value["calculation"] = {
+            "formula_id": "generic.base_times_rate.v1",
+            "tax_base_fact_key": "calc.tax_base",
+            "rate_fact_key": "deed_tax.applicable_rate",
+            "deductions_fact_key": None,
+            "rate_range": {"minimum": "0.03", "maximum": "0.05"},
+        }
+
+        pack = validate_pack_payload(value)
+
+        self.assertEqual(pack.calculation.rate_range.minimum, "0.03")
+        self.assertEqual(pack.calculation.rate_range.maximum, "0.05")
+
+    def test_calculation_pack_rejects_non_decimal_numeric_binding(self) -> None:
+        value = statutory_calculation_payload()
+        value["requirements"][0]["answer_type"] = "text"
+
+        with self.assertRaisesRegex(TaxPackError, "^invalid_calculation_spec$"):
+            validate_pack_payload(value)
+
     def test_screening_and_calculation_packs_may_overlap_by_maturity(self) -> None:
         screening = validate_pack_payload(screening_payload(
             tax_id="stamp_tax",

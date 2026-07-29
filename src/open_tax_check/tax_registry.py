@@ -17,6 +17,7 @@ from .tax_models import (
     PackSelection,
     RuleSource,
     StatutoryRateEntry,
+    StatutoryRateRange,
     StatutoryRateTable,
     TaxDefinition,
     TaxPack,
@@ -230,13 +231,21 @@ def validate_pack_payload(payload: object) -> TaxPack:
             expected_calculation_keys = {
                 "formula_id", "tax_base_fact_key", "rate_fact_key", "deductions_fact_key"
             }
+            if not isinstance(raw_calculation, dict):
+                raise TaxPackError("invalid_calculation_spec")
+            calculation_keys = set(raw_calculation)
             if schema_version == "1.3.0":
-                expected_calculation_keys.add("rate_table")
-            if not isinstance(raw_calculation, dict) or set(raw_calculation) != expected_calculation_keys:
+                valid_key_sets = (
+                    expected_calculation_keys | {"rate_table"},
+                    expected_calculation_keys | {"rate_range"},
+                )
+                if calculation_keys not in valid_key_sets:
+                    raise TaxPackError("invalid_calculation_spec")
+            elif calculation_keys != expected_calculation_keys:
                 raise TaxPackError("invalid_calculation_spec")
             try:
                 calculation_values = dict(raw_calculation)
-                if schema_version == "1.3.0":
+                if "rate_table" in calculation_values:
                     raw_rate_table = calculation_values.pop("rate_table")
                     if not isinstance(raw_rate_table, dict) or set(raw_rate_table) != {
                         "selector_fact_key", "entries"
@@ -255,6 +264,13 @@ def validate_pack_payload(payload: object) -> TaxPack:
                     calculation_values["rate_table"] = StatutoryRateTable(
                         raw_rate_table["selector_fact_key"], tuple(entries)
                     )
+                if "rate_range" in calculation_values:
+                    raw_rate_range = calculation_values.pop("rate_range")
+                    if not isinstance(raw_rate_range, dict) or set(raw_rate_range) != {
+                        "minimum", "maximum"
+                    }:
+                        raise ValueError("invalid_calculation_spec")
+                    calculation_values["rate_range"] = StatutoryRateRange(**raw_rate_range)
                 calculation = CalculationSpec(**calculation_values)
             except (TypeError, ValueError) as error:
                 raise TaxPackError("invalid_calculation_spec") from error
@@ -267,6 +283,24 @@ def validate_pack_payload(payload: object) -> TaxPack:
             if calculation.deductions_fact_key is not None:
                 bound_keys.add(calculation.deductions_fact_key)
             if not bound_keys.issubset(requirement_keys):
+                raise TaxPackError("invalid_calculation_spec")
+            numeric_keys = {calculation.tax_base_fact_key}
+            if calculation.rate_fact_key is not None:
+                numeric_keys.add(calculation.rate_fact_key)
+            if calculation.deductions_fact_key is not None:
+                numeric_keys.add(calculation.deductions_fact_key)
+            if any(
+                requirements_by_key[key].answer_type != "decimal"
+                for key in numeric_keys
+            ):
+                raise TaxPackError("invalid_calculation_spec")
+            if (
+                calculation.rate_table is not None
+                and requirements_by_key[
+                    calculation.rate_table.selector_fact_key
+                ].answer_type
+                != "choice"
+            ):
                 raise TaxPackError("invalid_calculation_spec")
             if calculation.formula_id == "generic.base_times_rate.v1" and calculation.deductions_fact_key is not None:
                 raise TaxPackError("invalid_calculation_spec")
@@ -406,6 +440,7 @@ _PACK_FILENAME_TAX_IDS = {
     "vessel-tonnage-tax-cn-2023-2026.screening.json": "vessel_tonnage_tax",
     "cultivated-land-occupation-tax-cn-2023-2026.screening.json": "cultivated_land_occupation_tax",
     "deed-tax-cn-2023-2026.screening.json": "deed_tax",
+    "deed-tax-cn-2023-2026.calculation.json": "deed_tax",
     "tobacco-tax-cn-2023-2026.screening.json": "tobacco_tax",
     "environmental-protection-tax-cn-2023-2026.screening.json": "environmental_protection_tax",
     "customs-duty-cn-2023-2026.screening.json": "customs_duty",
