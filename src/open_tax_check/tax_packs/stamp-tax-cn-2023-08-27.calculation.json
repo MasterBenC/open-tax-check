@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.3.0",
+  "pack_id": "stamp-tax-cn-2023-01-01-2023-08-27-calculation-v1",
+  "tax_id": "stamp_tax",
+  "jurisdiction": "CN",
+  "effective_from": "2023-01-01",
+  "effective_to": "2023-08-27",
+  "maturity": "calculation",
+  "requirements": [
+    {
+      "fact_key": "calc.tax_base",
+      "answer_type": "decimal",
+      "evidence_types": ["contract_register", "taxable_instrument", "tax_return"],
+      "priority": 100,
+      "blocking": true,
+      "critical": true
+    },
+    {
+      "fact_key": "stamp_tax.tax_item",
+      "answer_type": "choice",
+      "evidence_types": ["taxable_instrument", "contract_register", "securities_ledger"],
+      "priority": 100,
+      "blocking": true,
+      "critical": true
+    }
+  ],
+  "local_parameter_keys": [],
+  "evaluator_id": "generic.calculation.base_minus_deductions_times_rate.v1",
+  "sources": [
+    {
+      "title": "中华人民共和国印花税法",
+      "url": "https://fgk.chinatax.gov.cn/zcfgk/c100009/c5193058/content.html",
+      "published_on": "2021-06-10",
+      "issuer": "全国人民代表大会常务委员会",
+      "document_number": "中华人民共和国主席令第八十九号",
+      "article_refs": ["第四条", "第五条", "印花税税目税率表"],
+      "verified_on": "2026-07-29"
+    }
+  ],
+  "rule_version": "2026.1",
+  "fact_catalog_version": "zh-CN.v1",
+  "applicability_fact_keys": [],
+  "calculation": {
+    "formula_id": "generic.base_times_rate.v1",
+    "tax_base_fact_key": "calc.tax_base",
+    "rate_fact_key": null,
+    "deductions_fact_key": null,
+    "rate_table": {
+      "selector_fact_key": "stamp_tax.tax_item",
+      "entries": [
+        {"selector": "loan_contract", "label_zh": "借款合同", "rate": "0.00005"},
+        {"selector": "finance_lease_contract", "label_zh": "融资租赁合同", "rate": "0.00005"},
+        {"selector": "sale_contract", "label_zh": "买卖合同", "rate": "0.0003"},
+        {"selector": "work_contract", "label_zh": "承揽合同", "rate": "0.0003"},
+        {"selector": "construction_contract", "label_zh": "建设工程合同", "rate": "0.0003"},
+        {"selector": "transport_contract", "label_zh": "运输合同", "rate": "0.0003"},
+        {"selector": "technology_contract", "label_zh": "技术合同", "rate": "0.0003"},
+        {"selector": "lease_contract", "label_zh": "租赁合同", "rate": "0.001"},
+        {"selector": "custody_contract", "label_zh": "保管合同", "rate": "0.001"},
+        {"selector": "warehousing_contract", "label_zh": "仓储合同", "rate": "0.001"},
+        {"selector": "property_insurance_contract", "label_zh": "财产保险合同", "rate": "0.001"},
+        {"selector": "land_use_right_grant", "label_zh": "土地使用权出让书据", "rate": "0.0005"},
+        {"selector": "land_or_building_transfer", "label_zh": "土地使用权、房屋等权属转让书据", "rate": "0.0005"},
+        {"selector": "equity_transfer", "label_zh": "股权转让书据", "rate": "0.0005"},
+        {"selector": "intellectual_property_transfer", "label_zh": "知识产权转让书据", "rate": "0.0003"},
+        {"selector": "business_books", "label_zh": "营业账簿", "rate": "0.00025"},
+        {"selector": "securities_transaction", "label_zh": "证券交易", "rate": "0.001"}
+      ]
+    }
+  }
+}

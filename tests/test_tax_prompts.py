@@ -44,6 +44,41 @@ def catalog(**overrides):
 
 
 class TaxPromptTests(unittest.TestCase):
+    def test_builtin_stamp_tax_item_prompt_has_all_statutory_choices(self):
+        prompt = load_builtin_fact_catalog()["stamp_tax.tax_item"]
+
+        self.assertEqual(prompt.answer_type, "choice")
+        self.assertEqual(
+            tuple((choice.value, choice.label_zh) for choice in prompt.choices),
+            (
+                ("loan_contract", "借款合同"),
+                ("finance_lease_contract", "融资租赁合同"),
+                ("sale_contract", "买卖合同"),
+                ("work_contract", "承揽合同"),
+                ("construction_contract", "建设工程合同"),
+                ("transport_contract", "运输合同"),
+                ("technology_contract", "技术合同"),
+                ("lease_contract", "租赁合同"),
+                ("custody_contract", "保管合同"),
+                ("warehousing_contract", "仓储合同"),
+                ("property_insurance_contract", "财产保险合同"),
+                ("land_use_right_grant", "土地使用权出让书据"),
+                ("land_or_building_transfer", "土地使用权、房屋等权属转让书据"),
+                ("equity_transfer", "股权转让书据"),
+                ("intellectual_property_transfer", "知识产权转让书据"),
+                ("business_books", "营业账簿"),
+                ("securities_transaction", "证券交易"),
+            ),
+        )
+        self.assertIn("不得由AI自动判断", prompt.help_zh)
+
+    def test_builtin_calculation_base_prompt_is_customer_facing_chinese(self):
+        prompt = load_builtin_fact_catalog()["calc.tax_base"]
+
+        self.assertEqual(prompt.answer_type, "decimal")
+        self.assertIn("计税依据", prompt.question_zh)
+        self.assertEqual(prompt.choices, ())
+
     def test_builtin_catalog_is_immutable_mapping(self):
         prompts = load_builtin_fact_catalog()
         self.assertEqual(prompts["activity.has_vat_taxable_transaction"].question_zh, "2023至2026年是否发生过销售货物、服务、无形资产、不动产或者进口货物？")

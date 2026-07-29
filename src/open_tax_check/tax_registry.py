@@ -397,6 +397,8 @@ _PACK_FILENAME_TAX_IDS = {
     "urban-maintenance-construction-tax-cn-2023-2026.screening.json": "urban_maintenance_construction_tax",
     "house-property-tax-cn-2023-2026.screening.json": "house_property_tax",
     "stamp-tax-cn-2023-2026.screening.json": "stamp_tax",
+    "stamp-tax-cn-2023-08-27.calculation.json": "stamp_tax",
+    "stamp-tax-cn-2023-08-28-2026.calculation.json": "stamp_tax",
     "urban-land-use-tax-cn-2023-2026.screening.json": "urban_land_use_tax",
     "land-appreciation-tax-cn-2023-2026.screening.json": "land_appreciation_tax",
     "vehicle-purchase-tax-cn-2023-2026.screening.json": "vehicle_purchase_tax",
