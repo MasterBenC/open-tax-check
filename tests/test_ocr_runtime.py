@@ -26,6 +26,16 @@ def test_prepare_and_load_model_manifest_records_deterministic_hashes(tmp_path):
     assert ocr_runtime.load_ocr_model_manifest(tmp_path) == manifest
 
 
+def test_prepare_existing_local_model_files_without_initializer(tmp_path):
+    (tmp_path / "det.model").write_bytes(b"det")
+
+    manifest = ocr_runtime.prepare_ocr_models(tmp_path)
+
+    assert manifest.provider == "local-paddleocr"
+    assert manifest.files[0].name == "det.model"
+    assert ocr_runtime.load_ocr_model_manifest(tmp_path) == manifest
+
+
 def test_model_manifest_rejects_changed_file(tmp_path):
     def initializer(model_dir):
         (model_dir / "model.bin").write_bytes(b"original")

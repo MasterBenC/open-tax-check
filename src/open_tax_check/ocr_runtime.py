@@ -93,8 +93,17 @@ def prepare_ocr_models(
     model_dir = model_dir.resolve()
     model_dir.mkdir(parents=True, exist_ok=True)
     if initializer is None:
-        raise OcrDependencyError("local_ocr_model_unavailable")
-    initializer(model_dir)
+        try:
+            has_model_files = any(
+                path.is_file() and path.name != MODEL_MANIFEST_NAME
+                for path in model_dir.rglob("*")
+            )
+        except OSError as error:
+            raise OcrDependencyError("local_ocr_model_unavailable") from error
+        if not has_model_files:
+            raise OcrDependencyError("local_ocr_model_unavailable")
+    else:
+        initializer(model_dir)
     manifest = OcrModelManifest(
         MODEL_MANIFEST_VERSION,
         "local-paddleocr",
