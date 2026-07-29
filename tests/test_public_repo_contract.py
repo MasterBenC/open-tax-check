@@ -193,7 +193,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
             report_scope,
         )
         self.assertIn(
-            "没有完整的 2023–2026 年税务规则覆盖",
+            "全国 20 个税种的 2023–2026 年适用性筛查规则包已经随版本内置",
             report_scope,
         )
         self.assertIn("宿主 Agent", report_scope)
@@ -201,7 +201,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("Python 核心不依赖任何模型", report_scope)
         self.assertIn("未解决项目", report_scope)
         self.assertIn("渐进式报告", report_scope)
-        self.assertIn("注册表和框架验证覆盖", report_scope)
+        self.assertIn("适用性筛查规则包已经随版本内置", report_scope)
 
     def test_experimental_report_has_self_use_boundary_without_approval_gate(self):
         readme = experimental_report_scope(

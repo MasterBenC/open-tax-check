@@ -13,6 +13,7 @@ from .tax_models import (
     AuditEvent,
     Confirmation,
     FactGap,
+    FactPrompt,
     FactState,
     Question,
     TaxCheckRequest,
@@ -44,8 +45,14 @@ def _confirmation_digest(value: str | int | bool | None) -> str:
     return hashlib.sha256(canonical_value.encode("utf-8")).hexdigest()
 
 
-def _confirmation_value_is_valid(answer_type: str, value: object) -> bool:
-    if answer_type in ("text", "choice"):
+def _confirmation_value_is_valid(
+    answer_type: str, value: object, choices: tuple[object, ...] = ()
+) -> bool:
+    if answer_type == "choice":
+        return isinstance(value, str) and bool(value) and (
+            not choices or value in choices
+        )
+    if answer_type == "text":
         return isinstance(value, str) and bool(value)
     if answer_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
@@ -158,12 +165,14 @@ def start_tax_health_check(
     *,
     packs: tuple[TaxPack, ...],
     evaluators: Mapping[str, RuleEvaluator],
+    prompts: Mapping[str, FactPrompt] | None = None,
+    unavailable_tax_ids: frozenset[str] = frozenset(),
     occurred_at: str,
 ) -> TaxCheckSnapshot:
     """Create revision one without accessing a system clock or source files."""
     _validate_timestamp(occurred_at)
-    results = screen_tax_items(request, packs, evaluators)
-    questions = build_question_queue(results)
+    results = screen_tax_items(request, packs, evaluators, unavailable_tax_ids=unavailable_tax_ids)
+    questions = build_question_queue(results, prompts)
     return TaxCheckSnapshot(
         request=request,
         results=results,
@@ -180,6 +189,8 @@ def apply_confirmations(
     *,
     packs: tuple[TaxPack, ...],
     evaluators: Mapping[str, RuleEvaluator],
+    prompts: Mapping[str, FactPrompt] | None = None,
+    unavailable_tax_ids: frozenset[str] = frozenset(),
 ) -> TaxCheckSnapshot:
     """Apply a validated customer batch, rerunning only materially affected taxes."""
     questions = _known_questions(snapshot)
@@ -190,7 +201,11 @@ def apply_confirmations(
             raise ConfirmationError("unknown_question")
         if question.fact_key != confirmation.fact_key:
             raise ConfirmationError("confirmation_fact_mismatch")
-        if not _confirmation_value_is_valid(question.answer_type, confirmation.value):
+        if not _confirmation_value_is_valid(
+            question.answer_type,
+            confirmation.value,
+            tuple(choice.value for choice in question.choices),
+        ):
             raise ConfirmationError("invalid_confirmation_value")
         resolved.append((confirmation, question))
 
@@ -280,7 +295,7 @@ def apply_confirmations(
     if affected_tax_ids:
         results = _merge_results(
             results,
-            screen_tax_items(request, packs, evaluators, tax_ids=affected_tax_ids),
+            screen_tax_items(request, packs, evaluators, tax_ids=affected_tax_ids, unavailable_tax_ids=unavailable_tax_ids),
         )
     for _, question in conflicts:
         existing_results = {result.tax_id: result for result in results}
@@ -293,7 +308,7 @@ def apply_confirmations(
     return TaxCheckSnapshot(
         request=request,
         results=results,
-        questions=build_question_queue(results),
+        questions=build_question_queue(results, prompts),
         audit_events=snapshot.audit_events + tuple(audit_events),
         revision=snapshot.revision + 1,
         question_history=_question_history(snapshot),

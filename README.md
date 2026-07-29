@@ -133,7 +133,9 @@ from open_tax_check.tax_reporting import render_tax_health_report
 
 该报告仅供客户内部自查，不属于涉税鉴证、专业税务意见或纳税申报结论。不以税务专业人员复核、签字或盖章作为生成条件；是否申报、调整或另行咨询专业机构由客户自行决定。这个自查 API 与上文仍要求专业复核的 Phase 2B 客户交付工作流相互独立。
 
-基础框架目前没有完整的 2023–2026 年税务规则覆盖；第一批只有注册表和框架验证覆盖。内置增值税规则包仍标记为 `prototype`，只用于验证规则包选择和报告流程，不代表 20 个检查项目已经具备实质筛查或计算规则。
+全国 20 个税种的 2023–2026 年适用性筛查规则包已经随版本内置，按税种、地区和期间选择；税额计算、地方政策参数和专业复核仍不完整。客户不需要单独安装规则包，升级 OpenTaxCheck 包即可获得新版官方规则包。规则包之外的第三方内容不会自动信任。
+
+宿主 Agent 接入见 [七生态接入契约](skills/open-tax-check/references/host-integrations.md)。该契约覆盖 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 的共同业务字段，但不声明平台认证，也未实现 MCP/HTTP 部署、认证或租户隔离。
 
 ## 隐私与云端授权
 

@@ -110,10 +110,61 @@ class TaxDefinition:
 
 
 @dataclass(frozen=True, slots=True)
+class PromptChoice:
+    value: str | bool
+    label_zh: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, str | bool) or isinstance(self.value, str) and not self.value.strip():
+            raise ValueError("invalid_prompt_choice")
+        if not isinstance(self.label_zh, str) or not self.label_zh.strip():
+            raise ValueError("invalid_prompt_text")
+
+
+@dataclass(frozen=True, slots=True)
+class FactPrompt:
+    fact_key: str
+    question_zh: str
+    help_zh: str
+    answer_type: str
+    choices: tuple[PromptChoice, ...]
+    evidence_help_zh: str
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.fact_key)
+        if not isinstance(self.answer_type, str) or self.answer_type not in _SUPPORTED_ANSWER_TYPES:
+            raise ValueError("unsupported_answer_type")
+        for value in (self.question_zh, self.help_zh, self.evidence_help_zh):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("invalid_prompt_text")
+        choices = tuple(self.choices)
+        object.__setattr__(self, "choices", choices)
+        if not all(isinstance(choice, PromptChoice) for choice in choices):
+            raise ValueError("invalid_prompt_choices")
+        if self.answer_type == "boolean":
+            if choices != (PromptChoice(True, "是"), PromptChoice(False, "否")):
+                raise ValueError("invalid_prompt_choices")
+        elif self.answer_type == "choice":
+            if not choices or any(not isinstance(item.value, str) or not item.value.strip() for item in choices):
+                raise ValueError("invalid_prompt_choices")
+            if len({item.value for item in choices}) != len(choices):
+                raise ValueError("invalid_prompt_choices")
+        elif choices:
+            raise ValueError("invalid_prompt_choices")
+
+
+@dataclass(frozen=True, slots=True)
 class RuleSource:
     title: str
     url: str
     published_on: date
+    issuer: str = ""
+    document_number: str = ""
+    article_refs: tuple[str, ...] = ()
+    verified_on: date | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "article_refs", tuple(self.article_refs))
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +232,9 @@ class TaxPack:
     local_parameter_keys: tuple[str, ...]
     evaluator_id: str | None
     sources: tuple[RuleSource, ...]
+    rule_version: str = "1.0.0"
+    fact_catalog_version: str = ""
+    applicability_fact_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_identifier(self.pack_id)
@@ -192,7 +246,20 @@ class TaxPack:
         object.__setattr__(self, "requirements", tuple(self.requirements))
         object.__setattr__(self, "local_parameter_keys", tuple(self.local_parameter_keys))
         object.__setattr__(self, "sources", tuple(self.sources))
+        object.__setattr__(self, "applicability_fact_keys", tuple(self.applicability_fact_keys))
         _require_identifiers(self.local_parameter_keys)
+        if self.maturity is PackMaturity.SCREENING:
+            _require_identifier(self.rule_version)
+            _require_identifier(self.fact_catalog_version)
+            if not self.applicability_fact_keys:
+                raise ValueError("invalid_applicability_fact_keys")
+            requirements = {item.fact_key: item for item in self.requirements}
+            for fact_key in self.applicability_fact_keys:
+                requirement = requirements.get(fact_key)
+                if requirement is None:
+                    raise ValueError("unknown_applicability_fact_key")
+                if requirement.answer_type != "boolean":
+                    raise ValueError("non_boolean_applicability_fact")
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +346,10 @@ class Question:
     evidence_types: tuple[str, ...]
     priority: int
     blocking: bool
+    question_zh: str = ""
+    help_zh: str = ""
+    evidence_help_zh: str = ""
+    choices: tuple[PromptChoice, ...] = ()
 
     def __post_init__(self) -> None:
         _require_identifier(self.question_id)
@@ -287,6 +358,7 @@ class Question:
         object.__setattr__(self, "tax_ids", tuple(self.tax_ids))
         object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
         object.__setattr__(self, "evidence_types", tuple(self.evidence_types))
+        object.__setattr__(self, "choices", tuple(self.choices))
         _require_identifiers(self.tax_ids)
 
 

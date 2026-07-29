@@ -89,7 +89,7 @@ class TaxHealthReportingTests(unittest.TestCase):
 
         for tax_id, name_zh in EXPECTED_TAX_HEADINGS:
             with self.subTest(tax_id=tax_id):
-                self.assertIn(f"### {name_zh}（`{tax_id}`）", report)
+                self.assertIn(f"### {name_zh}", report)
 
     def test_report_exposes_progressive_states_and_safe_boundaries(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())
@@ -100,12 +100,10 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertIn("输入哈希数量: 2", report)
         for definition in TAX_DEFINITIONS:
             self.assertIn(definition.name_zh, report)
-        for status in TaxStatus:
-            self.assertIn(status.value, report)
-        self.assertIn("缺少资料", report)
-        self.assertIn("尚缺地方政策参数", report)
-        self.assertIn("rule_evaluator_unavailable", report)
-        self.assertIn("vat-cn-2026", report)
+        for label in ("已完成计算", "经资料确认不适用", "待补充资料", "待确认当地政策", "暂时无法判断"):
+            self.assertIn(label, report)
+        self.assertIn("需要补充与该事项相关的资料", report)
+        self.assertIn("需要补充适用的当地政策参数", report)
         self.assertIn(SOURCE.url, report)
         self.assertIn("## 待确认客户问题", report)
         self.assertNotIn("model hidden reasoning", report)
@@ -115,6 +113,8 @@ class TaxHealthReportingTests(unittest.TestCase):
         self.assertNotIn("professional-review", report.lower())
         self.assertNotIn("已全面合规", report)
         self.assertNotIn("不存在税务风险", report)
+        for prohibited in ("calculated", "not_applicable", "needs_evidence", "needs_local_policy", "blocked", "fact_key", "question-", "rule_evaluator_unavailable", "vat-cn-2026"):
+            self.assertNotIn(prohibited, report)
 
     def test_report_contains_the_fixed_self_use_disclaimer(self) -> None:
         report = render_tax_health_report(snapshot_with_every_status())

@@ -12,7 +12,9 @@ from open_tax_check.tax_models import (
     FactGap,
     FactRequirement,
     FactState,
+    FactPrompt,
     PackMaturity,
+    PromptChoice,
     Question,
     RuleSource,
     TaxCheckRequest,
@@ -21,7 +23,14 @@ from open_tax_check.tax_models import (
     TaxResult,
     TaxStatus,
 )
-from open_tax_check.tax_screening import build_question_queue, screen_tax_items
+from open_tax_check.tax_screening import (
+    GENERIC_SCREENING_EVALUATOR_ID,
+    TaxEvaluationContext,
+    build_question_queue,
+    builtin_tax_evaluators,
+    generic_screening_evaluator,
+    screen_tax_items,
+)
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
@@ -47,21 +56,27 @@ def pack(
     evaluator_id: str | None = "vat.screening",
     period: DateRange = PERIOD,
 ) -> TaxPack:
+    all_requirements = requirements if requirements is not None else (requirement(),)
+    all_requirements += (FactRequirement("activity.screening_applies", "boolean", (), 1, False, False),)
     return TaxPack(
         pack_id,
         tax_id,
         "CN",
         period,
-        PackMaturity.SCREENING,
-        requirements if requirements is not None else (requirement(),),
+        PackMaturity.CALCULATION,
+        all_requirements,
         local_parameter_keys,
         evaluator_id,
         (SOURCE,),
+        "1.0.0",
+        "",
+        ("activity.screening_applies",),
     )
 
 
 def request(*facts: TaxFact, period: DateRange = PERIOD) -> TaxCheckRequest:
-    return TaxCheckRequest(period, "CN", facts)
+    applicability = TaxFact("activity.screening_applies", True, FactState.OBSERVED, ("source-001",))
+    return TaxCheckRequest(period, "CN", (applicability, *facts))
 
 
 def calculated(context: object) -> EvaluationOutcome:
@@ -72,7 +87,165 @@ def calculated(context: object) -> EvaluationOutcome:
     )
 
 
+def generic_pack(
+    *extra_requirements: FactRequirement,
+    local_parameter_keys: tuple[str, ...] = (),
+    applicability_critical: bool = True,
+) -> TaxPack:
+    applicability = FactRequirement(
+        "activity.has_vat_taxable_transaction",
+        "boolean",
+        ("customer_confirmation",),
+        100,
+        True,
+        applicability_critical,
+    )
+    return TaxPack(
+        "vat-cn-2026-screening-v1",
+        "vat",
+        "CN",
+        PERIOD,
+        PackMaturity.SCREENING,
+        (applicability, *extra_requirements),
+        local_parameter_keys,
+        GENERIC_SCREENING_EVALUATOR_ID,
+        (SOURCE,),
+        "2026.1",
+        "zh-CN.v1",
+        (applicability.fact_key,),
+    )
+
+
+def applicability_request(
+    value: bool,
+    state: FactState,
+    *,
+    evidence_refs: tuple[str, ...] = (),
+    extra_facts: tuple[TaxFact, ...] = (),
+) -> TaxCheckRequest:
+    confirmation = (
+        {"confirmed_by": "customer", "confirmed_at": "2026-07-28T10:00:00+08:00"}
+        if state is FactState.CONFIRMED
+        else {}
+    )
+    return TaxCheckRequest(
+        PERIOD,
+        "CN",
+        (
+            TaxFact(
+                "activity.has_vat_taxable_transaction",
+                value,
+                state,
+                evidence_refs,
+                **confirmation,
+            ),
+            *extra_facts,
+        ),
+    )
+
+
 class TaxScreeningTests(unittest.TestCase):
+    def test_direct_generic_evaluator_rejects_inferred_applicability_fact(self) -> None:
+        inferred = TaxFact(
+            "activity.has_vat_taxable_transaction",
+            False,
+            FactState.INFERRED,
+        )
+        context = TaxEvaluationContext(
+            "vat",
+            applicability_request(False, FactState.INFERRED),
+            (generic_pack(),),
+            {inferred.key: inferred},
+        )
+
+        with self.assertRaisesRegex(ValueError, "^invalid_applicability_fact$"):
+            generic_screening_evaluator(context)
+
+    def test_confirmed_negative_applicability_is_not_applicable(self) -> None:
+        result = screen_tax_items(
+            applicability_request(False, FactState.CONFIRMED),
+            (generic_pack(),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NOT_APPLICABLE)
+        self.assertRegex(result.evidence_refs[0], r"^confirmation-[0-9a-f]{16}$")
+
+    def test_inferred_negative_applicability_still_needs_evidence(self) -> None:
+        result = screen_tax_items(
+            applicability_request(False, FactState.INFERRED),
+            (generic_pack(),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+        self.assertEqual(
+            tuple(gap.fact_key for gap in result.gaps),
+            ("activity.has_vat_taxable_transaction",),
+        )
+
+    def test_inferred_noncritical_applicability_still_needs_evidence(self) -> None:
+        result = screen_tax_items(
+            applicability_request(False, FactState.INFERRED),
+            (generic_pack(applicability_critical=False),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+        self.assertEqual(
+            tuple(gap.fact_key for gap in result.gaps),
+            ("activity.has_vat_taxable_transaction",),
+        )
+
+    def test_screening_custom_evaluator_cannot_calculate(self) -> None:
+        result = screen_tax_items(
+            applicability_request(True, FactState.CONFIRMED),
+            (generic_pack(),),
+            {GENERIC_SCREENING_EVALUATOR_ID: calculated},
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.BLOCKED)
+        self.assertEqual(result.diagnostics, ("invalid_evaluator_outcome",))
+
+    def test_confirmed_positive_without_calculation_pack_never_calculates(self) -> None:
+        result = screen_tax_items(
+            applicability_request(True, FactState.CONFIRMED),
+            (generic_pack(),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+        self.assertEqual(result.diagnostics, ("calculation_rule_unavailable",))
+
+    def test_negative_applicability_does_not_request_irrelevant_local_parameters(self) -> None:
+        local = FactRequirement("policy.vat_local_rule", "boolean", (), 90, True, True)
+        result = screen_tax_items(
+            applicability_request(False, FactState.CONFIRMED),
+            (generic_pack(local, local_parameter_keys=(local.fact_key,)),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NOT_APPLICABLE)
+        self.assertEqual(result.gaps, ())
+
+    def test_positive_applicability_with_missing_local_parameter_needs_local_policy(self) -> None:
+        local = FactRequirement("policy.vat_local_rule", "boolean", (), 90, True, True)
+        result = screen_tax_items(
+            applicability_request(True, FactState.CONFIRMED),
+            (generic_pack(local, local_parameter_keys=(local.fact_key,)),),
+            builtin_tax_evaluators(),
+            tax_ids=("vat",),
+        )[0]
+
+        self.assertEqual(result.status, TaxStatus.NEEDS_LOCAL_POLICY)
+        self.assertEqual(result.gaps[0].reason_code, "missing_local_policy")
+
     def test_missing_formal_pack_blocks_with_public_diagnostic(self) -> None:
         result = screen_tax_items(request(), (), {}, tax_ids=("vat",))[0]
 
@@ -150,7 +323,7 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.status, TaxStatus.BLOCKED)
         self.assertEqual(result.diagnostics, ("rule_evaluator_unavailable",))
 
-    def test_evidence_backed_evaluator_can_calculate(self) -> None:
+    def test_schema_1_0_calculation_evaluator_can_calculate(self) -> None:
         result = screen_tax_items(
             request(TaxFact("entity.registration", "general", FactState.OBSERVED, ("file-001",))),
             (pack(),),
@@ -331,6 +504,46 @@ class TaxScreeningTests(unittest.TestCase):
 
 
 class QuestionQueueTests(unittest.TestCase):
+    def test_question_queue_uses_shared_chinese_prompt(self) -> None:
+        results = (
+            TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, gaps=(
+                FactGap("activity.shared", "missing_fact", "boolean", (), 70, False),
+            )),
+            TaxResult("stamp_tax", TaxStatus.NEEDS_EVIDENCE, gaps=(
+                FactGap("activity.shared", "missing_fact", "boolean", (), 80, True),
+            )),
+        )
+        prompt = FactPrompt(
+            "activity.shared", "是否发生相关交易？", "请按实际业务回答。", "boolean",
+            (PromptChoice(True, "是"), PromptChoice(False, "否")), "请提供合同或发票。",
+        )
+
+        question = build_question_queue(results, {"activity.shared": prompt})[0]
+
+        self.assertEqual(question.tax_ids, ("deed_tax", "stamp_tax"))
+        self.assertEqual(question.question_zh, prompt.question_zh)
+        self.assertEqual(question.help_zh, prompt.help_zh)
+        self.assertEqual(question.evidence_help_zh, prompt.evidence_help_zh)
+        self.assertEqual(question.choices, prompt.choices)
+
+    def test_formal_question_requires_prompt(self) -> None:
+        result = TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",), gaps=(
+            FactGap("activity.shared", "missing_fact", "choice", (), 70, False),
+        ))
+        with self.assertRaisesRegex(ValueError, "^missing_fact_prompt$"):
+            build_question_queue((result,), {})
+
+    def test_question_prompt_answer_type_must_match_gap(self) -> None:
+        result = TaxResult("deed_tax", TaxStatus.NEEDS_EVIDENCE, ("deed-tax-cn-2026-screening",), gaps=(
+            FactGap("activity.shared", "missing_fact", "choice", (), 70, False),
+        ))
+        prompt = FactPrompt(
+            "activity.shared", "问题", "帮助", "boolean",
+            (PromptChoice(True, "是"), PromptChoice(False, "否")), "证据",
+        )
+        with self.assertRaisesRegex(ValueError, "^incompatible_prompt_answer_type$"):
+            build_question_queue((result,), {"activity.shared": prompt})
+
     def test_question_queue_merges_same_fact_key_deterministically(self) -> None:
         results = (
             TaxResult("vat", TaxStatus.NEEDS_EVIDENCE, gaps=(

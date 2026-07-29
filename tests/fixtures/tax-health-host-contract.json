@@ -1,0 +1,5 @@
+{
+  "request": {"period": {"start": "2023-01-01", "end": "2026-12-31"}, "jurisdiction": "CN"},
+  "confirmation": {"fact_key": "activity.has_vat_taxable_transaction", "value": false, "confirmed_by": "customer", "confirmed_at": "2026-07-28T10:00:00+08:00"},
+  "expected": {"status": "not_applicable", "status_label_zh": "经资料确认不适用", "revision": 2, "rerun_tax_ids": ["vat"]}
+}

@@ -2,17 +2,23 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import stat
 import subprocess
 import tarfile
+import tomllib
+from datetime import date
 from pathlib import Path
 import sys
+from urllib.parse import urlparse
 import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 SKILL_PUBLIC_LIMIT_BYTES = 250 * 1024
 PUBLIC_RELEASE_LIMIT_BYTES = 5 * 1024 * 1024
 DISTRIBUTION_FILE_LIMIT_BYTES = 1 * 1024 * 1024
@@ -111,6 +117,15 @@ ALLOWED_BINARY_FIXTURES = {
         5632,
     ),
 }
+OFFICIAL_SOURCE_SUFFIXES = (
+    "gov.cn",
+    "npc.gov.cn",
+    "mof.gov.cn",
+    "chinatax.gov.cn",
+    "customs.gov.cn",
+)
+FORMAL_PERIOD_START = date(2023, 1, 1)
+FORMAL_PERIOD_END = date(2026, 12, 31)
 
 
 def _configure_utf8_output() -> None:
@@ -307,6 +322,97 @@ def sensitive_category(content: str) -> str | None:
     return min(candidates, key=lambda candidate: candidate[0])[1]
 
 
+def _official_url(url: object) -> bool:
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return False
+    host = (urlparse(url).hostname or "").casefold().rstrip(".")
+    return any(host == suffix or host.endswith("." + suffix) for suffix in OFFICIAL_SOURCE_SUFFIXES)
+
+
+def validate_pack_release_surface(root: Path) -> str | None:
+    """Validate packaged tax manifests and catalog without leaking file details."""
+    pack_root = root / "src" / "open_tax_check" / "tax_packs"
+    if not pack_root.is_dir():
+        return None
+    try:
+        from open_tax_check.tax_prompts import validate_fact_catalog_payload
+        from open_tax_check.tax_registry import TAX_DEFINITIONS, select_pack_segments, validate_pack_payload
+        from open_tax_check.tax_models import DateRange, PackMaturity
+    except Exception:
+        return "tax_pack_release_invalid:runtime_contract_unavailable"
+
+    manifests = sorted(path for path in pack_root.glob("*.json") if not path.name.startswith("fact-catalog"))
+    catalogs = sorted(pack_root.glob("fact-catalog*.json"))
+    if len(catalogs) != 1:
+        return "tax_pack_release_invalid:fact_catalog_count"
+    try:
+        catalog_payload = json.loads(catalogs[0].read_text(encoding="utf-8"))
+        catalog = validate_fact_catalog_payload(catalog_payload)
+    except Exception:
+        return "tax_pack_release_invalid:invalid_fact_catalog"
+    formal_packs = []
+    for manifest in manifests:
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            pack = validate_pack_payload(payload)
+        except Exception:
+            return "tax_pack_release_invalid:invalid_pack_manifest"
+        if pack.maturity is PackMaturity.SCREENING:
+            for requirement in pack.requirements:
+                prompt = catalog.get(requirement.fact_key)
+                if prompt is None:
+                    return "tax_pack_release_invalid:missing_fact_prompt"
+                if prompt.answer_type != requirement.answer_type:
+                    return "tax_pack_release_invalid:prompt_type_conflict"
+            if any(not _official_url(source.url) for source in pack.sources):
+                return "tax_pack_release_invalid:non_official_source"
+            if any(
+                not source.issuer
+                or not source.document_number
+                or not source.article_refs
+                or source.verified_on is None
+                for source in pack.sources
+            ):
+                return "tax_pack_release_invalid:incomplete_source_metadata"
+            formal_packs.append(pack)
+    expected_tax_ids = {item.tax_id for item in TAX_DEFINITIONS}
+    actual_tax_ids = {pack.tax_id for pack in formal_packs}
+    if actual_tax_ids != expected_tax_ids:
+        return "tax_pack_release_invalid:formal_tax_id_coverage"
+    period = DateRange(FORMAL_PERIOD_START, FORMAL_PERIOD_END)
+    for tax_id in expected_tax_ids:
+        try:
+            selection = select_pack_segments(tuple(formal_packs), tax_id=tax_id, jurisdiction="CN", period=period)
+        except Exception:
+            return "tax_pack_release_invalid:period_overlap"
+        if selection.uncovered_periods:
+            return "tax_pack_release_invalid:period_gap"
+    try:
+        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        package_data = pyproject.get("tool", {}).get("setuptools", {}).get("package-data", {})
+    except Exception:
+        return "tax_pack_release_invalid:package_data_contract"
+    patterns = package_data.get("open_tax_check.tax_packs", ())
+    if "*.json" not in patterns:
+        return "tax_pack_release_invalid:package_data_contract"
+    return None
+
+
+def expected_package_data_members(root: Path, *, sdist: bool) -> tuple[str, ...]:
+    package_root = root / "src" / "open_tax_check" / "tax_packs"
+    if not package_root.is_dir():
+        return ()
+    prefix = (
+        "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+        if sdist
+        else "open_tax_check/tax_packs/"
+    )
+    return tuple(
+        prefix + path.name
+        for path in sorted(package_root.glob("*.json"), key=lambda item: item.name)
+    )
+
+
 def main() -> int:
     _configure_utf8_output()
     parser = argparse.ArgumentParser()
@@ -339,6 +445,10 @@ def main() -> int:
     missing = [name for name in REQUIRED if Path(name) not in candidate_set]
     if missing:
         print("missing required files:", ", ".join(missing))
+        return 1
+    pack_error = validate_pack_release_surface(ROOT)
+    if pack_error is not None:
+        print(pack_error)
         return 1
     skill_size = skill_public_content_size(ROOT, candidates)
     public_size = public_content_size(ROOT, candidates)
@@ -376,9 +486,9 @@ def main() -> int:
                 f"sdists={len(sdists)})"
             )
             return 1
-        for artifact, required_member in (
-            (wheels[0], REQUIRED_WHEEL_MEMBER),
-            (sdists[0], REQUIRED_SDIST_MEMBER),
+        for artifact, required_member, sdist in (
+            (wheels[0], REQUIRED_WHEEL_MEMBER, False),
+            (sdists[0], REQUIRED_SDIST_MEMBER, True),
         ):
             member_names = distribution_member_names(artifact)
             if member_names is None:
@@ -386,6 +496,10 @@ def main() -> int:
                 return 1
             if required_member not in member_names:
                 print(f"missing required package data: {required_member}")
+                return 1
+            expected_members = expected_package_data_members(ROOT, sdist=sdist)
+            if expected_members and not set(expected_members).issubset(member_names):
+                print("missing required package data: tax_pack_bundle")
                 return 1
     measured_artifacts = []
     for artifact in artifacts:

@@ -6,9 +6,31 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from .tax_models import Confirmation, TaxCheckRequest, TaxCheckSnapshot, TaxPack
-from .tax_registry import load_builtin_tax_packs
-from .tax_screening import RuleEvaluator
+from .tax_prompts import load_builtin_fact_catalog
+from .tax_registry import load_builtin_tax_pack_bundle
+from .tax_screening import (
+    RuleEvaluator,
+    builtin_tax_evaluators,
+)
 from .tax_workflow import apply_confirmations, start_tax_health_check
+
+
+def _resolved_evaluators(
+    packs: tuple[TaxPack, ...] | None,
+    evaluators: Mapping[str, RuleEvaluator] | None,
+) -> Mapping[str, RuleEvaluator]:
+    if evaluators is not None:
+        return evaluators
+    if packs is None:
+        return builtin_tax_evaluators()
+    return {}
+
+
+def _builtin_prompts():
+    try:
+        return load_builtin_fact_catalog()
+    except Exception as error:
+        raise ValueError("invalid_fact_catalog") from error
 
 
 def run_tax_health_check(
@@ -19,10 +41,13 @@ def run_tax_health_check(
     occurred_at: str | None = None,
 ) -> TaxCheckSnapshot:
     """Start a deterministic check without requiring an Agent or model provider."""
+    bundle = load_builtin_tax_pack_bundle() if packs is None else None
     return start_tax_health_check(
         request,
-        packs=load_builtin_tax_packs() if packs is None else tuple(packs),
-        evaluators={} if evaluators is None else evaluators,
+        packs=bundle.packs if bundle is not None else tuple(packs),
+        evaluators=_resolved_evaluators(packs, evaluators),
+        prompts=_builtin_prompts() if packs is None else {},
+        unavailable_tax_ids=frozenset(issue.tax_id for issue in bundle.issues) if bundle is not None else frozenset(),
         occurred_at=datetime.now(timezone.utc).isoformat() if occurred_at is None else occurred_at,
     )
 
@@ -35,9 +60,12 @@ def continue_tax_health_check(
     evaluators: Mapping[str, RuleEvaluator] | None = None,
 ) -> TaxCheckSnapshot:
     """Apply customer confirmations using the supplied or bundled formal packs."""
+    bundle = load_builtin_tax_pack_bundle() if packs is None else None
     return apply_confirmations(
         snapshot,
         tuple(confirmations),
-        packs=load_builtin_tax_packs() if packs is None else tuple(packs),
-        evaluators={} if evaluators is None else evaluators,
+        packs=bundle.packs if bundle is not None else tuple(packs),
+        evaluators=_resolved_evaluators(packs, evaluators),
+        prompts=_builtin_prompts() if packs is None else {},
+        unavailable_tax_ids=frozenset(issue.tax_id for issue in bundle.issues) if bundle is not None else frozenset(),
     )
