@@ -300,8 +300,8 @@ def _docx_parts(markdown: str) -> dict[str, str]:
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
 <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:pPr><w:spacing w:before="0" w:after="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="40"/><w:color w:val="0B2545"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:pPr><w:spacing w:before="320" w:after="120"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="32"/><w:color w:val="2E74B5"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:pPr><w:spacing w:before="280" w:after="100"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="26"/><w:color w:val="2E74B5"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Heading 3"/><w:pPr><w:spacing w:before="240" w:after="80"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="24"/><w:color w:val="1F4D78"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="280" w:after="100"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="26"/><w:color w:val="2E74B5"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Heading 3"/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="240" w:after="80"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="24"/><w:color w:val="1F4D78"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:pPr><w:ind w:left="720" w:hanging="360"/><w:spacing w:after="80"/></w:pPr></w:style>
 </w:styles>'''
     numbering = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -343,15 +343,19 @@ def write_tax_health_report_pdf(snapshot: TaxCheckSnapshot, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="open-tax-check-pdf-") as directory:
         temporary_dir = Path(directory)
-        docx_path = temporary_dir / "税务健康检查报告.docx"
+        docx_path = temporary_dir / "tax-health-report.docx"
         write_tax_health_report_docx(snapshot, docx_path)
-        completed = subprocess.run(
-            [renderer, "--headless", "--convert-to", "pdf", "--outdir", str(temporary_dir), str(docx_path)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        rendered_path = temporary_dir / "税务健康检查报告.pdf"
+        try:
+            completed = subprocess.run(
+                [renderer, "--headless", "--convert-to", "pdf", "--outdir", str(temporary_dir), str(docx_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise PdfExportUnavailable("pdf_render_timeout") from error
+        rendered_path = temporary_dir / "tax-health-report.pdf"
         if completed.returncode != 0 or not rendered_path.is_file():
             raise PdfExportUnavailable("pdf_render_failed")
         temporary_path: Path | None = None
