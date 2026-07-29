@@ -83,12 +83,14 @@ def _result_lines(result: TaxResult) -> list[str]:
         else:
             lines.append("- 需要补充与该事项相关的资料")
     for source in result.rule_sources:
-        lines.append(f"- 适用规则来源: [{source.title}]({source.url})（{source.published_on.isoformat()}）")
+        lines.append(f"- 适用规则来源: [{source.title}]({source.url})（发布于 {source.published_on.isoformat()}）")
     return lines
 
 
 def _question_lines(question: Question) -> list[str]:
-    tax_names = {definition.tax_id: definition.name_zh for definition in TAX_DEFINITIONS}
+    tax_names = {
+        definition.tax_id: definition.name_zh for definition in TAX_DEFINITIONS
+    }
     lines = [
         f"### {question.question_zh or '请补充相关资料'}",
         f"- 涉及税种: {', '.join(tax_names.get(tax_id, '相关税种') for tax_id in question.tax_ids)}",

@@ -182,6 +182,9 @@ class TaxHealthFacadeTests(unittest.TestCase):
             {"event_type", "tax_ids", "fact_keys", "confirmation_digest"},
         )
         self.assertIn("active-question", serialized)
+        self.assertIn("question_zh", payload["questions"][0])
+        self.assertIn("help_zh", payload["questions"][0])
+        self.assertIn("evidence_help_zh", payload["questions"][0])
         self.assertIn("safe-confirmation-digest", serialized)
         for prohibited in (
             "facts", "question_history", "hostile-confirmation-value",
