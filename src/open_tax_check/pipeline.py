@@ -1974,6 +1974,20 @@ def _structured_coverage(
 
 def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
     statements, tax_returns, loader_issues = load_case_structured_documents(context.case_dir)
+    source_root = context.case_dir / "work" / "structured-documents"
+    preserved_root = context.work_dir / "structured-documents"
+    preserved_root.mkdir(parents=True, exist_ok=True)
+    try:
+        for entry in sorted(source_root.iterdir(), key=lambda path: path.name.casefold()):
+            if entry.suffix.casefold() != ".json":
+                continue
+            try:
+                safe_entry = resolve_safe_source(entry, source_root)
+                _atomic_write_bytes(preserved_root / entry.name, safe_entry.read_bytes())
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
     result = reconcile_structured_documents(statements, tax_returns)
     if loader_issues:
         result = DocumentReconciliationResult(

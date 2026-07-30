@@ -61,6 +61,12 @@ class StructuredPipelineTests(unittest.TestCase):
         self.assertTrue((case / "work" / "structured-reconciliation.json").is_file())
         self.assertFalse((case / "output" / "findings.json").exists())
 
+        second_code, second_result = run_case(case, "off")
+
+        self.assertEqual(second_code, 0)
+        self.assertEqual(second_result["status"], "partial_scope_ready")
+        self.assertTrue((case / "work" / "structured-documents" / "bs.financial-statement.json").is_file())
+
     def test_unbalanced_imported_contract_blocks_without_normal_output(self):
         case = self.root / "unbalanced"
         init_case(case, "瀹屽叏铏氭瀯绉戞妧鏈夐檺鍏徃", "2026-01-01", "2026-12-31")

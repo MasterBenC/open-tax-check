@@ -138,6 +138,23 @@ def test_income_statement_and_cash_flow_mismatches_are_blocking():
     assert {issue.code for issue in result.issues} >= {"income_statement_unbalanced", "cash_flow_unbalanced"}
 
 
+def test_missing_cash_flow_control_total_is_blocking():
+    statements, returns = _balanced_documents()
+    statements = (
+        replace(statements[0], totals=(("assets", "1000.00"), ("liabilities_and_equity", "1000.00"))),
+        *statements[1:],
+    )
+
+    result = reconcile_structured_documents(statements, returns)
+
+    assert any(issue.code == "missing_statement_total" for issue in result.issues)
+
+    statements, returns = _balanced_documents()
+    statements = (*statements[:2], replace(statements[2], totals=()))
+    result = reconcile_structured_documents(statements, returns)
+    assert any(issue.code == "missing_statement_total" for issue in result.issues)
+
+
 def test_period_mismatch_blocks_before_cross_document_checks():
     statements, returns = _balanced_documents()
     returns = (_tax(period=("2026-01-01", "2026-06-30")),)

@@ -157,7 +157,11 @@ def _cash_flow_checks(
             bs_totals = _statement_totals(balance_sheet)
             cf_totals = _statement_totals(cash_flow)
             if "cash" not in bs_totals or "ending_cash" not in cf_totals:
-                missing = tuple(key for key in ("cash", "ending_cash") if key not in (bs_totals | cf_totals))
+                missing = tuple(
+                    key
+                    for key, totals in (("cash", bs_totals), ("ending_cash", cf_totals))
+                    if key not in totals
+                )
                 issues.append(_issue("missing_statement_total", balance_sheet, cash_flow, line_codes=missing))
                 checks.append({"check": "cash_flow_identity", "status": "blocked"})
                 continue
