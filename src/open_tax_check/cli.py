@@ -9,7 +9,7 @@ import re
 import sys
 import tempfile
 
-from .case import init_case, set_case_scope
+from .case import init_case, resolve_safe_case_path, set_case_scope
 from .agent_orchestration import evidence_bundle_delivery_payload
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
 from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSource
@@ -115,8 +115,10 @@ def _structured_case_source(case_dir: Path, source_id: str) -> StructuredDocumen
     if _SOURCE_ID.fullmatch(source_id) is None:
         raise ValueError("invalid_source")
     try:
+        case_dir = resolve_safe_case_path(case_dir)
+        manifest_path = resolve_safe_source(case_dir / "work" / "input_manifest.json", case_dir / "work")
         state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
-        manifest = json.loads((case_dir / "work" / "input_manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         item = next(item for item in manifest["sources"] if item.get("source_id") == source_id)
         filename = Path(item["filename"])
         review_period = state["review_period"]
@@ -413,7 +415,7 @@ def main() -> int:
                 if args.kind == "financial-statement"
                 else tax_return_to_dict(value)
             )
-            target = args.case / "work" / "structured-documents" / f"{args.source}.{args.kind}.json"
+            target = source.input_root.parent / "work" / "structured-documents" / f"{args.source}.{args.kind}.json"
             _write_json_atomic(target, serialized)
         except StructuredDocumentImportError as error:
             print(json.dumps({"status": "failed", "error_code": error.code}, ensure_ascii=False))
