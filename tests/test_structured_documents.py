@@ -4,8 +4,11 @@ import pytest
 
 from open_tax_check.structured_documents import (
     FinancialStatement,
+    TaxReturn,
     financial_statement_from_dict,
     financial_statement_to_dict,
+    tax_return_from_dict,
+    tax_return_to_dict,
 )
 
 
@@ -146,3 +149,69 @@ def test_financial_statement_rejects_source_anchor_budget_overflow():
 
     with pytest.raises(ValueError, match="^invalid_structured_document$"):
         financial_statement_from_dict(payload)
+
+
+def tax_return_payload():
+    return {
+        "schema_version": "tax-return/v1",
+        "return_id": "vat-2026-01",
+        "source_id": "host-untrusted",
+        "entity_name": "\u5b8c\u5168\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8",
+        "tax_id": "vat",
+        "return_type": "monthly_return",
+        "period_start": "2026-01-01",
+        "period_end": "2026-01-31",
+        "filing_status": "filed",
+        "filed_at": "2026-02-10T09:00:00+08:00",
+        "currency": "CNY",
+        "unit_multiplier": "1",
+        "lines": [{
+            "form_code": "VAT-MAIN",
+            "line_number": "1",
+            "original_name": "\u6309\u9002\u7528\u7a0e\u7387\u8ba1\u7a0e\u9500\u552e\u989d",
+            "fact_key": "vat.taxable_sales",
+            "value": "1000.00",
+            "value_type": "decimal",
+            "source_anchor": {
+                "source_id": "host-untrusted",
+                "page_number": 1,
+                "sheet_name": None,
+                "cell": None,
+                "coordinates": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.2], [0.1, 0.2]],
+            },
+            "confidence_source": "host_ai",
+            "confirmation_state": "proposed",
+        }],
+        "totals": {"tax_payable": "130.00"},
+        "issues": [],
+    }
+
+
+def test_tax_return_v1_round_trips_exactly():
+    value = tax_return_from_dict(tax_return_payload())
+
+    assert isinstance(value, TaxReturn)
+    assert tax_return_to_dict(value) == tax_return_payload()
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda value: value.update(extra=True),
+    lambda value: value.update(tax_id="unknown"),
+    lambda value: value.update(period_start="2026-02-01"),
+    lambda value: value.update(filed_at="2026-02-10T09:00:00"),
+    lambda value: value.update(filing_status="accepted"),
+    lambda value: value["lines"][0].update(value=1000.0),
+    lambda value: value["lines"][0].update(fact_key="invalid fact key"),
+    lambda value: value["lines"].append(deepcopy(value["lines"][0])),
+    lambda value: value["lines"].append({
+        **deepcopy(value["lines"][0]), "form_code": "VAT-OTHER", "line_number": "2",
+    }),
+    lambda value: value["lines"][0].update(confirmation_state="confirmed"),
+    lambda value: value["lines"].__imul__(10_001),
+])
+def test_tax_return_rejects_non_contract_payloads(mutate):
+    payload = deepcopy(tax_return_payload())
+    mutate(payload)
+
+    with pytest.raises(ValueError, match="^invalid_structured_document$"):
+        tax_return_from_dict(payload)

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import json
 import re
 
 from .numeric import parse_decimal
+from .tax_registry import TAX_DEFINITIONS
 
 
 _ERROR_CODE = "invalid_structured_document"
@@ -24,9 +25,22 @@ _LINE_KEYS = {
 }
 _ANCHOR_KEYS = {"source_id", "page_number", "sheet_name", "cell", "coordinates"}
 _ISSUE_KEYS = {"code", "severity", "message_zh", "line_code", "source_anchor"}
+_TAX_RETURN_KEYS = {
+    "schema_version", "return_id", "source_id", "entity_name", "tax_id",
+    "return_type", "period_start", "period_end", "filing_status", "filed_at",
+    "currency", "unit_multiplier", "lines", "totals", "issues",
+}
+_TAX_RETURN_LINE_KEYS = {
+    "form_code", "line_number", "original_name", "fact_key", "value", "value_type",
+    "source_anchor", "confidence_source", "confirmation_state",
+}
 _STATEMENT_TYPES = {"balance_sheet", "income_statement", "cash_flow_statement"}
 _CONFIDENCE_SOURCES = {"template", "host_ai", "customer", "native"}
 _CONFIRMATION_STATES = {"proposed", "confirmed", "rejected"}
+_FILING_STATUSES = {"draft", "filed", "amended", "unknown"}
+_VALUE_TYPES = {"decimal", "text", "choice", "boolean", "empty"}
+_FACT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
+_TAX_IDS = frozenset(item.tax_id for item in TAX_DEFINITIONS)
 
 _MAX_LINES = 10_000
 _MAX_ISSUES = 1_000
@@ -77,6 +91,38 @@ class FinancialStatement:
     currency: str
     unit_multiplier: str
     lines: tuple[FinancialStatementLine, ...]
+    totals: tuple[tuple[str, str], ...]
+    issues: tuple[StructuredIssue, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TaxReturnLine:
+    form_code: str
+    line_number: str
+    original_name: str
+    fact_key: str | None
+    value: str | bool | None
+    value_type: str
+    source_anchor: SourceAnchor
+    confidence_source: str
+    confirmation_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaxReturn:
+    schema_version: str
+    return_id: str
+    source_id: str
+    entity_name: str
+    tax_id: str
+    return_type: str
+    period_start: str
+    period_end: str
+    filing_status: str
+    filed_at: str | None
+    currency: str
+    unit_multiplier: str
+    lines: tuple[TaxReturnLine, ...]
     totals: tuple[tuple[str, str], ...]
     issues: tuple[StructuredIssue, ...]
 
@@ -220,6 +266,67 @@ def _issue(value: object) -> StructuredIssue:
     )
 
 
+def _fact_key(value: object) -> str | None:
+    if value is None:
+        return None
+    text = _text(value)
+    if _FACT_KEY_PATTERN.fullmatch(text) is None:
+        raise _invalid()
+    return text
+
+
+def _tax_return_value(value: object, value_type: str) -> str | bool | None:
+    if value_type == "decimal":
+        return _amount(value)
+    if value_type in {"text", "choice"}:
+        return _text(value)
+    if value_type == "boolean":
+        if not isinstance(value, bool):
+            raise _invalid()
+        return value
+    if value is not None:
+        raise _invalid()
+    return None
+
+
+def _tax_return_line(value: object) -> TaxReturnLine:
+    payload = _mapping(value, _TAX_RETURN_LINE_KEYS)
+    confidence_source = _text(payload["confidence_source"])
+    confirmation_state = _text(payload["confirmation_state"])
+    value_type = _text(payload["value_type"])
+    if (
+        confidence_source not in _CONFIDENCE_SOURCES
+        or confirmation_state not in _CONFIRMATION_STATES
+        or value_type not in _VALUE_TYPES
+        or (confidence_source == "host_ai" and confirmation_state == "confirmed")
+    ):
+        raise _invalid()
+    return TaxReturnLine(
+        form_code=_text(payload["form_code"]),
+        line_number=_text(payload["line_number"]),
+        original_name=_text(payload["original_name"]),
+        fact_key=_fact_key(payload["fact_key"]),
+        value=_tax_return_value(payload["value"], value_type),
+        value_type=value_type,
+        source_anchor=_source_anchor(payload["source_anchor"]),
+        confidence_source=confidence_source,
+        confirmation_state=confirmation_state,
+    )
+
+
+def _filed_at(value: object) -> str | None:
+    if value is None:
+        return None
+    text = _text(value)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        raise _invalid() from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise _invalid()
+    return text
+
+
 def financial_statement_from_dict(payload: Mapping[str, object]) -> FinancialStatement:
     """Validate a financial-statement/v1 JSON payload without trusting its data."""
 
@@ -276,6 +383,74 @@ def financial_statement_from_dict(payload: Mapping[str, object]) -> FinancialSta
         raise _invalid() from None
 
 
+def tax_return_from_dict(payload: Mapping[str, object]) -> TaxReturn:
+    """Validate a tax-return/v1 JSON payload without trusting its data."""
+
+    try:
+        _validate_json_size(payload)
+        document = _mapping(payload, _TAX_RETURN_KEYS)
+        if document["schema_version"] != "tax-return/v1":
+            raise _invalid()
+        tax_id = _text(document["tax_id"])
+        filing_status = _text(document["filing_status"])
+        if tax_id not in _TAX_IDS or filing_status not in _FILING_STATUSES:
+            raise _invalid()
+        if (
+            document["currency"] != "CNY"
+            or not isinstance(document["unit_multiplier"], str)
+            or document["unit_multiplier"] not in {"1", "1000", "10000"}
+        ):
+            raise _invalid()
+        lines_value = document["lines"]
+        issues_value = document["issues"]
+        if not isinstance(lines_value, list) or len(lines_value) > _MAX_LINES:
+            raise _invalid()
+        if not isinstance(issues_value, list) or len(issues_value) > _MAX_ISSUES:
+            raise _invalid()
+        lines = tuple(_tax_return_line(item) for item in lines_value)
+        issues = tuple(_issue(item) for item in issues_value)
+        if len(lines) + sum(issue.source_anchor is not None for issue in issues) > _MAX_SOURCE_ANCHORS:
+            raise _invalid()
+        line_numbers = {(line.form_code, line.line_number) for line in lines}
+        fact_keys = {line.fact_key for line in lines if line.fact_key is not None}
+        if len(line_numbers) != len(lines) or len(fact_keys) != sum(
+            line.fact_key is not None for line in lines
+        ):
+            raise _invalid()
+        totals_value = document["totals"]
+        if not isinstance(totals_value, Mapping):
+            raise _invalid()
+        totals = tuple(sorted((_text(key), _amount(amount)) for key, amount in totals_value.items()))
+        period_start = _date(document["period_start"])
+        period_end = _date(document["period_end"])
+        if date.fromisoformat(period_start) > date.fromisoformat(period_end):
+            raise _invalid()
+        filed_at = _filed_at(document["filed_at"])
+        if filing_status in {"filed", "amended"} and filed_at is None:
+            raise _invalid()
+        return TaxReturn(
+            schema_version="tax-return/v1",
+            return_id=_text(document["return_id"]),
+            source_id=_text(document["source_id"]),
+            entity_name=_text(document["entity_name"]),
+            tax_id=tax_id,
+            return_type=_text(document["return_type"]),
+            period_start=period_start,
+            period_end=period_end,
+            filing_status=filing_status,
+            filed_at=filed_at,
+            currency="CNY",
+            unit_multiplier=document["unit_multiplier"],
+            lines=lines,
+            totals=totals,
+            issues=issues,
+        )
+    except ValueError as exc:
+        if str(exc) == _ERROR_CODE:
+            raise
+        raise _invalid() from None
+
+
 def _anchor_to_dict(value: SourceAnchor) -> dict[str, object]:
     return {
         "source_id": value.source_id,
@@ -309,6 +484,52 @@ def financial_statement_to_dict(value: FinancialStatement) -> dict[str, object]:
                 "standard_name": line.standard_name,
                 "current_amount": line.current_amount,
                 "prior_amount": line.prior_amount,
+                "source_anchor": _anchor_to_dict(line.source_anchor),
+                "confidence_source": line.confidence_source,
+                "confirmation_state": line.confirmation_state,
+            }
+            for line in value.lines
+        ],
+        "totals": dict(value.totals),
+        "issues": [
+            {
+                "code": issue.code,
+                "severity": issue.severity,
+                "message_zh": issue.message_zh,
+                "line_code": issue.line_code,
+                "source_anchor": None if issue.source_anchor is None else _anchor_to_dict(issue.source_anchor),
+            }
+            for issue in value.issues
+        ],
+    }
+
+
+def tax_return_to_dict(value: TaxReturn) -> dict[str, object]:
+    """Serialize a validated tax return into its JSON contract shape."""
+
+    if not isinstance(value, TaxReturn):
+        raise TypeError("expected TaxReturn")
+    return {
+        "schema_version": value.schema_version,
+        "return_id": value.return_id,
+        "source_id": value.source_id,
+        "entity_name": value.entity_name,
+        "tax_id": value.tax_id,
+        "return_type": value.return_type,
+        "period_start": value.period_start,
+        "period_end": value.period_end,
+        "filing_status": value.filing_status,
+        "filed_at": value.filed_at,
+        "currency": value.currency,
+        "unit_multiplier": value.unit_multiplier,
+        "lines": [
+            {
+                "form_code": line.form_code,
+                "line_number": line.line_number,
+                "original_name": line.original_name,
+                "fact_key": line.fact_key,
+                "value": line.value,
+                "value_type": line.value_type,
                 "source_anchor": _anchor_to_dict(line.source_anchor),
                 "confidence_source": line.confidence_source,
                 "confirmation_state": line.confirmation_state,
