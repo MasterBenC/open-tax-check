@@ -2,6 +2,7 @@ import json
 import hashlib
 import os
 from pathlib import Path
+import shutil
 from zipfile import ZipFile
 import pytest
 
@@ -115,6 +116,75 @@ def test_tax_health_check_cli_builds_verified_bundle_without_originals_by_defaul
         assert "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.docx" in archive.namelist()
         assert "tax-health-snapshot.json" in archive.namelist()
         assert not any(name.startswith("evidence/") for name in archive.namelist())
+
+
+def test_real_fictional_case_builds_a_reopenable_bundle_with_verified_original(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    fixture = Path(
+        "tests/fixtures/evidence_bundle/confirmed-vat-summary.txt"
+    ).resolve()
+    evidence_root = tmp_path / "customer-evidence"
+    evidence_root.mkdir()
+    copied = evidence_root / fixture.name
+    shutil.copyfile(fixture, copied)
+    digest = hashlib.sha256(copied.read_bytes()).hexdigest()
+    manifest_path = tmp_path / "evidence-manifest.json"
+    manifest_path.write_text(json.dumps({
+        "schema_version": "tax-evidence-manifest/v1",
+        "items": [{
+            "source_id": "vat-return-2026-01",
+            "relative_path": fixture.name,
+            "sha256": digest,
+            "media_type": "text/plain",
+        }],
+    }), encoding="utf-8")
+    request_path = write_request(tmp_path, facts=({
+        "key": "case.confirmed_vat_summary",
+        "value": "provided",
+        "state": "confirmed",
+        "evidence_refs": ["vat-return-2026-01"],
+        "confirmed_by": "customer",
+        "confirmed_at": "2026-02-01T00:00:00+08:00",
+    },))
+    output_dir = tmp_path / "output"
+    invoke_tax_health_check(
+        monkeypatch,
+        request_path,
+        output_dir,
+        "--evidence-manifest", str(manifest_path),
+        "--evidence-root", str(evidence_root),
+        "--include-evidence-files",
+        "--include-docx",
+    )
+
+    assert cli.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    bundle_path = Path(result["evidence_bundle_path"])
+    assert (
+        hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+        == result["evidence_bundle_sha256"]
+    )
+    with ZipFile(bundle_path) as archive:
+        assert archive.testzip() is None
+        manifest = json.loads(archive.read("bundle-manifest.json"))
+        evidence_item = manifest["evidence_items"][0]
+        assert evidence_item["source_id"] == "vat-return-2026-01"
+        assert evidence_item["sha256"] == digest
+        assert (
+            hashlib.sha256(archive.read(evidence_item["bundle_path"])).hexdigest()
+            == digest
+        )
+        assert any(
+            item["kind"] == "markdown_report"
+            for item in manifest["artifacts"]
+        )
+        assert any(
+            item["kind"] == "docx_report"
+            for item in manifest["artifacts"]
+        )
 
 
 @pytest.mark.parametrize("expected_code", [

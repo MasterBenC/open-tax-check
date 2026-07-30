@@ -1,0 +1,5 @@
+Fictional VAT return summary
+Period: 2026-01
+Taxable base: CNY 1000.00
+Applicable rate: 13%
+This file contains fictional data for OpenTaxCheck tests only.
