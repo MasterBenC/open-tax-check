@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 from importlib.resources import files
 import re
+from urllib.parse import urlsplit
 
 from .tax_models import (
     DateRange,
@@ -133,7 +134,18 @@ def _parse_source(value: object, *, schema_version: str) -> RuleSource:
         raise TaxPackError("invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0", "1.4.0"} else "invalid_source")
     metadata_code = "invalid_source_metadata" if schema_version in {"1.1.0", "1.2.0", "1.3.0", "1.4.0"} else "invalid_source_url"
     url = _required_string(value["url"], metadata_code)
-    if not url.startswith("https://"):
+    try:
+        parsed_url = urlsplit(url)
+    except ValueError as error:
+        raise TaxPackError(metadata_code) from error
+    if (
+        parsed_url.scheme != "https"
+        or not parsed_url.netloc
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
         raise TaxPackError(metadata_code)
     if schema_version == "1.0.0":
         return RuleSource(_required_string(value["title"], "invalid_source"), url, _parse_date(value["published_on"], "invalid_source_date"))

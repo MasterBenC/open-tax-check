@@ -77,6 +77,22 @@ def test_tax_health_check_cli_keeps_null_bundle_fields_when_not_enabled(monkeypa
     assert result["includes_evidence_files"] is False
 
 
+def test_tax_health_check_cli_uses_shared_delivery_payload(monkeypatch, tmp_path, capsys):
+    request_path = write_request(tmp_path)
+    invoke_tax_health_check(monkeypatch, request_path, tmp_path / "output")
+    sentinel = {
+        "evidence_bundle_status": "shared-helper",
+        "evidence_bundle_path": "sentinel-path",
+        "evidence_bundle_sha256": "sentinel-sha256",
+        "includes_evidence_files": True,
+    }
+    monkeypatch.setattr(cli, "evidence_bundle_delivery_payload", lambda bundle: sentinel)
+
+    assert cli.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert {key: result[key] for key in sentinel} == sentinel
+
+
 @pytest.mark.parametrize("extra_args", [
     ["--evidence-manifest", "manifest.json"],
     ["--evidence-root", "evidence"],

@@ -624,6 +624,9 @@ class TaxRegistryTests(unittest.TestCase):
             (payload(effective_from="2023-99-01"), "invalid_effective_from"),
             (payload(tax_id="unknown"), "unknown_tax_id"),
             (payload(sources=[{"title": "Bad", "url": "http://example.test", "published_on": "2023-01-01"}]), "invalid_source_url"),
+            (payload(sources=[{"title": "Bad", "url": "https://user:password@example.test/source", "published_on": "2023-01-01"}]), "invalid_source_url"),
+            (payload(sources=[{"title": "Bad", "url": "https://example.test/source?access_token=secret", "published_on": "2023-01-01"}]), "invalid_source_url"),
+            (payload(sources=[{"title": "Bad", "url": "https://example.test/source#secret", "published_on": "2023-01-01"}]), "invalid_source_url"),
             (payload(sources=[]), "missing_sources"),
             (payload(evaluator_id=None), "missing_evaluator_id"),
         ]
@@ -632,6 +635,19 @@ class TaxRegistryTests(unittest.TestCase):
                 with self.assertRaisesRegex(TaxPackError, f"^{expected_code}$") as raised:
                     validate_pack_payload(deepcopy(invalid_payload))
                 self.assertEqual(raised.exception.code, expected_code)
+
+    def test_manifest_rejects_malformed_https_source_with_stable_error(self) -> None:
+        invalid_payload = payload(sources=[{
+            "title": "Bad",
+            "url": "https://[",
+            "published_on": "2023-01-01",
+        }])
+
+        try:
+            with self.assertRaisesRegex(TaxPackError, "^invalid_source_url$"):
+                validate_pack_payload(invalid_payload)
+        except ValueError as error:
+            self.fail(f"URL parser error leaked: {error}")
 
     def test_manifest_requires_exact_keys_and_local_parameters_must_be_requirements(self) -> None:
         with_extra = payload(unexpected=True)
