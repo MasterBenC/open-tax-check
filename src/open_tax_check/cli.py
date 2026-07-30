@@ -44,6 +44,7 @@ from .reviews import (
     confirm_mapping,
     confirm_sheet_selection,
 )
+from .source_paths import resolve_safe_source
 from .structured_document_providers import (
     StructuredDocumentImportError,
     StructuredDocumentSource,
@@ -98,7 +99,8 @@ def _write_json_atomic(path: Path, payload: object) -> None:
 
 def _read_structured_json(path: Path) -> dict[str, object]:
     try:
-        raw = path.read_bytes()
+        safe_path = resolve_safe_source(path, path.parent)
+        raw = safe_path.read_bytes()
         if len(raw) > _STRUCTURED_JSON_LIMIT:
             raise ValueError("invalid_structured_document")
         payload = json.loads(raw.decode("utf-8"))

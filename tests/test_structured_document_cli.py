@@ -61,6 +61,18 @@ def test_validate_structured_document_returns_stable_invalid_error(tmp_path, mon
     }
 
 
+def test_structured_document_cli_rejects_unsafe_payload_path(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "payload.json"
+    write_payload(path, financial_payload())
+    monkeypatch.setattr(cli, "resolve_safe_source", lambda path, root: (_ for _ in ()).throw(ValueError("unsafe_source_path")))
+
+    assert invoke(monkeypatch, "validate-structured-document", "--kind", "financial-statement", "--input", path) == 4
+    assert json.loads(capsys.readouterr().out) == {
+        "valid": False,
+        "error_code": "invalid_structured_document",
+    }
+
+
 def test_structured_document_cli_rejects_invalid_kind_and_missing_source(tmp_path, monkeypatch, capsys):
     payload_path = tmp_path / "payload.json"
     write_payload(payload_path, financial_payload())
