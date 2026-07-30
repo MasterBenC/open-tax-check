@@ -1,8 +1,12 @@
 import json
+import hashlib
 import os
+from pathlib import Path
+from zipfile import ZipFile
 import pytest
 
 from open_tax_check import cli
+from open_tax_check.evidence_bundle import EvidenceBundleError
 
 
 def request_payload():
@@ -11,6 +15,193 @@ def request_payload():
         "jurisdiction": "CN",
         "facts": [],
         "input_hashes": [],
+    }
+
+
+def write_request(tmp_path, *, facts=()):
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps({
+        **request_payload(),
+        "facts": list(facts),
+    }), encoding="utf-8")
+    return request_path
+
+
+def invoke_tax_health_check(monkeypatch, request_path, output_dir, *extra_args):
+    monkeypatch.setattr(cli.sys, "argv", [
+        "opentaxcheck",
+        "tax-health-check",
+        "--request", str(request_path),
+        "--output-dir", str(output_dir),
+        *extra_args,
+    ])
+
+
+def write_bound_evidence_case(tmp_path):
+    evidence_root = tmp_path / "customer-evidence"
+    evidence_root.mkdir()
+    source = evidence_root / "customer-document.txt"
+    source.write_text("fictional verified evidence\n", encoding="utf-8")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest_path = tmp_path / "evidence-manifest.json"
+    manifest_path.write_text(json.dumps({
+        "schema_version": "tax-evidence-manifest/v1",
+        "items": [{
+            "source_id": "customer-document",
+            "relative_path": source.name,
+            "sha256": digest,
+            "media_type": "text/plain",
+        }],
+    }), encoding="utf-8")
+    request_path = write_request(tmp_path, facts=({
+        "key": "case.confirmed_document",
+        "value": "provided",
+        "state": "confirmed",
+        "evidence_refs": ["customer-document"],
+        "confirmed_by": "customer",
+        "confirmed_at": "2026-01-02T00:00:00+08:00",
+    },))
+    return evidence_root, manifest_path, request_path
+
+
+def test_tax_health_check_cli_keeps_null_bundle_fields_when_not_enabled(monkeypatch, tmp_path, capsys):
+    request_path = write_request(tmp_path)
+    invoke_tax_health_check(monkeypatch, request_path, tmp_path / "output")
+
+    assert cli.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["evidence_bundle_status"] is None
+    assert result["evidence_bundle_path"] is None
+    assert result["evidence_bundle_sha256"] is None
+    assert result["includes_evidence_files"] is False
+
+
+@pytest.mark.parametrize("extra_args", [
+    ["--evidence-manifest", "manifest.json"],
+    ["--evidence-root", "evidence"],
+    ["--include-evidence-files"],
+])
+def test_tax_health_check_cli_requires_manifest_and_root_together(monkeypatch, tmp_path, capsys, extra_args):
+    request_path = write_request(tmp_path)
+    invoke_tax_health_check(monkeypatch, request_path, tmp_path / "output", *extra_args)
+
+    assert cli.main() == 4
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed",
+        "error_code": "invalid_evidence_manifest",
+    }
+
+
+def test_tax_health_check_cli_builds_verified_bundle_without_originals_by_default(monkeypatch, tmp_path, capsys):
+    evidence_root, manifest_path, request_path = write_bound_evidence_case(tmp_path)
+    output_dir = tmp_path / "output"
+    invoke_tax_health_check(
+        monkeypatch,
+        request_path,
+        output_dir,
+        "--evidence-manifest", str(manifest_path),
+        "--evidence-root", str(evidence_root),
+        "--include-docx",
+    )
+
+    assert cli.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    bundle_path = Path(result["evidence_bundle_path"])
+    assert result["evidence_bundle_status"] == "verified"
+    assert result["includes_evidence_files"] is False
+    assert hashlib.sha256(bundle_path.read_bytes()).hexdigest() == result["evidence_bundle_sha256"]
+    with ZipFile(bundle_path) as archive:
+        assert "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md" in archive.namelist()
+        assert "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.docx" in archive.namelist()
+        assert "tax-health-snapshot.json" in archive.namelist()
+        assert not any(name.startswith("evidence/") for name in archive.namelist())
+
+
+@pytest.mark.parametrize("expected_code", [
+    "invalid_evidence_manifest",
+    "unsafe_evidence_path",
+    "evidence_verification_failed",
+    "unverified_evidence_reference",
+    "evidence_bundle_size_limit_exceeded",
+])
+def test_tax_health_check_cli_returns_stable_non_sensitive_evidence_errors(
+    monkeypatch, tmp_path, capsys, expected_code,
+):
+    evidence_root, manifest_path, request_path = write_bound_evidence_case(tmp_path)
+    invoke_tax_health_check(
+        monkeypatch,
+        request_path,
+        tmp_path / "output",
+        "--evidence-manifest", str(manifest_path),
+        "--evidence-root", str(evidence_root),
+    )
+    patched_name = (
+        "parse_evidence_manifest"
+        if expected_code == "invalid_evidence_manifest"
+        else "verify_evidence_manifest"
+        if expected_code in {
+            "unsafe_evidence_path",
+            "evidence_verification_failed",
+            "evidence_bundle_size_limit_exceeded",
+        }
+        else "build_evidence_bundle"
+    )
+    monkeypatch.setattr(
+        cli,
+        patched_name,
+        lambda *args, **kwargs: (_ for _ in ()).throw(EvidenceBundleError(expected_code)),
+    )
+
+    assert cli.main() == 4
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed",
+        "error_code": expected_code,
+    }
+
+
+def test_tax_health_check_cli_maps_bundle_write_failure_to_operational_error(monkeypatch, tmp_path, capsys):
+    evidence_root, manifest_path, request_path = write_bound_evidence_case(tmp_path)
+    invoke_tax_health_check(
+        monkeypatch,
+        request_path,
+        tmp_path / "output",
+        "--evidence-manifest", str(manifest_path),
+        "--evidence-root", str(evidence_root),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_evidence_bundle",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            EvidenceBundleError("evidence_bundle_write_failed")
+        ),
+    )
+
+    assert cli.main() == 3
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed",
+        "error_code": "evidence_bundle_write_failed",
+    }
+
+
+def test_tax_health_check_cli_does_not_echo_unknown_manifest_error_codes(monkeypatch, tmp_path, capsys):
+    evidence_root, manifest_path, request_path = write_bound_evidence_case(tmp_path)
+    invoke_tax_health_check(
+        monkeypatch,
+        request_path,
+        tmp_path / "output",
+        "--evidence-manifest", str(manifest_path),
+        "--evidence-root", str(evidence_root),
+    )
+    monkeypatch.setattr(
+        cli,
+        "parse_evidence_manifest",
+        lambda payload: (_ for _ in ()).throw(EvidenceBundleError("customer-secret")),
+    )
+
+    assert cli.main() == 4
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed",
+        "error_code": "invalid_evidence_manifest",
     }
 
 

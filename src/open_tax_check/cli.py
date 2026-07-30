@@ -11,6 +11,13 @@ import tempfile
 from .case import init_case, set_case_scope
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
 from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSource
+from .evidence_bundle import (
+    BundleArtifact,
+    EvidenceBundleError,
+    build_evidence_bundle,
+    parse_evidence_manifest,
+    verify_evidence_manifest,
+)
 from .local_ocr import LocalOcrProvider
 from .ocr_runtime import OcrDependencyError, prepare_ocr_models
 from .pipeline import inspect_case, run_case
@@ -35,6 +42,16 @@ from .reviews import (
     confirm_mapping,
     confirm_sheet_selection,
 )
+
+
+_EVIDENCE_ERROR_CODES = frozenset({
+    "invalid_evidence_manifest",
+    "unsafe_evidence_path",
+    "evidence_verification_failed",
+    "unverified_evidence_reference",
+    "evidence_bundle_size_limit_exceeded",
+    "evidence_bundle_write_failed",
+})
 
 
 def _configure_utf8_output() -> None:
@@ -164,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     health_parser.add_argument("--output-dir", required=True, type=Path)
     health_parser.add_argument("--include-docx", action="store_true")
     health_parser.add_argument("--include-pdf", action="store_true")
+    health_parser.add_argument("--evidence-manifest", type=Path)
+    health_parser.add_argument("--evidence-root", type=Path)
+    health_parser.add_argument("--include-evidence-files", action="store_true")
     health_parser.add_argument("--pack", action="append", type=Path)
     health_parser.add_argument(
         "--include-parameterized-packs",
@@ -352,12 +372,49 @@ def main() -> int:
             return 5 if code in {"local_ocr_dependency_missing", "local_ocr_model_unavailable"} else 3
         return 0 if value.status in {"completed", "partial"} else 3
     if args.command == "tax-health-check":
+        has_manifest = args.evidence_manifest is not None
+        has_root = args.evidence_root is not None
+        if has_manifest != has_root or (args.include_evidence_files and not has_manifest):
+            print(json.dumps({
+                "status": "failed",
+                "error_code": "invalid_evidence_manifest",
+            }, ensure_ascii=False))
+            return 4
         try:
             request_payload = json.loads(args.request.read_text(encoding="utf-8"))
             request = tax_request_from_dict(request_payload)
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
             print(json.dumps({"status": "failed", "error_code": "invalid_tax_health_request"}, ensure_ascii=False))
             return 4
+        verified_evidence = None
+        if has_manifest:
+            try:
+                manifest_payload = json.loads(
+                    args.evidence_manifest.read_text(encoding="utf-8")
+                )
+                manifest = parse_evidence_manifest(manifest_payload)
+                verified_evidence = verify_evidence_manifest(
+                    manifest,
+                    args.evidence_root,
+                )
+            except EvidenceBundleError as error:
+                code = (
+                    error.code
+                    if error.code in _EVIDENCE_ERROR_CODES
+                    and error.code != "evidence_bundle_write_failed"
+                    else "invalid_evidence_manifest"
+                )
+                print(json.dumps({
+                    "status": "failed",
+                    "error_code": code,
+                }, ensure_ascii=False))
+                return 4
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                print(json.dumps({
+                    "status": "failed",
+                    "error_code": "invalid_evidence_manifest",
+                }, ensure_ascii=False))
+                return 4
         try:
             explicit_packs = None
             if args.pack or args.include_parameterized_packs:
@@ -380,6 +437,47 @@ def main() -> int:
             snapshot_path = write_tax_health_snapshot(snapshot, args.output_dir / "tax-health-snapshot.json")
             docx_path = write_tax_health_report_docx(snapshot, args.output_dir / "税务健康检查报告.docx") if args.include_docx else None
             pdf_path = write_tax_health_report_pdf(snapshot, args.output_dir / "税务健康检查报告.pdf") if args.include_pdf else None
+            bundle = None
+            if verified_evidence is not None:
+                artifacts = [
+                    BundleArtifact(
+                        "markdown_report",
+                        report_path,
+                        "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md",
+                    ),
+                    BundleArtifact(
+                        "machine_snapshot",
+                        snapshot_path,
+                        "tax-health-snapshot.json",
+                    ),
+                ]
+                if docx_path is not None:
+                    artifacts.append(BundleArtifact(
+                        "docx_report",
+                        docx_path,
+                        "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.docx",
+                    ))
+                if pdf_path is not None:
+                    artifacts.append(BundleArtifact(
+                        "pdf_report",
+                        pdf_path,
+                        "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.pdf",
+                    ))
+                bundle = build_evidence_bundle(
+                    snapshot,
+                    verified_evidence,
+                    tuple(artifacts),
+                    args.output_dir / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u8bc1\u636e\u5305.zip",
+                    include_evidence_files=args.include_evidence_files,
+                )
+        except EvidenceBundleError as error:
+            code = (
+                error.code
+                if error.code in _EVIDENCE_ERROR_CODES
+                else "evidence_bundle_write_failed"
+            )
+            print(json.dumps({"status": "failed", "error_code": code}, ensure_ascii=False))
+            return 3 if code == "evidence_bundle_write_failed" else 4
         except PdfExportUnavailable as error:
             print(json.dumps({"status": "failed", "error_code": str(error)}, ensure_ascii=False))
             return 3
@@ -393,6 +491,12 @@ def main() -> int:
             "snapshot_path": str(snapshot_path),
             "docx_path": str(docx_path) if docx_path is not None else None,
             "pdf_path": str(pdf_path) if pdf_path is not None else None,
+            "evidence_bundle_status": "verified" if bundle is not None else None,
+            "evidence_bundle_path": str(bundle.path) if bundle is not None else None,
+            "evidence_bundle_sha256": bundle.sha256 if bundle is not None else None,
+            "includes_evidence_files": (
+                bundle.includes_evidence_files if bundle is not None else False
+            ),
         }, ensure_ascii=False))
         return 0
     return 2
