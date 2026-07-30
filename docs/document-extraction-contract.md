@@ -46,6 +46,12 @@ opentaxcheck import-structured-document --case CASE_DIR --source SOURCE_ID --kin
 
 案件导入只信任案件 `state.json` 和 `work/input_manifest.json` 中的实体、期间、文件名、媒体类型、来源编号和 SHA-256；读取前拒绝绝对路径逃逸、符号链接和 Windows reparse point，并重新计算来源文件 SHA-256。导入成功只表示合同结构和来源绑定通过，不证明申报正确、来源真实、税率适用或存在完整税务覆盖。模板解析和跨文档勾稽仍是后续边界。
 
+## 案件运行与跨文档勾稽
+
+`import-structured-document` 成功后，合同会保存在案件的 `work/structured-documents/`。当案件没有 CSV 或 Excel 输入时，`run` 会只读取该目录下的普通 JSON 文件，重新执行合同校验，并检查实体、期间、币种、单位、资产负债表、利润表、现金流和已声明的申报表事实。
+
+勾稽结果写入 `work/structured-reconciliation.json`，覆盖状态写入 `work/coverage_matrix.json`。任何不平、期间错配、来源合同问题或无法验证的必需控制都会返回 `blocked_data_quality`，不会生成正常税务结论；资料结构有效且已声明控制通过时只返回 `partial_scope_ready`，提示继续检查覆盖范围。
+
 ## 结果结构
 
 结果包含文档元数据、provider 与授权信息、页码与旋转、文本块（四点坐标和 `[0,1]` 置信度）、表格单元格、机器可读问题及案件来源引用。合同版本独立于现有 `SCHEMA_VERSION` 和税务规则包版本。
