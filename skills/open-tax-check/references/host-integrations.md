@@ -21,6 +21,23 @@
 
 CLI 首次报告可运行 `opentaxcheck tax-health-check --request request.json --output-dir output`。需要全部 20 个参数化计算模板时追加 `--include-parameterized-packs`；模板不提供统一法定税率，所有计算事实必须经客户确认并绑定证据。
 
+## 证据包交付字段
+
+Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 必须原样传递同一套四字段 JSON，不得增加客户事实或把未验证文件改写成已验证：
+
+```json
+{
+  "evidence_bundle_status": "verified",
+  "evidence_bundle_path": "output/税务健康检查证据包.zip",
+  "evidence_bundle_sha256": "<64 位小写十六进制 SHA-256>",
+  "includes_evidence_files": false
+}
+```
+
+未启用证据包时，前三个字段均为 `null`，`includes_evidence_files` 为 `false`。默认证据包不复制客户原始证据；只有客户显式选择包含原件时，该字段才为 `true`。SHA-256 只验证文件身份和完整性，不证明客户陈述、申报正确性或不存在税务风险。
+
+未经客户明确授权，任何宿主都不得上传包含原始证据文件的证据包。上传前还必须披露服务商、发送字段、保存期限和风险。证据包仅用于交付审计，不是独立完整重跑输入，也不是涉税鉴证或税务保证意见。
+
 ## 能力矩阵
 
 | 宿主 | 首选路线 | 说明 |

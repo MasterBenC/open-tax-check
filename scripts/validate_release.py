@@ -22,13 +22,15 @@ if str(ROOT / "src") not in sys.path:
 SKILL_PUBLIC_LIMIT_BYTES = 250 * 1024
 PUBLIC_RELEASE_LIMIT_BYTES = 5 * 1024 * 1024
 DISTRIBUTION_FILE_LIMIT_BYTES = 1 * 1024 * 1024
-REQUIRED_WHEEL_MEMBER = (
-    "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json"
-)
-REQUIRED_SDIST_MEMBER = (
-    "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
-    "vat-cn-2023-2026.prototype.json"
-)
+REQUIRED_WHEEL_MEMBERS = {
+    "open_tax_check/evidence_bundle.py",
+    "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
+}
+REQUIRED_SDIST_MEMBER_SUFFIXES = {
+    "src/open_tax_check/evidence_bundle.py",
+    "src/open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
+    "skills/open-tax-check/references/host-integrations.md",
+}
 REQUIRED = (
     "README.md",
     "LICENSE",
@@ -545,17 +547,30 @@ def main() -> int:
                 f"sdists={len(sdists)})"
             )
             return 1
-        for artifact, required_member, sdist in (
-            (wheels[0], REQUIRED_WHEEL_MEMBER, False),
-            (sdists[0], REQUIRED_SDIST_MEMBER, True),
+        for artifact, required_members, sdist in (
+            (wheels[0], REQUIRED_WHEEL_MEMBERS, False),
+            (sdists[0], REQUIRED_SDIST_MEMBER_SUFFIXES, True),
         ):
             member_names = distribution_member_names(artifact)
             if member_names is None:
                 print(f"unable to inspect distribution artifact: {artifact.name}")
                 return 1
-            if required_member not in member_names:
-                print(f"missing required package data: {required_member}")
-                return 1
+            for required_member in sorted(required_members):
+                if sdist:
+                    matches = tuple(
+                        member
+                        for member in member_names
+                        if member.endswith("/" + required_member)
+                    )
+                else:
+                    matches = (
+                        (required_member,)
+                        if required_member in member_names
+                        else ()
+                    )
+                if not matches:
+                    print(f"missing required package data: {required_member}")
+                    return 1
             expected_members = expected_package_data_members(ROOT, sdist=sdist)
             if expected_members and not set(expected_members).issubset(member_names):
                 print("missing required package data: tax_pack_bundle")

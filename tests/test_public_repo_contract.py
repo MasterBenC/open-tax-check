@@ -9,8 +9,8 @@ ROADMAP_MILESTONES = (
     "2. 阶段 2A：Excel 安全盘点与人工选表 — 已完成",
     "3. 阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成（正式客户报告未实现）",
     "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 本地 OCR、20 项全国筛查及每项至少一条受控正式计算路径已完成，优惠、复合计税、预征清算及其他特殊路径仍在进行",
-    "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 宿主 Agent 中文补件、《税务健康检查报告》基础交付及 DOCX/PDF 页面级版式验收已完成，完整证据包进行中",
-    "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例与公开 v1 — 计划中",
+    "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 宿主 Agent 中文补件、《税务健康检查报告》基础交付、DOCX/PDF 页面级版式验收及可验证证据包已完成，财务报表和纳税申报表解析仍在进行",
+    "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例验收与公开 v1 — 计划中",
 )
 LOCAL_OCR_SCOPE_SENTENCE = "PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。"
 
@@ -202,6 +202,41 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("未解决项目", report_scope)
         self.assertIn("渐进式报告", report_scope)
         self.assertIn("适用性筛查规则包已经随版本内置", report_scope)
+
+    def test_readme_documents_private_by_default_evidence_bundles(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("--evidence-manifest", text)
+        self.assertIn("--evidence-root", text)
+        self.assertIn("--include-evidence-files", text)
+        self.assertIn("默认不复制客户原始证据文件", text)
+        self.assertIn("SHA-256 只验证文件身份和完整性", text)
+
+    def test_host_contract_names_all_supported_ecosystems_and_common_bundle_fields(self):
+        text = (
+            ROOT / "skills/open-tax-check/references/host-integrations.md"
+        ).read_text(encoding="utf-8")
+
+        for host in (
+            "Codex",
+            "Hermes",
+            "WorkBuddy",
+            "扣子",
+            "Qoder",
+            "Claude Code",
+            "OpenClaw",
+        ):
+            with self.subTest(host=host):
+                self.assertIn(host, text)
+        for field in (
+            "evidence_bundle_status",
+            "evidence_bundle_path",
+            "evidence_bundle_sha256",
+            "includes_evidence_files",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, text)
+        self.assertIn("未经客户明确授权", text)
 
     def test_experimental_report_has_self_use_boundary_without_approval_gate(self):
         readme = experimental_report_scope(

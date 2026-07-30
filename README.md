@@ -11,7 +11,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎、AI 税务项目助理�
 - 隐藏工作表不得自动选择；选择含隐藏数据的工作表时，隐藏行必须明确选择 `include` 或 `exclude`；
 - CSV 和已确认映射的 Excel 都支持业务行标准化、凭证借贷平衡检查、试算平衡表勾稽、首批确定性规则、语义候选和内部 Markdown 草稿。
 
-Excel 映射提案在复核人明确执行 `confirm-mapping` 前始终不生效；`needs_professional_review` 也不是正式客户报告。财务报表和纳税申报表即使已提供但仍为 `present_unparsed`，也不能宣称已完成完整基线健康检查。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。专业 Excel 工作底稿和完整证据包仍未实现，DOCX/PDF 报告已提供基础导出。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
+Excel 映射提案在复核人明确执行 `confirm-mapping` 前始终不生效；`needs_professional_review` 也不是正式客户报告。财务报表和纳税申报表即使已提供但仍为 `present_unparsed`，也不能宣称已完成完整基线健康检查。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。可验证证据包和 DOCX/PDF 报告已提供基础导出，专业 Excel 工作底稿、财务报表及纳税申报表解析仍未实现。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 
@@ -96,6 +96,23 @@ python scripts/run_fictional_example.py --output work/fictional-demo
 - `work/reconciliation.json`：试算平衡表自身和序时账至试算平衡表的勾稽结果；
 
 资料缺失、未解析或程序未执行时，覆盖矩阵会明确记录 `missing`、`present_unparsed` 或相应 `procedure_status`，不会描述为“无风险”。勾稽通过不表示不存在税务风险。
+
+### 可验证证据包
+
+为《税务健康检查报告》生成交付审计包时，证据清单和证据根目录必须同时提供：
+
+```powershell
+opentaxcheck tax-health-check `
+  --request .\request.json `
+  --output-dir .\output `
+  --evidence-manifest .\evidence-manifest.json `
+  --evidence-root .\customer-evidence `
+  --include-docx
+```
+
+`--evidence-manifest` 和 `--evidence-root` 必须同时出现。生成的 `税务健康检查证据包.zip` 默认不复制客户原始证据文件，只保存已验证证据的标识和摘要；只有显式追加 `--include-evidence-files` 时，才会复制经过大小限制、路径安全检查和哈希验证的原件。
+
+SHA-256 只验证文件身份和完整性，不证明客户陈述属实、纳税申报正确或不存在税务风险。证据包是交付审计包，不是可脱离原系统完整重跑的输入，也不是涉税鉴证或税务保证意见。宿主 Agent 上传含原件的证据包前，必须取得客户明确授权。
 
 ### 兼容的 CSV `run` 输出
 
