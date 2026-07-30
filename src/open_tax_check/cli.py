@@ -16,6 +16,7 @@ from .case_orchestration import (
     case_status_payload,
     run_case_self_check,
 )
+from .delivery import DeliveryError, build_case_delivery
 from .agent_orchestration import evidence_bundle_delivery_payload, task_payload
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
 from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSource
@@ -294,6 +295,12 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_case_parser = subparsers.add_parser("case-confirm", help="Apply a structured customer confirmation batch")
     confirm_case_parser.add_argument("--case", required=True, type=Path)
     confirm_case_parser.add_argument("--input", required=True, type=Path)
+    delivery_parser = subparsers.add_parser(
+        "case-delivery", help="Publish one revision-consistent customer delivery"
+    )
+    delivery_parser.add_argument("--case", required=True, type=Path)
+    delivery_parser.add_argument("--include-pdf", action="store_true")
+    delivery_parser.add_argument("--include-evidence-files", action="store_true")
     return parser
 
 
@@ -477,6 +484,26 @@ def main() -> int:
                 "unverified_confirmation_evidence",
             }
             error_code = str(error) if str(error) in allowed else "case_confirmation_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-delivery":
+        try:
+            result = build_case_delivery(
+                args.case,
+                include_pdf=args.include_pdf,
+                include_evidence_files=args.include_evidence_files,
+            )
+        except (OSError, UnicodeError, TypeError, ValueError) as error:
+            allowed = {
+                "case_state_missing", "unsafe_case_path", "case_snapshot_missing",
+                "delivery_blocked_data_quality", "delivery_source_manifest_invalid",
+                "delivery_evidence_unverified", "delivery_pointer_invalid",
+                "delivery_manifest_invalid", "delivery_revision_conflict",
+                "delivery_pointer_write_failed", "delivery_write_failed",
+            }
+            error_code = str(error) if str(error) in allowed else "case_delivery_failed"
             print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
             return 4
         print(json.dumps(result, ensure_ascii=False))

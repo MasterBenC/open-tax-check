@@ -21,6 +21,14 @@
 
 CLI 可恢复案件运行 `opentaxcheck case-self-check --case CASE --request request.json`，随后使用 `case-status`、`case-tasks` 和 `case-confirm` 完成补件闭环。无案件目录的单次报告仍可运行 `opentaxcheck tax-health-check --request request.json --output-dir output`；需要显式加入全部参数化计算模板时可追加 `--include-parameterized-packs`。所有计算事实必须经客户确认并绑定证据。
 
+## 统一案件交付
+
+补件完成后，宿主调用 `opentaxcheck case-delivery --case CASE`。命令发布一个 `tax-delivery/v1` 修订目录，例如 `work/deliveries/revision-0001/`，并通过 `work/delivery.json` 指向活动清单。清单中的报告、DOCX/PDF、`workpaper.xlsx`、机器快照和证据包必须来自同一个 `snapshot_revision`，每个文件都带 SHA-256；`delivery_options` 记录是否请求 PDF 和是否复制原始证据文件。
+
+`--include-pdf` 没有渲染器时返回 `pdf_status=pdf_renderer_unavailable` 和整体 `status=partial`，不得伪造 PDF。相同快照和相同 `delivery_options` 可重复调用；选项变化返回 `delivery_revision_conflict`。宿主应把 `partial` 当作未完成交付状态展示。
+
+`customer-confirmation:<question_id>` 是宿主代客户声明的绑定标识，只表示回答已关联到具体问题，不等于文件证据、签名或事实真实性证明。宿主必须把该边界和中文免责声明一并展示。
+
 ## 证据包交付字段
 
 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 必须原样传递同一套四字段 JSON，不得增加客户事实或把未验证文件改写成已验证：

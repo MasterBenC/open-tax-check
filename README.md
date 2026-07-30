@@ -13,7 +13,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目�
 - 常见资产负债表、利润表、现金流量表和纳税申报表可解析为严格来源绑定合同，并执行实体、期间、币种、单位、报表内部和跨表勾稽；强制勾稽失败进入 `blocked_data_quality`；
 - 自助案件状态、中文补件任务、客户确认和受影响税种增量重跑可持久化恢复，宿主不能自行把案件改写为已完成。
 
-Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经结构化导入的资料仍标记为 `present_unparsed`。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。安全压缩包、云 OCR、专业 Excel 工作底稿、完整四件套虚构案例和 v1 发布门禁仍未完成。可验证证据包和中文 DOCX/PDF 正式客户报告已提供基础导出。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
+Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经结构化导入的资料仍标记为 `present_unparsed`。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。安全压缩包、云 OCR、完整虚构案例和 v1 发布门禁仍未完成。可验证证据包、中文 DOCX/PDF 正式客户报告、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已经提供；公开路线不代表已经交付的能力，详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 
@@ -64,6 +64,10 @@ opentaxcheck case-confirm --case .\cases\demo --input .\confirmations.json
 ```
 
 私有恢复快照保存在 `work/tax-health-snapshot.private.json`；面向宿主的脱敏快照、中文补件清单和报告分别保存在 `work/tax-health-snapshot.json`、`work/customer-tasks.json` 和 `output/税务健康检查报告.md`。确认回写只接受问题标识、事实键、值、确认人、带时区时间戳和证据引用，不接受宿主提供的案件状态。前置账务或报表勾稽已处于 `blocked_data_quality` 时，命令拒绝生成正常税务报告。
+
+补件完成后，可用 `opentaxcheck case-delivery --case .\\cases\\demo` 发布一个不可变的 `tax-delivery/v1` 修订。交付目录为 `work/deliveries/revision-0001/`（实际编号跟随案件快照），其中的报告、DOCX/PDF、`workpaper.xlsx`、机器快照和证据包都引用同一个快照修订号，并由 `work/delivery.json` 指向。重复调用同一快照和同一 `delivery_options` 幂等；选项变化会显式返回 `delivery_revision_conflict`。`--include-pdf` 没有可用渲染器时交付状态为 `partial`，不会伪造 PDF。
+
+`customer-confirmation:<question_id>` 表示宿主代客户提交的声明引用，只用于记录声明与问题的绑定，不是文件证据、签名或税务事实真实性证明；宿主仍必须向客户展示中文问题并保留限制说明。
 
 `aaaaaaaaaaaaaaaa` 仅是命令格式示例，绝不是可复用的真实 `source_id`。必须从当前案件的 `work/workbook_inventory.json` 或 `work/sheet_selection.json` 读取实际来源标识，并在来源变更后重新 `inspect`。
 
@@ -137,6 +141,10 @@ opentaxcheck tax-health-check `
 `--evidence-manifest` 和 `--evidence-root` 必须同时出现。生成的 `税务健康检查证据包.zip` 默认不复制客户原始证据文件，只保存已验证证据的标识和摘要；只有显式追加 `--include-evidence-files` 时，才会复制经过大小限制、路径安全检查和哈希验证的原件。
 
 SHA-256 只验证文件身份和完整性，不证明客户陈述属实、纳税申报正确或不存在税务风险。证据包是交付审计包，不是可脱离原系统完整重跑的输入，也不是涉税鉴证或税务保证意见。宿主 Agent 上传含原件的证据包前，必须取得客户明确授权。
+
+### 统一税务健康检查交付
+
+`case-delivery` 的活动指针和修订清单只允许指向案件 `work/deliveries/` 下的普通文件。`delivery-manifest.json` 至少包含 `schema_version`、`revision`、`snapshot_revision`、`snapshot_digest`、`delivery_options`、`status`、`pdf_status` 和每个 artifact 的 SHA-256。PDF 渲染未请求时为 `not_requested`；渲染器缺失或失败时为 `partial`，宿主必须如实展示该状态。
 
 ### 兼容的 CSV `run` 输出
 

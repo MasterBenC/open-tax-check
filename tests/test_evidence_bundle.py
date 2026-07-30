@@ -773,3 +773,11 @@ def test_binding_ignores_unconfirmed_fact_references_but_does_not_change_fact_st
     validate_evidence_bindings(snapshot, verified)
 
     assert snapshot.request.facts[0].state.value == "observed"
+
+
+def test_binding_accepts_host_attested_customer_confirmation_without_file_evidence():
+    snapshot = make_snapshot(
+        confirmed_fact_refs=("customer-confirmation:question-1",),
+    )
+
+    validate_evidence_bindings(snapshot, make_verified_ids())

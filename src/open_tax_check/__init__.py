@@ -34,6 +34,12 @@ from .case_orchestration import (
     load_case_snapshot,
     run_case_self_check,
 )
+from .delivery import (
+    DELIVERY_POINTER_NAME,
+    DELIVERY_SCHEMA_VERSION,
+    DeliveryError,
+    build_case_delivery,
+)
 
 from .evidence_bundle import (
     BundleArtifact,
@@ -66,6 +72,12 @@ from .tax_models import (
 from .tax_registry import load_builtin_parameterized_calculation_packs
 from .evidence import EvidenceVerification, verify_evidence_file
 from .source_paths import resolve_safe_source
+from .workpaper import (
+    WORKPAPER_NAME,
+    WORKPAPER_SCHEMA_VERSION,
+    WorkpaperError,
+    write_tax_health_workpaper,
+)
 from .structured_documents import (
     FinancialStatement,
     FinancialStatementLine,

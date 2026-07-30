@@ -9,8 +9,8 @@ ROADMAP_MILESTONES = (
     "2. 阶段 2A：Excel 安全盘点与人工选表 — 已完成",
     "3. 阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成",
     "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 本地 OCR、20 项全国筛查及每项至少一条受控正式计算路径已完成，优惠、复合计税、预征清算及其他特殊路径仍在进行",
-    "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 财务报表/纳税申报表合同、常见模板解析、跨文档勾稽、可恢复案件状态、宿主 Agent 中文补件、《税务健康检查报告》基础交付、DOCX/PDF 页面级版式验收及可验证证据包已完成；统一交付快照和 Excel 工作底稿仍在进行",
-    "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例验收与公开 v1 — 计划中",
+    "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 财务报表/纳税申报表合同、常见模板解析、跨文档勾稽、可恢复案件状态、宿主 Agent 中文补件、《税务健康检查报告》基础交付、DOCX/PDF 页面级版式验收、可验证证据包、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已完成",
+    "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例验收与公开 v1 — 计划中；安全压缩包、云/企业信息 provider、七宿主安装回放和最终发布门禁仍待完成",
 )
 LOCAL_OCR_SCOPE_SENTENCE = "PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。"
 
@@ -212,6 +212,19 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("默认不复制客户原始证据文件", text)
         self.assertIn("SHA-256 只验证文件身份和完整性", text)
 
+    def test_readme_documents_revisioned_case_delivery(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        for value in (
+            "opentaxcheck case-delivery",
+            "tax-delivery/v1",
+            "work/deliveries/revision-0001",
+            "workpaper.xlsx",
+            "pdf_status",
+            "partial",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
     def test_host_contract_names_all_supported_ecosystems_and_common_bundle_fields(self):
         text = (
             ROOT / "skills/open-tax-check/references/host-integrations.md"
@@ -237,6 +250,22 @@ class PublicRepositoryContractTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, text)
         self.assertIn("未经客户明确授权", text)
+
+    def test_host_contract_documents_case_delivery_and_customer_statement_boundary(self):
+        text = (
+            ROOT / "skills/open-tax-check/references/host-integrations.md"
+        ).read_text(encoding="utf-8")
+        for value in (
+            "case-delivery",
+            "tax-delivery/v1",
+            "delivery_options",
+            "workpaper.xlsx",
+            "customer-confirmation:<question_id>",
+            "宿主代客户声明",
+            "不等于文件证据",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
 
     def test_experimental_report_has_self_use_boundary_without_approval_gate(self):
         readme = experimental_report_scope(

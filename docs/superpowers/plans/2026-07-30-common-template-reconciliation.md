@@ -35,11 +35,11 @@
 - `tax_return_template(rows, *, source_id, entity_name, return_id, tax_id, return_type, period_start, period_end, filing_status="unknown", filed_at=None, sheet_name="Sheet1", header_row=1) -> TemplateParseResult`
 - `rows` is a sequence of `(row_number, sequence_of_cell_values)` where the first row is the header row. Supported financial headers are `line_code`, `line_name`, `standard_name`, `current_amount`, `prior_amount`; supported tax headers are `form_code`, `line_number`, `line_name`, `fact_key`, `value`, `value_type`.
 
-- [ ] **Step 1: Write failing tests for valid CSV-shaped rows, formula/money rejection, and source anchors.**
-- [ ] **Step 2: Run `python -m pytest tests/test_template_documents.py -q`; confirm the new functions are missing.**
-- [ ] **Step 3: Implement bounded header normalization, row iteration, amount normalization, stable issues, and contract payload construction.**
-- [ ] **Step 4: Validate each payload through `financial_statement_from_dict` or `tax_return_from_dict`; return `payload=None` when any issue exists.**
-- [ ] **Step 5: Run `python -m pytest tests/test_template_documents.py tests/test_structured_documents.py -q` and commit `feat: parse common financial tax templates`.**
+- [x] **Step 1: Write failing tests for valid CSV-shaped rows, formula/money rejection, and source anchors.**
+- [x] **Step 2: Run `python -m pytest tests/test_template_documents.py -q`; confirm the new functions are missing.**
+- [x] **Step 3: Implement bounded header normalization, row iteration, amount normalization, stable issues, and contract payload construction.**
+- [x] **Step 4: Validate each payload through `financial_statement_from_dict` or `tax_return_from_dict`; return `payload=None` when any issue exists.**
+- [x] **Step 5: Run `python -m pytest tests/test_template_documents.py tests/test_structured_documents.py -q` and commit `feat: parse common financial tax templates`.**
 
 ### Task 2: Deterministic financial-statement and tax-return reconciliation
 
@@ -60,11 +60,11 @@ Required checks:
 - duplicate tax form/line pairs, missing decimal values for a declared decimal line, and any existing document issue are blocking;
 - known tax facts are compared only through an explicit map (`vat.taxable_sales -> revenue`, `cit.revenue -> revenue`, `cit.net_profit -> net_profit`); absent facts are reported as not performed, never guessed.
 
-- [ ] **Step 1: Write failing tests for balanced documents, each identity failure, period mismatch, and tax fact mismatch.**
-- [ ] **Step 2: Run `python -m pytest tests/test_structured_reconciliation.py -q`; confirm the module/API is missing.**
-- [ ] **Step 3: Implement pure `Decimal` checks and location-only issue serialization.**
-- [ ] **Step 4: Verify the result is `status="blocked_data_quality"` whenever `passed` is false, and never raises on ordinary bad customer data.**
-- [ ] **Step 5: Run focused regression tests and commit `feat: reconcile structured financial tax documents`.**
+- [x] **Step 1: Write failing tests for balanced documents, each identity failure, period mismatch, and tax fact mismatch.**
+- [x] **Step 2: Run `python -m pytest tests/test_structured_reconciliation.py -q`; confirm the module/API is missing.**
+- [x] **Step 3: Implement pure `Decimal` checks and location-only issue serialization.**
+- [x] **Step 4: Verify the result is `status="blocked_data_quality"` whenever `passed` is false, and never raises on ordinary bad customer data.**
+- [x] **Step 5: Run focused regression tests and commit `feat: reconcile structured financial tax documents`.**
 
 ### Task 3: Consume imported structured documents in case runs
 
@@ -85,9 +85,8 @@ Behavior:
 - return `partial_scope_ready` with `review_coverage` when contracts are valid and balanced, because this path does not invent tax rules or conclusions;
 - leave existing CSV/Excel run selection and output bytes unchanged.
 
-- [ ] **Step 1: Add failing integration tests for balanced imported contracts, a balance-sheet imbalance, a period mismatch, and malformed/unsafe JSON.**
-- [ ] **Step 2: Run `python -m pytest tests/test_structured_pipeline.py -q`; confirm the structured path is not yet selected.**
-- [ ] **Step 3: Implement safe loading, reconciliation artifact publication, coverage states, and run dispatch.**
-- [ ] **Step 4: Run focused pipeline regressions plus `tests/test_excel_pipeline.py tests/test_structured_document_cli.py`.**
-- [ ] **Step 5: Update the contract documentation and commit `feat: run structured document reconciliation in cases`.**
-
+- [x] **Step 1: Add failing integration tests for balanced imported contracts, a balance-sheet imbalance, a period mismatch, and malformed/unsafe JSON.**
+- [x] **Step 2: Run `python -m pytest tests/test_structured_pipeline.py -q`; confirm the structured path is not yet selected.**
+- [x] **Step 3: Implement safe loading, reconciliation artifact publication, coverage states, and run dispatch.**
+- [x] **Step 4: Run focused pipeline regressions plus `tests/test_excel_pipeline.py tests/test_structured_document_cli.py`.**
+- [x] **Step 5: Update the contract documentation and commit `feat: run structured document reconciliation in cases`.**

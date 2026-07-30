@@ -192,12 +192,14 @@ def validate_evidence_bindings(
         for fact in snapshot.request.facts
         if fact.state is FactState.CONFIRMED
         for reference in fact.evidence_refs
+        if not reference.startswith("customer-confirmation:")
     }
     required.update(
         reference
         for result in snapshot.results
         if result.calculation is not None
         for reference in result.calculation.evidence_refs
+        if not reference.startswith("customer-confirmation:")
     )
     if not required.issubset(verified_ids):
         raise EvidenceBundleError("unverified_evidence_reference")
