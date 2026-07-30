@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from zipfile import ZipFile
@@ -19,9 +20,11 @@ from open_tax_check.evidence_bundle import (
     verify_evidence_manifest,
 )
 from open_tax_check.tax_models import (
+    AuditEvent,
     CalculationRecord,
     DateRange,
     FactState,
+    RuleSource,
     TaxCheckRequest,
     TaxCheckSnapshot,
     TaxFact,
@@ -280,6 +283,298 @@ def test_same_inputs_produce_identical_zip_bytes(tmp_path):
     assert first.read_bytes() == second.read_bytes()
     with ZipFile(first) as archive:
         assert {info.date_time for info in archive.infolist()} == {(1980, 1, 1, 0, 0, 0)}
+        assert {info.external_attr >> 16 for info in archive.infolist()} == {0o100644}
+
+
+def test_archived_bytes_and_manifest_hashes_use_immutable_staged_sources(
+    tmp_path,
+    monkeypatch,
+):
+    destination = tmp_path / "bundle.zip"
+    verified = make_verified_files(tmp_path, "source")
+    artifacts = make_report_artifacts(tmp_path)
+    evidence_path = verified.items[0].source_path
+    artifact_path = artifacts[0].path
+    expected_evidence = evidence_path.read_bytes()
+    expected_artifact = artifact_path.read_bytes()
+    original_json_bytes = __import__(
+        "open_tax_check.evidence_bundle",
+        fromlist=["_json_bytes"],
+    )._json_bytes
+
+    def replace_sources_after_manifest_hashes(payload):
+        evidence_replacement = tmp_path / "evidence-replacement.bin"
+        artifact_replacement = tmp_path / "artifact-replacement.md"
+        evidence_replacement.write_bytes(b"changed evidence")
+        artifact_replacement.write_bytes(b"changed artifact")
+        os.replace(evidence_replacement, evidence_path)
+        os.replace(artifact_replacement, artifact_path)
+        return original_json_bytes(payload)
+
+    monkeypatch.setattr(
+        "open_tax_check.evidence_bundle._json_bytes",
+        replace_sources_after_manifest_hashes,
+    )
+
+    build_evidence_bundle(
+        make_snapshot(),
+        verified,
+        artifacts,
+        destination,
+        include_evidence_files=True,
+    )
+
+    with ZipFile(destination) as archive:
+        manifest = json.loads(archive.read("bundle-manifest.json"))
+        archived_evidence = archive.read("evidence/0001/original.bin")
+        archived_artifact = archive.read("税务健康检查报告.md")
+        archived_artifacts = {
+            item["archive_path"]: archive.read(item["archive_path"])
+            for item in manifest["artifacts"]
+        }
+    assert archived_evidence == expected_evidence
+    assert archived_artifact == expected_artifact
+    assert manifest["evidence_items"][0]["sha256"] == hashlib.sha256(
+        archived_evidence,
+    ).hexdigest()
+    artifact_metadata = next(
+        item
+        for item in manifest["artifacts"]
+        if item["archive_path"] == "税务健康检查报告.md"
+    )
+    assert artifact_metadata["sha256"] == hashlib.sha256(archived_artifact).hexdigest()
+    assert artifact_metadata["size_bytes"] == len(archived_artifact)
+    assert all(
+        item["sha256"]
+        == hashlib.sha256(archived_artifacts[item["archive_path"]]).hexdigest()
+        and item["size_bytes"] == len(archived_artifacts[item["archive_path"]])
+        for item in manifest["artifacts"]
+    )
+
+
+def test_staged_source_tampering_fails_without_replacing_destination(
+    tmp_path,
+    monkeypatch,
+):
+    destination = tmp_path / "bundle.zip"
+    destination.write_bytes(b"previous-valid-bundle")
+    evidence_bundle = __import__(
+        "open_tax_check.evidence_bundle",
+        fromlist=["_stage_source"],
+    )
+    original_stage_source = evidence_bundle._stage_source
+
+    def tamper_after_staging(archive_path, source_path, staged_path):
+        staged = original_stage_source(archive_path, source_path, staged_path)
+        staged_path.write_bytes(b"tampered after hashing")
+        return staged
+
+    monkeypatch.setattr(
+        "open_tax_check.evidence_bundle._stage_source",
+        tamper_after_staging,
+    )
+
+    with pytest.raises(EvidenceBundleError, match="^evidence_bundle_write_failed$"):
+        build_evidence_bundle(
+            make_snapshot(),
+            make_verified_files(tmp_path, "source"),
+            make_report_artifacts(tmp_path),
+            destination,
+            include_evidence_files=True,
+        )
+
+    assert destination.read_bytes() == b"previous-valid-bundle"
+    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
+    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+
+
+@pytest.mark.parametrize(
+    "archive_path",
+    [
+        "../payload.txt",
+        "/payload.txt",
+        "nested\\payload.txt",
+        "C:/payload.txt",
+        "C:payload.txt",
+        "report.txt:secret",
+        "CON",
+        "aux.txt",
+        "nested/LPT1.json",
+        "COM¹.txt",
+        "nested/LPT².json",
+        "report.",
+        "report ",
+    ],
+)
+def test_bundle_rejects_windows_qualified_or_reserved_artifact_paths(
+    tmp_path,
+    archive_path,
+):
+    source = tmp_path / "report.txt"
+    source.write_text("safe generated report", encoding="utf-8")
+
+    with pytest.raises(EvidenceBundleError, match="^evidence_bundle_write_failed$"):
+        build_evidence_bundle(
+            make_snapshot(),
+            make_verified_files(tmp_path, "source"),
+            (BundleArtifact("report", source, archive_path),),
+            tmp_path / "bundle.zip",
+        )
+
+
+@pytest.mark.parametrize(
+    ("first_path", "second_path"),
+    [
+        ("same.txt", "same.txt"),
+        ("Report.txt", "report.TXT"),
+        ("nested/Snapshot.json", "NESTED/snapshot.JSON"),
+    ],
+)
+def test_bundle_rejects_windows_equivalent_archive_member_collisions(
+    tmp_path,
+    first_path,
+    second_path,
+):
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+
+    with pytest.raises(EvidenceBundleError, match="^evidence_bundle_write_failed$"):
+        build_evidence_bundle(
+            make_snapshot(),
+            make_verified_files(tmp_path, "source"),
+            (
+                BundleArtifact("first", first, first_path),
+                BundleArtifact("second", second, second_path),
+            ),
+            tmp_path / "bundle.zip",
+        )
+
+
+def test_manifest_nested_payloads_are_allowlisted_and_zip_hash_stays_external(tmp_path):
+    destination = tmp_path / "bundle.zip"
+    snapshot = make_snapshot(
+        confirmed_fact_refs=("customer-contract",),
+        calculation_refs=("tax-return",),
+    )
+    source = RuleSource(
+        "Official rule",
+        "https://example.test/rule",
+        date(2026, 1, 1),
+        issuer="Tax authority",
+        document_number="Doc 1",
+        article_refs=("Article 2",),
+        verified_on=date(2026, 1, 2),
+    )
+    result = replace(
+        snapshot.results[0],
+        rule_pack_ids=("pack-b", "pack-a", "pack-b"),
+        rule_pack_versions=("2", "1", "2"),
+        rule_sources=(source, source),
+    )
+    snapshot = replace(
+        snapshot,
+        results=(result,),
+        audit_events=(
+            AuditEvent(
+                "confirmation_applied",
+                "2026-01-03T04:05:06+08:00",
+                tax_ids=("vat",),
+                fact_keys=("confirmed.tax_base",),
+                confirmation_digest="a" * 64,
+            ),
+        ),
+    )
+    result = build_evidence_bundle(
+        snapshot,
+        make_verified_files(tmp_path, "customer-contract", "tax-return"),
+        make_report_artifacts(tmp_path),
+        destination,
+    )
+
+    with ZipFile(destination) as archive:
+        manifest_bytes = archive.read("bundle-manifest.json")
+        manifest = json.loads(manifest_bytes)
+    assert set(manifest) == {
+        "schema_version",
+        "generator_version",
+        "period",
+        "jurisdiction",
+        "snapshot_schema_version",
+        "snapshot_revision",
+        "includes_evidence_files",
+        "evidence_items",
+        "confirmed_fact_bindings",
+        "calculations",
+        "rule_packs",
+        "rule_sources",
+        "artifacts",
+        "audit_events",
+        "disclaimer_zh",
+    }
+    assert set(manifest["period"]) == {"start", "end"}
+    assert all(
+        set(item)
+        == {
+            "source_id",
+            "relative_path",
+            "bundle_path",
+            "sha256",
+            "size_bytes",
+            "media_type",
+            "status",
+        }
+        for item in manifest["evidence_items"]
+    )
+    assert manifest["confirmed_fact_bindings"] == [
+        {
+            "fact_key": "confirmed.tax_base",
+            "evidence_refs": ["customer-contract"],
+        },
+    ]
+    assert manifest["calculations"] == [
+        {
+            "tax_id": "vat",
+            "formula_id": "generic.base_times_rate.v1",
+            "amount": "130.00",
+            "evidence_refs": ["tax-return"],
+        },
+    ]
+    assert manifest["rule_packs"] == [
+        {"pack_id": "pack-a", "rule_version": "1"},
+        {"pack_id": "pack-b", "rule_version": "2"},
+    ]
+    assert manifest["rule_sources"] == [
+        {
+            "title": "Official rule",
+            "url": "https://example.test/rule",
+            "issuer": "Tax authority",
+            "document_number": "Doc 1",
+            "article_refs": ["Article 2"],
+            "published_on": "2026-01-01",
+            "verified_on": "2026-01-02",
+        },
+    ]
+    assert all(
+        set(item) == {"kind", "archive_path", "sha256", "size_bytes"}
+        for item in manifest["artifacts"]
+    )
+    assert manifest["audit_events"] == [
+        {
+            "event_type": "confirmation_applied",
+            "tax_ids": ["vat"],
+            "fact_keys": ["confirmed.tax_base"],
+            "confirmation_digest": "a" * 64,
+        },
+    ]
+    serialized = manifest_bytes.decode("utf-8")
+    assert "confirmed_by" not in serialized
+    assert "confirmed_at" not in serialized
+    assert "occurred_at" not in serialized
+    assert "2026-01-03T04:05:06+08:00" not in serialized
+    assert result.sha256 == hashlib.sha256(destination.read_bytes()).hexdigest()
+    assert result.sha256 not in serialized
 
 
 def test_bundle_write_failure_preserves_existing_valid_destination(
@@ -303,6 +598,127 @@ def test_bundle_write_failure_preserves_existing_valid_destination(
 
     assert destination.read_bytes() == b"previous-valid-bundle"
     assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
+    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+
+
+def test_unexpected_write_exception_preserves_destination_and_cleans_temp(
+    tmp_path,
+    monkeypatch,
+):
+    destination = tmp_path / "bundle.zip"
+    destination.write_bytes(b"previous-valid-bundle")
+    monkeypatch.setattr(
+        "open_tax_check.evidence_bundle._write_zip_members",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
+
+    with pytest.raises(EvidenceBundleError, match="^evidence_bundle_write_failed$"):
+        build_evidence_bundle(
+            make_snapshot(),
+            make_verified_files(tmp_path, "source"),
+            make_report_artifacts(tmp_path),
+            destination,
+        )
+
+    assert destination.read_bytes() == b"previous-valid-bundle"
+    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
+    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+
+
+def test_zip_hash_failure_preserves_destination_and_cleans_temp(
+    tmp_path,
+    monkeypatch,
+):
+    destination = tmp_path / "bundle.zip"
+    destination.write_bytes(b"previous-valid-bundle")
+    evidence_bundle = __import__(
+        "open_tax_check.evidence_bundle",
+        fromlist=["_sha256_file"],
+    )
+    original_sha256_file = evidence_bundle._sha256_file
+
+    def fail_for_zip_temporary(path):
+        if path.name.startswith(".bundle.zip."):
+            raise RuntimeError("hash failed")
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(
+        "open_tax_check.evidence_bundle._sha256_file",
+        fail_for_zip_temporary,
+    )
+
+    with pytest.raises(EvidenceBundleError, match="^evidence_bundle_write_failed$"):
+        build_evidence_bundle(
+            make_snapshot(),
+            make_verified_files(tmp_path, "source"),
+            make_report_artifacts(tmp_path),
+            destination,
+        )
+
+    assert destination.read_bytes() == b"previous-valid-bundle"
+    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
+    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+
+
+def test_bundle_replace_failure_preserves_destination_and_cleans_work_files(
+    tmp_path,
+    monkeypatch,
+):
+    destination = tmp_path / "bundle.zip"
+    destination.write_bytes(b"previous-valid-bundle")
+    original_replace = os.replace
+
+    def fail_destination_replace(source, target):
+        if Path(target) == destination:
+            raise OSError("replace failed")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(
+        "open_tax_check.evidence_bundle.os.replace",
+        fail_destination_replace,
+    )
+
+    with pytest.raises(EvidenceBundleError, match="^evidence_bundle_write_failed$"):
+        build_evidence_bundle(
+            make_snapshot(),
+            make_verified_files(tmp_path, "source"),
+            make_report_artifacts(tmp_path),
+            destination,
+        )
+
+    assert destination.read_bytes() == b"previous-valid-bundle"
+    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
+    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+
+
+def test_fdopen_failure_closes_descriptor_preserves_destination_and_cleans_temp(
+    tmp_path,
+    monkeypatch,
+):
+    destination = tmp_path / "bundle.zip"
+    destination.write_bytes(b"previous-valid-bundle")
+    captured_descriptors = []
+
+    def fail_fdopen(descriptor, *args, **kwargs):
+        captured_descriptors.append(descriptor)
+        raise RuntimeError("fdopen failed")
+
+    monkeypatch.setattr("open_tax_check.evidence_bundle.os.fdopen", fail_fdopen)
+
+    with pytest.raises(EvidenceBundleError, match="^evidence_bundle_write_failed$"):
+        build_evidence_bundle(
+            make_snapshot(),
+            make_verified_files(tmp_path, "source"),
+            make_report_artifacts(tmp_path),
+            destination,
+        )
+
+    assert len(captured_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(captured_descriptors[0])
+    assert destination.read_bytes() == b"previous-valid-bundle"
+    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
+    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
 
 
 def test_verify_manifest_hashes_every_file_and_enforces_aggregate_limit(tmp_path, monkeypatch):

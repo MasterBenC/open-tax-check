@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
-import shutil
 import tempfile
 from typing import BinaryIO
-from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
+import unicodedata
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .evidence import verify_evidence_file
 from .tax_models import FactState, TaxCheckSnapshot
@@ -31,6 +31,20 @@ _FIXED_DISCLAIMER_ZH = (
     "文件哈希验证不等于税务事实真实、申报正确或不存在风险；"
     "本证据包不属于涉税鉴证、专业税务意见或纳税申报结论。"
 )
+_WINDOWS_FORBIDDEN_ARCHIVE_CHARACTERS = frozenset('<>:"\\|?*')
+_WINDOWS_RESERVED_ARCHIVE_NAMES = frozenset({
+    "aux",
+    "clock$",
+    "con",
+    "conin$",
+    "conout$",
+    "nul",
+    "prn",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+    *(f"com{index}" for index in "¹²³"),
+    *(f"lpt{index}" for index in "¹²³"),
+})
 
 
 class EvidenceBundleError(ValueError):
@@ -81,6 +95,14 @@ class EvidenceBundleResult:
     path: Path
     sha256: str
     includes_evidence_files: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedMember:
+    archive_path: str
+    path: Path
+    sha256: str
+    size_bytes: int
 
 
 def parse_evidence_manifest(payload: object) -> EvidenceManifest:
@@ -207,29 +229,53 @@ def _archive_evidence_path(index: int, item: VerifiedEvidenceItem) -> str:
     return f"evidence/{index:04d}/original{safe_suffix}"
 
 
-def _is_safe_archive_path(archive_path: str) -> bool:
+def _portable_archive_key(archive_path: str) -> str:
     if (
         not isinstance(archive_path, str)
         or not archive_path
         or "\\" in archive_path
         or "\0" in archive_path
     ):
-        return False
+        raise ValueError("invalid_bundle_archive_path")
+    raw_parts = archive_path.split("/")
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        raise ValueError("invalid_bundle_archive_path")
     path = PurePosixPath(archive_path)
-    return (
-        not path.is_absolute()
-        and path.as_posix() == archive_path
-        and all(part not in {"", ".", ".."} for part in path.parts)
-    )
+    if path.is_absolute() or path.as_posix() != archive_path:
+        raise ValueError("invalid_bundle_archive_path")
+    canonical_parts = []
+    for part in raw_parts:
+        if (
+            part.endswith((".", " "))
+            or any(
+                ord(character) < 32
+                or character in _WINDOWS_FORBIDDEN_ARCHIVE_CHARACTERS
+                for character in part
+            )
+            or part.split(".", 1)[0].casefold()
+            in _WINDOWS_RESERVED_ARCHIVE_NAMES
+        ):
+            raise ValueError("invalid_bundle_archive_path")
+        canonical_parts.append(unicodedata.normalize("NFC", part).casefold())
+    return "/".join(canonical_parts)
+
+
+def _validate_archive_paths(archive_paths: list[str]) -> None:
+    canonical_paths = [_portable_archive_key(path) for path in archive_paths]
+    if len(set(canonical_paths)) != len(canonical_paths):
+        raise ValueError("invalid_bundle_archive_path")
 
 
 def _evidence_item_payloads(
     verified: VerifiedEvidenceSet,
     *,
     include_evidence_files: bool,
-) -> tuple[list[dict[str, object]], list[tuple[str, Path]]]:
+) -> tuple[
+    list[dict[str, object]],
+    list[tuple[str, Path, str, int]],
+]:
     payloads: list[dict[str, object]] = []
-    members: list[tuple[str, Path]] = []
+    members: list[tuple[str, Path, str, int]] = []
     for index, item in enumerate(
         sorted(verified.items, key=lambda candidate: candidate.source_id),
         start=1,
@@ -247,7 +293,9 @@ def _evidence_item_payloads(
             "status": "verified",
         })
         if bundle_path is not None:
-            members.append((bundle_path, item.source_path))
+            members.append(
+                (bundle_path, item.source_path, item.sha256, item.size_bytes),
+            )
     return payloads, members
 
 
@@ -331,36 +379,101 @@ def _audit_event_payloads(snapshot: TaxCheckSnapshot) -> list[dict[str, object]]
     ]
 
 
+def _stage_source(
+    archive_path: str,
+    source_path: Path,
+    staged_path: Path,
+) -> _StagedMember:
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with source_path.open("rb") as source, staged_path.open("xb") as target:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            target.write(chunk)
+            digest.update(chunk)
+            size_bytes += len(chunk)
+        target.flush()
+        os.fsync(target.fileno())
+    return _StagedMember(
+        archive_path=archive_path,
+        path=staged_path,
+        sha256=digest.hexdigest(),
+        size_bytes=size_bytes,
+    )
+
+
+def _stage_members(
+    members: list[tuple[str, Path]],
+    staging_directory: Path,
+) -> dict[str, _StagedMember]:
+    staged = {}
+    for index, (archive_path, source_path) in enumerate(
+        sorted(members, key=lambda member: member[0]),
+        start=1,
+    ):
+        staged[archive_path] = _stage_source(
+            archive_path,
+            source_path,
+            staging_directory / f"{index:04d}.stage",
+        )
+    return staged
+
+
 def _artifact_payloads(
     artifacts: tuple[BundleArtifact, ...],
-) -> tuple[list[dict[str, object]], list[tuple[str, Path]]]:
+    staged_members: dict[str, _StagedMember],
+) -> list[dict[str, object]]:
     payloads: list[dict[str, object]] = []
-    members: list[tuple[str, Path]] = []
     for artifact in sorted(artifacts, key=lambda item: item.archive_path):
-        if not _is_safe_archive_path(artifact.archive_path):
-            raise ValueError("unsafe_bundle_artifact_path")
+        staged = staged_members[artifact.archive_path]
         payloads.append({
             "kind": artifact.kind,
             "archive_path": artifact.archive_path,
-            "sha256": _sha256_file(artifact.path),
-            "size_bytes": artifact.path.stat().st_size,
+            "sha256": staged.sha256,
+            "size_bytes": staged.size_bytes,
         })
-        members.append((artifact.archive_path, artifact.path))
-    return payloads, members
+    return payloads
 
 
 def _manifest_payload(
     snapshot: TaxCheckSnapshot,
     verified: VerifiedEvidenceSet,
     artifacts: tuple[BundleArtifact, ...],
+    staging_directory: Path,
     *,
     include_evidence_files: bool,
-) -> tuple[dict[str, object], list[tuple[str, Path]]]:
+) -> tuple[dict[str, object], list[tuple[str, _StagedMember]]]:
     evidence_items, evidence_members = _evidence_item_payloads(
         verified,
         include_evidence_files=include_evidence_files,
     )
-    artifact_payloads, artifact_members = _artifact_payloads(artifacts)
+    artifact_members = [
+        (artifact.archive_path, artifact.path)
+        for artifact in artifacts
+    ]
+    archive_paths = [
+        *(archive_path for archive_path, _ in artifact_members),
+        *(archive_path for archive_path, _, _, _ in evidence_members),
+        "bundle-manifest.json",
+    ]
+    _validate_archive_paths(archive_paths)
+    staged_members = _stage_members(
+        [
+            *artifact_members,
+            *(
+                (archive_path, source_path)
+                for archive_path, source_path, _, _ in evidence_members
+            ),
+        ],
+        staging_directory,
+    )
+    for archive_path, _, expected_sha256, expected_size_bytes in evidence_members:
+        staged = staged_members[archive_path]
+        if (
+            staged.sha256 != expected_sha256
+            or staged.size_bytes != expected_size_bytes
+        ):
+            raise ValueError("verified_evidence_source_changed")
+    artifact_payloads = _artifact_payloads(artifacts, staged_members)
     payload = {
         "schema_version": BUNDLE_SCHEMA_VERSION,
         "generator_version": importlib.metadata.version("open-tax-check"),
@@ -381,7 +494,10 @@ def _manifest_payload(
         "audit_events": _audit_event_payloads(snapshot),
         "disclaimer_zh": _FIXED_DISCLAIMER_ZH,
     }
-    return payload, artifact_members + evidence_members
+    return payload, [
+        (archive_path, staged)
+        for archive_path, staged in staged_members.items()
+    ]
 
 
 def _zip_info(archive_path: str) -> ZipInfo:
@@ -392,9 +508,19 @@ def _zip_info(archive_path: str) -> ZipInfo:
     return info
 
 
-def _write_stream(archive: ZipFile, archive_path: str, source: BinaryIO) -> None:
+def _write_stream(
+    archive: ZipFile,
+    archive_path: str,
+    source: BinaryIO,
+) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size_bytes = 0
     with archive.open(_zip_info(archive_path), "w") as target:
-        shutil.copyfileobj(source, target, length=1024 * 1024)
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            target.write(chunk)
+            digest.update(chunk)
+            size_bytes += len(chunk)
+    return digest.hexdigest(), size_bytes
 
 
 def _write_zip_members(
@@ -402,6 +528,7 @@ def _write_zip_members(
     snapshot: TaxCheckSnapshot,
     verified: VerifiedEvidenceSet,
     artifacts: tuple[BundleArtifact, ...],
+    staging_directory: Path,
     *,
     include_evidence_files: bool,
 ) -> None:
@@ -409,24 +536,28 @@ def _write_zip_members(
         snapshot,
         verified,
         artifacts,
+        staging_directory,
         include_evidence_files=include_evidence_files,
     )
-    members: list[tuple[str, Path | bytes]] = [
+    members: list[tuple[str, _StagedMember | bytes]] = [
         *path_members,
         ("bundle-manifest.json", _json_bytes(manifest)),
     ]
-    archive_paths = [archive_path for archive_path, _ in members]
-    if (
-        len(set(archive_paths)) != len(archive_paths)
-        or any(not _is_safe_archive_path(path) for path in archive_paths)
-    ):
-        raise ValueError("invalid_bundle_archive_path")
     for archive_path, source in sorted(members, key=lambda member: member[0]):
         if isinstance(source, bytes):
             archive.writestr(_zip_info(archive_path), source)
         else:
-            with source.open("rb") as input_file:
-                _write_stream(archive, archive_path, input_file)
+            with source.path.open("rb") as input_file:
+                archived_sha256, archived_size_bytes = _write_stream(
+                    archive,
+                    archive_path,
+                    input_file,
+                )
+            if (
+                archived_sha256 != source.sha256
+                or archived_size_bytes != source.size_bytes
+            ):
+                raise ValueError("staged_bundle_source_changed")
 
 
 def build_evidence_bundle(
@@ -439,33 +570,49 @@ def build_evidence_bundle(
 ) -> EvidenceBundleResult:
     validate_evidence_bindings(snapshot, verified)
     destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
-    )
-    temporary = Path(temporary_name)
+    descriptor: int | None = None
+    temporary: Path | None = None
     try:
-        with os.fdopen(descriptor, "w+b") as output:
-            with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
-                _write_zip_members(
-                    archive,
-                    snapshot,
-                    verified,
-                    artifacts,
-                    include_evidence_files=include_evidence_files,
-                )
-            output.flush()
-            os.fsync(output.fileno())
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        temporary = Path(temporary_name)
+        with tempfile.TemporaryDirectory(
+            prefix=f".{destination.name}.stage.",
+            dir=destination.parent,
+        ) as staging_name:
+            output = os.fdopen(descriptor, "w+b")
+            descriptor = None
+            with output:
+                with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+                    _write_zip_members(
+                        archive,
+                        snapshot,
+                        verified,
+                        artifacts,
+                        Path(staging_name),
+                        include_evidence_files=include_evidence_files,
+                    )
+                output.flush()
+                os.fsync(output.fileno())
         bundle_sha256 = _sha256_file(temporary)
         os.replace(temporary, destination)
-    except (OSError, ValueError, BadZipFile):
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+    except Exception:
         raise EvidenceBundleError("evidence_bundle_write_failed") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
     return EvidenceBundleResult(
         path=destination,
         sha256=bundle_sha256,
