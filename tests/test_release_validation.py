@@ -410,15 +410,23 @@ class ReleaseValidationTests(unittest.TestCase):
                 root,
                 wheel_members=(
                     "open_tax_check/evidence_bundle.py",
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     "open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                 ),
                 sdist_members=(
                     "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/source_paths.py",
                     "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                     "open_tax_check-0.1.0/skills/open-tax-check/references/"
                     "host-integrations.md",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
             )
 
@@ -442,14 +450,22 @@ class ReleaseValidationTests(unittest.TestCase):
             (
                 "wheel_module",
                 (
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     "open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                 ),
                 (
                     "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/source_paths.py",
                     "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                     archived_sdist_document,
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
                 required_wheel_member,
             ),
@@ -457,13 +473,21 @@ class ReleaseValidationTests(unittest.TestCase):
                 "sdist_document",
                 (
                     required_wheel_member,
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     "open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                 ),
                 (
                     "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/source_paths.py",
                     "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
                 required_sdist_document,
             ),
@@ -504,12 +528,22 @@ class ReleaseValidationTests(unittest.TestCase):
             (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
             self.write_distribution_archives(
                 root,
-                wheel_members=("open_tax_check/evidence_bundle.py",),
+                wheel_members=(
+                    "open_tax_check/evidence_bundle.py",
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
+                ),
                 sdist_members=(
                     "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/source_paths.py",
                     required_sdist_member,
                     "open_tax_check-0.1.0/skills/open-tax-check/references/"
                     "host-integrations.md",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
             )
 
@@ -538,12 +572,20 @@ class ReleaseValidationTests(unittest.TestCase):
                 root,
                 wheel_members=(
                     "open_tax_check/evidence_bundle.py",
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     required_wheel_member,
                 ),
                 sdist_members=(
                     "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-0.1.0/src/open_tax_check/source_paths.py",
                     "open_tax_check-0.1.0/skills/open-tax-check/references/"
                     "host-integrations.md",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-0.1.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
             )
 

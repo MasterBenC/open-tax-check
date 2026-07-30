@@ -339,6 +339,30 @@ class PublicRepositoryContractTests(unittest.TestCase):
         ):
             self.assertIn(required, contract)
 
+    def test_structured_document_contract_is_public_and_truthful(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        contract = (ROOT / "docs/document-extraction-contract.md").read_text(encoding="utf-8")
+        for text in (readme, contract):
+            for required in (
+                "financial-statement/v1",
+                "tax-return/v1",
+                "validate-structured-document",
+                "import-structured-document",
+                "proposed",
+                "confirmed",
+                "SHA-256",
+                "source_id",
+            ):
+                self.assertIn(required, text)
+            self.assertIn("不确定的宿主 AI 输出不得进入税务计算", text)
+        for fixture in (
+            "tests/fixtures/structured_documents/financial-statement.json",
+            "tests/fixtures/structured_documents/tax-return.json",
+        ):
+            payload = (ROOT / fixture).read_text(encoding="utf-8")
+            self.assertIn("example.invalid", payload)
+            self.assertNotIn("@", payload)
+
     def test_public_docs_describe_local_ocr_boundary(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         contract = (ROOT / "docs/document-extraction-contract.md").read_text(encoding="utf-8")

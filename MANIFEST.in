@@ -1,1 +1,3 @@
 include skills/open-tax-check/references/host-integrations.md
+include tests/fixtures/structured_documents/financial-statement.json
+include tests/fixtures/structured_documents/tax-return.json

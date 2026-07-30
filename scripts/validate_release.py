@@ -24,12 +24,20 @@ PUBLIC_RELEASE_LIMIT_BYTES = 5 * 1024 * 1024
 DISTRIBUTION_FILE_LIMIT_BYTES = 1 * 1024 * 1024
 REQUIRED_WHEEL_MEMBERS = {
     "open_tax_check/evidence_bundle.py",
+    "open_tax_check/structured_documents.py",
+    "open_tax_check/structured_document_providers.py",
+    "open_tax_check/source_paths.py",
     "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
 }
 REQUIRED_SDIST_MEMBER_SUFFIXES = {
     "src/open_tax_check/evidence_bundle.py",
+    "src/open_tax_check/structured_documents.py",
+    "src/open_tax_check/structured_document_providers.py",
+    "src/open_tax_check/source_paths.py",
     "src/open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
     "skills/open-tax-check/references/host-integrations.md",
+    "tests/fixtures/structured_documents/financial-statement.json",
+    "tests/fixtures/structured_documents/tax-return.json",
 }
 REQUIRED = (
     "README.md",

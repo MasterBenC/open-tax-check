@@ -470,6 +470,8 @@ git commit -m "feat: validate and import structured tax documents"
 - Modify: `README.md`
 - Modify: `tests/test_public_repo_contract.py`
 - Modify: `tests/test_release_validation.py`
+- Modify: `scripts/validate_release.py`
+- Modify: `MANIFEST.in`
 
 **Interfaces:**
 - Consumes: all prior public APIs and CLI commands。
