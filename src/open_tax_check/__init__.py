@@ -79,3 +79,8 @@ from .template_documents import (
     financial_statement_template,
     tax_return_template,
 )
+from .structured_reconciliation import (
+    DocumentReconciliationIssue,
+    DocumentReconciliationResult,
+    reconcile_structured_documents,
+)
