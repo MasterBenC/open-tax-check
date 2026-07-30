@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
+import json
 import re
 
 from .numeric import parse_decimal
@@ -30,6 +31,7 @@ _CONFIRMATION_STATES = {"proposed", "confirmed", "rejected"}
 _MAX_LINES = 10_000
 _MAX_ISSUES = 1_000
 _MAX_SOURCE_ANCHORS = 10_000
+_MAX_JSON_BYTES = 20 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +130,23 @@ def _optional_amount(value: object) -> str | None:
     return _amount(value)
 
 
+def _validate_json_size(payload: Mapping[str, object]) -> None:
+    try:
+        size = len(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError):
+        raise _invalid() from None
+    if size > _MAX_JSON_BYTES:
+        raise _invalid()
+
+
 def _source_anchor(value: object) -> SourceAnchor:
     payload = _mapping(value, _ANCHOR_KEYS)
     source_id = _text(payload["source_id"])
@@ -171,7 +190,11 @@ def _line(value: object) -> FinancialStatementLine:
     payload = _mapping(value, _LINE_KEYS)
     confidence_source = _text(payload["confidence_source"])
     confirmation_state = _text(payload["confirmation_state"])
-    if confidence_source not in _CONFIDENCE_SOURCES or confirmation_state not in _CONFIRMATION_STATES:
+    if (
+        confidence_source not in _CONFIDENCE_SOURCES
+        or confirmation_state not in _CONFIRMATION_STATES
+        or (confidence_source == "host_ai" and confirmation_state == "confirmed")
+    ):
         raise _invalid()
     return FinancialStatementLine(
         line_code=_text(payload["line_code"]),
@@ -201,6 +224,7 @@ def financial_statement_from_dict(payload: Mapping[str, object]) -> FinancialSta
     """Validate a financial-statement/v1 JSON payload without trusting its data."""
 
     try:
+        _validate_json_size(payload)
         document = _mapping(payload, _FINANCIAL_STATEMENT_KEYS)
         if document["schema_version"] != "financial-statement/v1":
             raise _invalid()
