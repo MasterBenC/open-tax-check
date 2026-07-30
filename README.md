@@ -1,17 +1,19 @@
 # OpenTaxCheck｜开源税务健康检查
 
-OpenTaxCheck 将确定性的 Python 税务规则引擎、AI 税务项目助理和强制专业复核结合起来，用于中国企业税务风险筛查。它提高资料盘点、计算、追溯和交付效率，不替代税务专业人员的判断。
+OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目助理结合起来，用于中国企业税务健康自查。宿主 AI 负责理解资料、向客户追问和解释结果；Python 负责来源绑定、金额、期间、勾稽、规则、状态和交付。报告不以税务专业人员批准为生成条件，但不替代涉税鉴证、专业税务意见或纳税申报结论。
 
 ## 当前版本范围
 
-当前仓库处于未发布的 **v0.1 / Phase 2B**：
+当前仓库处于未发布的 **v0.1 / Phase 2B**，并正在进行公开 v1 收尾开发；尚未发布 v1.0.0：
 
 - `.xlsx`、`.xlsm`、`.xls` 可进入安全盘点层，程序会记录文件哈希、工作表结构、有限表头信号、候选角色、公式/合并/隐藏信息和资料覆盖矩阵；
 - 唯一、可见、高置信且不含隐藏数据的工作表才可自动选择；其他情况进入 `needs_sheet_selection`，由复核人运行 `select-sheet`；
 - 隐藏工作表不得自动选择；选择含隐藏数据的工作表时，隐藏行必须明确选择 `include` 或 `exclude`；
 - CSV 和已确认映射的 Excel 都支持业务行标准化、凭证借贷平衡检查、试算平衡表勾稽、首批确定性规则、语义候选和内部 Markdown 草稿。
+- 常见资产负债表、利润表、现金流量表和纳税申报表可解析为严格来源绑定合同，并执行实体、期间、币种、单位、报表内部和跨表勾稽；强制勾稽失败进入 `blocked_data_quality`；
+- 自助案件状态、中文补件任务、客户确认和受影响税种增量重跑可持久化恢复，宿主不能自行把案件改写为已完成。
 
-Excel 映射提案在复核人明确执行 `confirm-mapping` 前始终不生效；`needs_professional_review` 也不是正式客户报告。财务报表和纳税申报表现在可通过 `financial-statement/v1`、`tax-return/v1` 严格合同验证和来源绑定导入，但模板解析、跨文档勾稽和正式自助报告仍未实现；未经结构化导入的资料仍标记为 `present_unparsed`。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。可验证证据包和 DOCX/PDF 报告已提供基础导出，专业 Excel 工作底稿仍未实现。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
+Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经结构化导入的资料仍标记为 `present_unparsed`。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。安全压缩包、云 OCR、专业 Excel 工作底稿、完整四件套虚构案例和 v1 发布门禁仍未完成。可验证证据包和中文 DOCX/PDF 正式客户报告已提供基础导出。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 
@@ -41,7 +43,7 @@ opentaxcheck confirm-mapping --case .\cases\demo --mapping .\mapping.json
 opentaxcheck run --case .\cases\demo --ai-mode off
 ```
 
-结构化财报和申报表由宿主 Agent 输出合同后验证；案件导入会从 `work/input_manifest.json` 重新绑定来源文件和 SHA-256，不信任宿主提供的路径、实体或期间：
+结构化财报和申报表由宿主 Agent 输出 `financial-statement/v1`、`tax-return/v1` 合同后验证；案件导入会从 `work/input_manifest.json` 重新绑定来源文件和 SHA-256，不信任宿主提供的路径、实体或期间：
 
 ```powershell
 opentaxcheck validate-structured-document --kind financial-statement --input .\financial-statement.json
@@ -49,6 +51,19 @@ opentaxcheck import-structured-document --case .\cases\demo --source <source_id>
 ```
 
 `proposed` 只表示待客户确认；不确定的宿主 AI 输出不得进入税务计算，也不能自行升级为 `confirmed`。合同验证不证明申报正确、来源真实或税务处理适用。
+
+### 可恢复的自助案件
+
+准备严格的 `TaxCheckRequest` JSON 后，可让任一宿主 Agent 使用同一组命令：
+
+```powershell
+opentaxcheck case-self-check --case .\cases\demo --request .\request.json
+opentaxcheck case-status --case .\cases\demo
+opentaxcheck case-tasks --case .\cases\demo
+opentaxcheck case-confirm --case .\cases\demo --input .\confirmations.json
+```
+
+私有恢复快照保存在 `work/tax-health-snapshot.private.json`；面向宿主的脱敏快照、中文补件清单和报告分别保存在 `work/tax-health-snapshot.json`、`work/customer-tasks.json` 和 `output/税务健康检查报告.md`。确认回写只接受问题标识、事实键、值、确认人、带时区时间戳和证据引用，不接受宿主提供的案件状态。前置账务或报表勾稽已处于 `blocked_data_quality` 时，命令拒绝生成正常税务报告。
 
 `aaaaaaaaaaaaaaaa` 仅是命令格式示例，绝不是可复用的真实 `source_id`。必须从当前案件的 `work/workbook_inventory.json` 或 `work/sheet_selection.json` 读取实际来源标识，并在来源变更后重新 `inspect`。
 

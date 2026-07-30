@@ -10,7 +10,13 @@ import sys
 import tempfile
 
 from .case import init_case, resolve_safe_case_path, set_case_scope
-from .agent_orchestration import evidence_bundle_delivery_payload
+from .case_orchestration import (
+    apply_case_confirmations,
+    build_case_customer_tasks,
+    case_status_payload,
+    run_case_self_check,
+)
+from .agent_orchestration import evidence_bundle_delivery_payload, task_payload
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
 from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSource
 from .evidence_bundle import (
@@ -25,6 +31,7 @@ from .ocr_runtime import OcrDependencyError, prepare_ocr_models
 from .pipeline import inspect_case, run_case
 from .tax_health import run_tax_health_check
 from .tax_io import tax_request_from_dict
+from .tax_models import Confirmation
 from .tax_reporting import (
     PdfExportUnavailable,
     write_tax_health_report,
@@ -274,6 +281,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include customer-confirmed calculation templates for all 20 tax items",
     )
+    self_check_parser = subparsers.add_parser(
+        "case-self-check", help="Run and persist a resumable customer self-check case"
+    )
+    self_check_parser.add_argument("--case", required=True, type=Path)
+    self_check_parser.add_argument("--request", required=True, type=Path)
+    self_check_parser.add_argument("--occurred-at")
+    status_parser = subparsers.add_parser("case-status", help="Read the deterministic case status")
+    status_parser.add_argument("--case", required=True, type=Path)
+    tasks_parser = subparsers.add_parser("case-tasks", help="Read pending customer confirmation tasks")
+    tasks_parser.add_argument("--case", required=True, type=Path)
+    confirm_case_parser = subparsers.add_parser("case-confirm", help="Apply a structured customer confirmation batch")
+    confirm_case_parser.add_argument("--case", required=True, type=Path)
+    confirm_case_parser.add_argument("--input", required=True, type=Path)
     return parser
 
 
@@ -382,6 +402,85 @@ def main() -> int:
         code, result = run_case(args.case, args.ai_mode)
         print(json.dumps(result, ensure_ascii=False))
         return code
+    if args.command == "case-self-check":
+        try:
+            request = tax_request_from_dict(json.loads(args.request.read_text(encoding="utf-8")))
+            result = run_case_self_check(args.case, request, occurred_at=args.occurred_at)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {
+                "case_state_missing", "unsafe_case_path", "invalid_case_state",
+                "blocked_data_quality", "case_period_mismatch",
+                "initial_confirmed_fact_forbidden", "case_snapshot_exists",
+            }
+            error_code = str(error) if str(error) in allowed else "case_self_check_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-status":
+        try:
+            result = case_status_payload(args.case)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {"case_snapshot_missing", "case_state_missing", "unsafe_case_path"}
+            error_code = str(error) if str(error) in allowed else "case_status_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-tasks":
+        try:
+            tasks = build_case_customer_tasks(args.case)
+            result = {
+                "schema_version": "tax-customer-tasks/v1",
+                "tasks": [task_payload(task) for task in tasks],
+            }
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {"case_snapshot_missing", "case_state_missing", "unsafe_case_path"}
+            error_code = str(error) if str(error) in allowed else "case_tasks_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-confirm":
+        try:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+            if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+                raise ValueError("invalid_confirmation_batch")
+            required_confirmation_fields = {
+                "question_id", "fact_key", "value", "confirmed_by", "confirmed_at",
+            }
+            allowed_confirmation_fields = required_confirmation_fields | {"evidence_refs"}
+            if any(
+                not required_confirmation_fields.issubset(item)
+                or not set(item).issubset(allowed_confirmation_fields)
+                for item in payload
+            ):
+                raise ValueError("invalid_confirmation_batch")
+            confirmations = tuple(
+                Confirmation(
+                    question_id=item["question_id"],
+                    fact_key=item["fact_key"],
+                    value=item["value"],
+                    confirmed_by=item["confirmed_by"],
+                    confirmed_at=item["confirmed_at"],
+                    evidence_refs=tuple(item.get("evidence_refs", ())),
+                )
+                for item in payload
+            )
+            result = apply_case_confirmations(args.case, confirmations)
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            allowed = {
+                "unknown_question", "confirmation_fact_mismatch", "invalid_confirmation_value",
+                "invalid_confirmation_batch", "case_snapshot_missing", "case_state_missing", "unsafe_case_path",
+                "blocked_data_quality",
+                "confirmation_evidence_required",
+                "unverified_confirmation_evidence",
+            }
+            error_code = str(error) if str(error) in allowed else "case_confirmation_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.command == "validate-structured-document":
         if args.kind not in _STRUCTURED_KINDS:
             print(json.dumps({"valid": False, "error_code": "invalid_kind"}, ensure_ascii=False))

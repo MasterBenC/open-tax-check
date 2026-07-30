@@ -4,7 +4,7 @@
 
 ## 路线
 
-- Python / CLI / JSON 核心：适用于本地命令能力，调用 `run_tax_health_check`、`continue_tax_health_check`、`tax_snapshot_payload` 和 `render_tax_health_report`。
+- Python / CLI / JSON 核心：适用于本地命令能力，优先调用可恢复的案件接口 `run_case_self_check`、`case_status_payload`、`build_case_customer_tasks` 和 `apply_case_confirmations`；无案件目录的嵌入式调用仍可使用 `run_tax_health_check` 和 `continue_tax_health_check`。
 - Agent Skills：把本 Skill 安装到宿主可调用的本地环境；升级 OpenTaxCheck 包即可获得新版规则包，不要求客户单独安装规则包。
 - MCP / HTTP：本阶段只规定业务字段，不实现部署、认证、租户隔离或远程网关。
 
@@ -12,14 +12,14 @@
 
 1. 验证 Python 3.11–3.13；需要工作簿时安装带 Excel extra 的 OpenTaxCheck。
 2. 为一个法律实体、一个地区和 2023–2026 检查期间构造 `TaxCheckRequest`。
-3. 不提供模型服务，直接调用 `run_tax_health_check`。
-4. 只向客户展示 `question_zh`、`help_zh`、`evidence_help_zh`。
-5. 用带确认人和时间戳的 `Confirmation` 提交客户答案。
-6. 调用 `continue_tax_health_check`，只重跑受影响税种。
+3. 不提供模型服务，调用 `case-self-check` 生成可恢复案件快照。
+4. 读取 `case-status` 和 `case-tasks`，只向客户展示 `question_zh`、`help_zh`、`evidence_help_zh`。
+5. 用带确认人、带时区时间戳和证据引用的结构化确认调用 `case-confirm`；不得传入或覆盖案件状态。
+6. Python 只重跑受影响税种，并重新生成同一修订版的任务、脱敏快照和中文报告。
 7. 输出中文报告，并保留机器 payload 用于审计。
 8. 升级 OpenTaxCheck 包以接收新版官方规则包。
 
-CLI 首次报告可运行 `opentaxcheck tax-health-check --request request.json --output-dir output`。需要全部 20 个参数化计算模板时追加 `--include-parameterized-packs`；模板不提供统一法定税率，所有计算事实必须经客户确认并绑定证据。
+CLI 可恢复案件运行 `opentaxcheck case-self-check --case CASE --request request.json`，随后使用 `case-status`、`case-tasks` 和 `case-confirm` 完成补件闭环。无案件目录的单次报告仍可运行 `opentaxcheck tax-health-check --request request.json --output-dir output`；需要显式加入全部参数化计算模板时可追加 `--include-parameterized-packs`。所有计算事实必须经客户确认并绑定证据。
 
 ## 证据包交付字段
 
@@ -62,3 +62,5 @@ Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 必须原
 The host Agent may call `build_agent_question_tasks(snapshot, max_questions=...)` and display only the Chinese presentation fields from each task. It must not invent confirmations. Convert a validated answer with `confirmation_from_task(task, value, confirmed_by=..., confirmed_at=..., evidence_refs=...)`, then pass the resulting confirmations to `continue_tax_health_check`. The Python core remains model-independent; no prompt text, token count, hidden reasoning, or provider metadata enters the business contract.
 
 Before attaching a file reference to a confirmation or calculation, call `verify_evidence_file(root, relative_path, expected_sha256)`. A hash mismatch, unsafe path, reparse point, unreadable file, or size limit is a failed evidence check and must remain visible to the customer.
+
+For the resumable `case-confirm` flow, `evidence_refs` must use a source ID present in the case `work/input_manifest.json` with a currently matching file hash, or the exact `customer-confirmation:<question_id>` reference for the question being answered. Unknown, mismatched, unsafe, or changed references are rejected as `unverified_confirmation_evidence`.
