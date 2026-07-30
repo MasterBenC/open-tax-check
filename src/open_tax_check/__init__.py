@@ -73,3 +73,9 @@ from .structured_document_providers import (
     import_financial_statement,
     import_tax_return,
 )
+from .template_documents import (
+    TemplateIssue,
+    TemplateParseResult,
+    financial_statement_template,
+    tax_return_template,
+)
