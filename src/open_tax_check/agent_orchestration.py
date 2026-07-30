@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from .evidence_bundle import EvidenceBundleResult
 from .tax_models import Confirmation, PromptChoice, Question, TaxCheckSnapshot
 
 
@@ -22,6 +23,25 @@ class AgentQuestionTask:
     choices: tuple[PromptChoice, ...]
     priority: int
     blocking: bool
+
+
+def evidence_bundle_delivery_payload(
+    bundle: EvidenceBundleResult | None,
+) -> dict[str, object]:
+    """Return the common allowlisted evidence-bundle delivery envelope."""
+    if bundle is None:
+        return {
+            "evidence_bundle_status": None,
+            "evidence_bundle_path": None,
+            "evidence_bundle_sha256": None,
+            "includes_evidence_files": False,
+        }
+    return {
+        "evidence_bundle_status": "verified",
+        "evidence_bundle_path": str(bundle.path),
+        "evidence_bundle_sha256": bundle.sha256,
+        "includes_evidence_files": bundle.includes_evidence_files,
+    }
 
 
 def build_agent_question_tasks(

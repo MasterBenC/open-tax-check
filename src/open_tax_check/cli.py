@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 from .case import init_case, set_case_scope
+from .agent_orchestration import evidence_bundle_delivery_payload
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
 from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSource
 from .evidence_bundle import (
@@ -491,12 +492,7 @@ def main() -> int:
             "snapshot_path": str(snapshot_path),
             "docx_path": str(docx_path) if docx_path is not None else None,
             "pdf_path": str(pdf_path) if pdf_path is not None else None,
-            "evidence_bundle_status": "verified" if bundle is not None else None,
-            "evidence_bundle_path": str(bundle.path) if bundle is not None else None,
-            "evidence_bundle_sha256": bundle.sha256 if bundle is not None else None,
-            "includes_evidence_files": (
-                bundle.includes_evidence_files if bundle is not None else False
-            ),
+            **evidence_bundle_delivery_payload(bundle),
         }, ensure_ascii=False))
         return 0
     return 2

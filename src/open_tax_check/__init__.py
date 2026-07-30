@@ -20,7 +20,18 @@ from .agent_orchestration import (
     AgentQuestionTask,
     build_agent_question_tasks,
     confirmation_from_task,
+    evidence_bundle_delivery_payload,
     task_payload,
+)
+
+from .evidence_bundle import (
+    BundleArtifact,
+    EvidenceBundleError,
+    EvidenceBundleResult,
+    EvidenceManifest,
+    EvidenceManifestItem,
+    VerifiedEvidenceItem,
+    VerifiedEvidenceSet,
 )
 
 from .tax_reporting import (

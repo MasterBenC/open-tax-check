@@ -1,12 +1,15 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 from open_tax_check.agent_orchestration import (
     build_agent_question_tasks,
     confirmation_from_task,
+    evidence_bundle_delivery_payload,
     task_payload,
 )
+from open_tax_check.evidence_bundle import EvidenceBundleResult
 from open_tax_check.tax_health import run_tax_health_check
 from open_tax_check.tax_models import (
     DateRange,
@@ -33,6 +36,30 @@ def snapshot_with_questions():
         request=TaxCheckRequest(DateRange(date(2026, 1, 1), date(2026, 12, 31)), "CN"),
         results=(), questions=questions, audit_events=(), revision=2,
     )
+
+
+def test_evidence_bundle_delivery_payload_has_one_allowlisted_contract_for_all_hosts():
+    bundle = EvidenceBundleResult(
+        path=Path("output") / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u8bc1\u636e\u5305.zip",
+        sha256="a" * 64,
+        includes_evidence_files=False,
+    )
+
+    assert evidence_bundle_delivery_payload(bundle) == {
+        "evidence_bundle_status": "verified",
+        "evidence_bundle_path": str(bundle.path),
+        "evidence_bundle_sha256": "a" * 64,
+        "includes_evidence_files": False,
+    }
+
+
+def test_evidence_bundle_delivery_payload_is_backward_compatible_when_disabled():
+    assert evidence_bundle_delivery_payload(None) == {
+        "evidence_bundle_status": None,
+        "evidence_bundle_path": None,
+        "evidence_bundle_sha256": None,
+        "includes_evidence_files": False,
+    }
 
 
 def test_build_agent_question_tasks_is_priority_ordered_and_bounded():
