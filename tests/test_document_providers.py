@@ -62,9 +62,15 @@ def test_host_provider_rejects_symlink_inside_case_input(tmp_path):
     assert result.issues[0].code == "unsafe_source_path"
 
 
-def test_windows_reparse_attribute_is_detected():
-    class ReparsePath:
-        def lstat(self):
-            return type("Stat", (), {"st_file_attributes": 0x400})()
+def test_host_provider_maps_shared_safe_path_failure(tmp_path, monkeypatch):
+    item = source(tmp_path)
 
-    assert document_providers._is_reparse_point(ReparsePath()) is True
+    def reject_path(path, root):
+        raise ValueError("unsafe_source_path")
+
+    monkeypatch.setattr(document_providers, "resolve_safe_source", reject_path)
+
+    result = HostProvider().import_result(item, payload())
+
+    assert result.status == "failed"
+    assert result.issues[0].code == "unsafe_source_path"
