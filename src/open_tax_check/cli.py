@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 
@@ -43,6 +44,18 @@ from .reviews import (
     confirm_mapping,
     confirm_sheet_selection,
 )
+from .structured_document_providers import (
+    StructuredDocumentImportError,
+    StructuredDocumentSource,
+    import_financial_statement,
+    import_tax_return,
+)
+from .structured_documents import (
+    financial_statement_from_dict,
+    tax_return_from_dict,
+    financial_statement_to_dict,
+    tax_return_to_dict,
+)
 
 
 _EVIDENCE_ERROR_CODES = frozenset({
@@ -53,6 +66,9 @@ _EVIDENCE_ERROR_CODES = frozenset({
     "evidence_bundle_size_limit_exceeded",
     "evidence_bundle_write_failed",
 })
+_STRUCTURED_KINDS = frozenset({"financial-statement", "tax-return"})
+_SOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_STRUCTURED_JSON_LIMIT = 20 * 1024 * 1024
 
 
 def _configure_utf8_output() -> None:
@@ -78,6 +94,57 @@ def _write_json_atomic(path: Path, payload: object) -> None:
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
+
+
+def _read_structured_json(path: Path) -> dict[str, object]:
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _STRUCTURED_JSON_LIMIT:
+            raise ValueError("invalid_structured_document")
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ValueError("invalid_structured_document") from None
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_structured_document")
+    return payload
+
+
+def _structured_case_source(case_dir: Path, source_id: str) -> StructuredDocumentSource:
+    if _SOURCE_ID.fullmatch(source_id) is None:
+        raise ValueError("invalid_source")
+    try:
+        state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+        manifest = json.loads((case_dir / "work" / "input_manifest.json").read_text(encoding="utf-8"))
+        item = next(item for item in manifest["sources"] if item.get("source_id") == source_id)
+        filename = Path(item["filename"])
+        review_period = state["review_period"]
+        media_type = item["media_type"]
+        sha256 = item["sha256"]
+        entity_name = state["entity_name"]
+        period_start = review_period["start"]
+        period_end = review_period["end"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, StopIteration, TypeError):
+        raise ValueError("invalid_source") from None
+    if (
+        filename.is_absolute()
+        or ".." in filename.parts
+        or not isinstance(media_type, str)
+        or not isinstance(sha256, str)
+        or not isinstance(entity_name, str)
+        or not isinstance(period_start, str)
+        or not isinstance(period_end, str)
+    ):
+        raise ValueError("invalid_source")
+    return StructuredDocumentSource(
+        source_id=source_id,
+        path=case_dir / "input" / filename,
+        media_type=media_type,
+        input_root=case_dir / "input",
+        sha256=sha256,
+        entity_name=entity_name,
+        period_start=period_start,
+        period_end=period_end,
+    )
 
 
 def _safe_input_path(path: Path, input_dir: Path) -> bool:
@@ -170,6 +237,18 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--case", required=True, type=Path)
     import_parser.add_argument("--source", required=True)
     import_parser.add_argument("--input", required=True, type=Path)
+    structured_validate_parser = subparsers.add_parser(
+        "validate-structured-document", help="Validate a structured financial or tax document"
+    )
+    structured_validate_parser.add_argument("--kind", required=True)
+    structured_validate_parser.add_argument("--input", required=True, type=Path)
+    structured_import_parser = subparsers.add_parser(
+        "import-structured-document", help="Import a source-bound structured financial or tax document"
+    )
+    structured_import_parser.add_argument("--case", required=True, type=Path)
+    structured_import_parser.add_argument("--source", required=True)
+    structured_import_parser.add_argument("--kind", required=True)
+    structured_import_parser.add_argument("--input", required=True, type=Path)
     prepare_parser = subparsers.add_parser("prepare-ocr", help="Prepare and attest local OCR models")
     prepare_parser.add_argument("--model-dir", required=True, type=Path)
     extract_parser = subparsers.add_parser("extract-document", help="Extract text from a local document")
@@ -299,6 +378,56 @@ def main() -> int:
         code, result = run_case(args.case, args.ai_mode)
         print(json.dumps(result, ensure_ascii=False))
         return code
+    if args.command == "validate-structured-document":
+        if args.kind not in _STRUCTURED_KINDS:
+            print(json.dumps({"valid": False, "error_code": "invalid_kind"}, ensure_ascii=False))
+            return 4
+        try:
+            payload = _read_structured_json(args.input)
+            value = (
+                financial_statement_from_dict(payload)
+                if args.kind == "financial-statement"
+                else tax_return_from_dict(payload)
+            )
+        except (TypeError, ValueError):
+            print(json.dumps({"valid": False, "error_code": "invalid_structured_document"}, ensure_ascii=False))
+            return 4
+        print(json.dumps({"valid": True, "kind": args.kind, "schema_version": value.schema_version}, ensure_ascii=False))
+        return 0
+    if args.command == "import-structured-document":
+        if args.kind not in _STRUCTURED_KINDS:
+            print(json.dumps({"status": "failed", "error_code": "invalid_kind"}, ensure_ascii=False))
+            return 4
+        try:
+            source = _structured_case_source(args.case, args.source)
+            payload = _read_structured_json(args.input)
+            value = (
+                import_financial_statement(source, payload)
+                if args.kind == "financial-statement"
+                else import_tax_return(source, payload)
+            )
+            serialized = (
+                financial_statement_to_dict(value)
+                if args.kind == "financial-statement"
+                else tax_return_to_dict(value)
+            )
+            target = args.case / "work" / "structured-documents" / f"{args.source}.{args.kind}.json"
+            _write_json_atomic(target, serialized)
+        except StructuredDocumentImportError as error:
+            print(json.dumps({"status": "failed", "error_code": error.code}, ensure_ascii=False))
+            return 4
+        except ValueError as error:
+            code = str(error) if str(error) in {"invalid_kind", "invalid_source", "invalid_structured_document"} else "invalid_structured_document"
+            print(json.dumps({"status": "failed", "error_code": code}, ensure_ascii=False))
+            return 4
+        except (OSError, TypeError):
+            print(json.dumps({"status": "failed", "error_code": "write_failed"}, ensure_ascii=False))
+            return 3
+        print(json.dumps({
+            "status": "completed", "kind": args.kind, "source_id": args.source,
+            "output_path": str(target),
+        }, ensure_ascii=False))
+        return 0
     if args.command == "validate-extraction":
         try:
             payload = json.loads(args.input.read_text(encoding="utf-8"))

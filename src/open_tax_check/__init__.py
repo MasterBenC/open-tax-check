@@ -54,3 +54,22 @@ from .tax_models import (
 )
 from .tax_registry import load_builtin_parameterized_calculation_packs
 from .evidence import EvidenceVerification, verify_evidence_file
+from .source_paths import resolve_safe_source
+from .structured_documents import (
+    FinancialStatement,
+    FinancialStatementLine,
+    SourceAnchor,
+    StructuredIssue,
+    TaxReturn,
+    TaxReturnLine,
+    financial_statement_from_dict,
+    financial_statement_to_dict,
+    tax_return_from_dict,
+    tax_return_to_dict,
+)
+from .structured_document_providers import (
+    StructuredDocumentImportError,
+    StructuredDocumentSource,
+    import_financial_statement,
+    import_tax_return,
+)
