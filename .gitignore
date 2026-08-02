@@ -1,5 +1,6 @@
 .worktrees/
 .superpowers/sdd/
+.superpowers/brainstorm/
 __pycache__/
 *.py[cod]
 *.egg-info/
