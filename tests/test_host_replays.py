@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -105,6 +106,7 @@ def test_host_replay_command_runs_the_committed_contract_fixture():
         capture_output=True,
         text=True,
         encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252:strict"},
     )
 
     assert completed.returncode == 0, completed.stderr

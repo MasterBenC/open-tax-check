@@ -79,7 +79,7 @@ def main() -> int:
                 result = _run(args.skill_dir, args.fixture, Path(temporary) / "staging")
     except Exception:
         result = {"status": "failed", "error": "host_replay_failed"}
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0 if result["status"] == "contract_replay_verified" else 1
 
 
