@@ -5,11 +5,19 @@ from dataclasses import asdict, is_dataclass
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 
-from .case import init_case, set_case_scope
-from .agent_orchestration import evidence_bundle_delivery_payload
+from .case import init_case, resolve_safe_case_path, set_case_scope
+from .case_orchestration import (
+    apply_case_confirmations,
+    build_case_customer_tasks,
+    case_status_payload,
+    run_case_self_check,
+)
+from .delivery import DeliveryError, build_case_delivery
+from .agent_orchestration import evidence_bundle_delivery_payload, task_payload
 from .document_extraction import document_extraction_from_dict, document_extraction_to_dict
 from .document_providers import ExtractionOptions, HostProvider, LocalDocumentSource
 from .evidence_bundle import (
@@ -24,6 +32,7 @@ from .ocr_runtime import OcrDependencyError, prepare_ocr_models
 from .pipeline import inspect_case, run_case
 from .tax_health import run_tax_health_check
 from .tax_io import tax_request_from_dict
+from .tax_models import Confirmation
 from .tax_reporting import (
     PdfExportUnavailable,
     write_tax_health_report,
@@ -43,6 +52,17 @@ from .reviews import (
     confirm_mapping,
     confirm_sheet_selection,
 )
+from .source_paths import resolve_safe_source
+from .structured_document_providers import (
+    StructuredDocumentImportError,
+    StructuredDocumentSource,
+    persist_financial_statement,
+    persist_tax_return,
+)
+from .structured_documents import (
+    financial_statement_from_dict,
+    tax_return_from_dict,
+)
 
 
 _EVIDENCE_ERROR_CODES = frozenset({
@@ -53,6 +73,9 @@ _EVIDENCE_ERROR_CODES = frozenset({
     "evidence_bundle_size_limit_exceeded",
     "evidence_bundle_write_failed",
 })
+_STRUCTURED_KINDS = frozenset({"financial-statement", "tax-return"})
+_SOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_STRUCTURED_JSON_LIMIT = 20 * 1024 * 1024
 
 
 def _configure_utf8_output() -> None:
@@ -78,6 +101,60 @@ def _write_json_atomic(path: Path, payload: object) -> None:
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
+
+
+def _read_structured_json(path: Path) -> dict[str, object]:
+    try:
+        safe_path = resolve_safe_source(path, path.parent)
+        raw = safe_path.read_bytes()
+        if len(raw) > _STRUCTURED_JSON_LIMIT:
+            raise ValueError("invalid_structured_document")
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ValueError("invalid_structured_document") from None
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_structured_document")
+    return payload
+
+
+def _structured_case_source(case_dir: Path, source_id: str) -> StructuredDocumentSource:
+    if _SOURCE_ID.fullmatch(source_id) is None:
+        raise ValueError("invalid_source")
+    try:
+        case_dir = resolve_safe_case_path(case_dir)
+        manifest_path = resolve_safe_source(case_dir / "work" / "input_manifest.json", case_dir / "work")
+        state = json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        item = next(item for item in manifest["sources"] if item.get("source_id") == source_id)
+        filename = Path(item["filename"])
+        review_period = state["review_period"]
+        media_type = item["media_type"]
+        sha256 = item["sha256"]
+        entity_name = state["entity_name"]
+        period_start = review_period["start"]
+        period_end = review_period["end"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, StopIteration, TypeError):
+        raise ValueError("invalid_source") from None
+    if (
+        filename.is_absolute()
+        or ".." in filename.parts
+        or not isinstance(media_type, str)
+        or not isinstance(sha256, str)
+        or not isinstance(entity_name, str)
+        or not isinstance(period_start, str)
+        or not isinstance(period_end, str)
+    ):
+        raise ValueError("invalid_source")
+    return StructuredDocumentSource(
+        source_id=source_id,
+        path=case_dir / "input" / filename,
+        media_type=media_type,
+        input_root=case_dir / "input",
+        sha256=sha256,
+        entity_name=entity_name,
+        period_start=period_start,
+        period_end=period_end,
+    )
 
 
 def _safe_input_path(path: Path, input_dir: Path) -> bool:
@@ -170,6 +247,18 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--case", required=True, type=Path)
     import_parser.add_argument("--source", required=True)
     import_parser.add_argument("--input", required=True, type=Path)
+    structured_validate_parser = subparsers.add_parser(
+        "validate-structured-document", help="Validate a structured financial or tax document"
+    )
+    structured_validate_parser.add_argument("--kind", required=True)
+    structured_validate_parser.add_argument("--input", required=True, type=Path)
+    structured_import_parser = subparsers.add_parser(
+        "import-structured-document", help="Import a source-bound structured financial or tax document"
+    )
+    structured_import_parser.add_argument("--case", required=True, type=Path)
+    structured_import_parser.add_argument("--source", required=True)
+    structured_import_parser.add_argument("--kind", required=True)
+    structured_import_parser.add_argument("--input", required=True, type=Path)
     prepare_parser = subparsers.add_parser("prepare-ocr", help="Prepare and attest local OCR models")
     prepare_parser.add_argument("--model-dir", required=True, type=Path)
     extract_parser = subparsers.add_parser("extract-document", help="Extract text from a local document")
@@ -191,6 +280,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include customer-confirmed calculation templates for all 20 tax items",
     )
+    self_check_parser = subparsers.add_parser(
+        "case-self-check", help="Run and persist a resumable customer self-check case"
+    )
+    self_check_parser.add_argument("--case", required=True, type=Path)
+    self_check_parser.add_argument("--request", required=True, type=Path)
+    self_check_parser.add_argument("--occurred-at")
+    status_parser = subparsers.add_parser("case-status", help="Read the deterministic case status")
+    status_parser.add_argument("--case", required=True, type=Path)
+    tasks_parser = subparsers.add_parser("case-tasks", help="Read pending customer confirmation tasks")
+    tasks_parser.add_argument("--case", required=True, type=Path)
+    confirm_case_parser = subparsers.add_parser("case-confirm", help="Apply a structured customer confirmation batch")
+    confirm_case_parser.add_argument("--case", required=True, type=Path)
+    confirm_case_parser.add_argument("--input", required=True, type=Path)
+    delivery_parser = subparsers.add_parser(
+        "case-delivery", help="Publish one revision-consistent customer delivery"
+    )
+    delivery_parser.add_argument("--case", required=True, type=Path)
+    delivery_parser.add_argument("--include-pdf", action="store_true")
+    delivery_parser.add_argument("--include-evidence-files", action="store_true")
     return parser
 
 
@@ -299,6 +407,148 @@ def main() -> int:
         code, result = run_case(args.case, args.ai_mode)
         print(json.dumps(result, ensure_ascii=False))
         return code
+    if args.command == "case-self-check":
+        try:
+            request = tax_request_from_dict(json.loads(args.request.read_text(encoding="utf-8")))
+            result = run_case_self_check(args.case, request, occurred_at=args.occurred_at)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {
+                "case_state_missing", "unsafe_case_path", "invalid_case_state",
+                "blocked_data_quality", "case_period_mismatch",
+                "initial_confirmed_fact_forbidden", "case_snapshot_exists",
+            }
+            error_code = str(error) if str(error) in allowed else "case_self_check_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-status":
+        try:
+            result = case_status_payload(args.case)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {"case_snapshot_missing", "case_state_missing", "unsafe_case_path"}
+            error_code = str(error) if str(error) in allowed else "case_status_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-tasks":
+        try:
+            tasks = build_case_customer_tasks(args.case)
+            result = {
+                "schema_version": "tax-customer-tasks/v1",
+                "tasks": [task_payload(task) for task in tasks],
+            }
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {"case_snapshot_missing", "case_state_missing", "unsafe_case_path"}
+            error_code = str(error) if str(error) in allowed else "case_tasks_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-confirm":
+        try:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+            if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+                raise ValueError("invalid_confirmation_batch")
+            required_confirmation_fields = {
+                "question_id", "fact_key", "value", "confirmed_by", "confirmed_at",
+            }
+            allowed_confirmation_fields = required_confirmation_fields | {"evidence_refs"}
+            if any(
+                not required_confirmation_fields.issubset(item)
+                or not set(item).issubset(allowed_confirmation_fields)
+                for item in payload
+            ):
+                raise ValueError("invalid_confirmation_batch")
+            confirmations = tuple(
+                Confirmation(
+                    question_id=item["question_id"],
+                    fact_key=item["fact_key"],
+                    value=item["value"],
+                    confirmed_by=item["confirmed_by"],
+                    confirmed_at=item["confirmed_at"],
+                    evidence_refs=tuple(item.get("evidence_refs", ())),
+                )
+                for item in payload
+            )
+            result = apply_case_confirmations(args.case, confirmations)
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            allowed = {
+                "unknown_question", "confirmation_fact_mismatch", "invalid_confirmation_value",
+                "invalid_confirmation_batch", "case_snapshot_missing", "case_state_missing", "unsafe_case_path",
+                "blocked_data_quality",
+                "confirmation_evidence_required",
+                "unverified_confirmation_evidence",
+            }
+            error_code = str(error) if str(error) in allowed else "case_confirmation_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-delivery":
+        try:
+            result = build_case_delivery(
+                args.case,
+                include_pdf=args.include_pdf,
+                include_evidence_files=args.include_evidence_files,
+            )
+        except (OSError, UnicodeError, TypeError, ValueError) as error:
+            allowed = {
+                "case_state_missing", "unsafe_case_path", "case_snapshot_missing",
+                "delivery_blocked_data_quality", "delivery_source_manifest_invalid",
+                "delivery_evidence_unverified", "delivery_pointer_invalid",
+                "delivery_manifest_invalid", "delivery_revision_conflict",
+                "delivery_pointer_write_failed", "delivery_write_failed",
+            }
+            error_code = str(error) if str(error) in allowed else "case_delivery_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "validate-structured-document":
+        if args.kind not in _STRUCTURED_KINDS:
+            print(json.dumps({"valid": False, "error_code": "invalid_kind"}, ensure_ascii=False))
+            return 4
+        try:
+            payload = _read_structured_json(args.input)
+            value = (
+                financial_statement_from_dict(payload)
+                if args.kind == "financial-statement"
+                else tax_return_from_dict(payload)
+            )
+        except (TypeError, ValueError):
+            print(json.dumps({"valid": False, "error_code": "invalid_structured_document"}, ensure_ascii=False))
+            return 4
+        print(json.dumps({"valid": True, "kind": args.kind, "schema_version": value.schema_version}, ensure_ascii=False))
+        return 0
+    if args.command == "import-structured-document":
+        if args.kind not in _STRUCTURED_KINDS:
+            print(json.dumps({"status": "failed", "error_code": "invalid_kind"}, ensure_ascii=False))
+            return 4
+        try:
+            _structured_case_source(args.case, args.source)
+            payload = _read_structured_json(args.input)
+            target = (
+                persist_financial_statement(args.case, args.source, payload)
+                if args.kind == "financial-statement"
+                else persist_tax_return(args.case, args.source, payload)
+            )
+        except StructuredDocumentImportError as error:
+            print(json.dumps({"status": "failed", "error_code": error.code}, ensure_ascii=False))
+            return 4
+        except ValueError as error:
+            code = str(error) if str(error) in {"invalid_kind", "invalid_source", "invalid_structured_document"} else "invalid_structured_document"
+            print(json.dumps({"status": "failed", "error_code": code}, ensure_ascii=False))
+            return 4
+        except (OSError, TypeError):
+            print(json.dumps({"status": "failed", "error_code": "write_failed"}, ensure_ascii=False))
+            return 3
+        print(json.dumps({
+            "status": "completed", "kind": args.kind, "source_id": args.source,
+            "output_path": str(target),
+        }, ensure_ascii=False))
+        return 0
     if args.command == "validate-extraction":
         try:
             payload = json.loads(args.input.read_text(encoding="utf-8"))

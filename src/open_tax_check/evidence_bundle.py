@@ -192,12 +192,14 @@ def validate_evidence_bindings(
         for fact in snapshot.request.facts
         if fact.state is FactState.CONFIRMED
         for reference in fact.evidence_refs
+        if not reference.startswith("customer-confirmation:")
     }
     required.update(
         reference
         for result in snapshot.results
         if result.calculation is not None
         for reference in result.calculation.evidence_refs
+        if not reference.startswith("customer-confirmation:")
     )
     if not required.issubset(verified_ids):
         raise EvidenceBundleError("unverified_evidence_reference")
@@ -492,6 +494,10 @@ def _manifest_payload(
         "rule_sources": _rule_source_payloads(snapshot),
         "artifacts": artifact_payloads,
         "audit_events": _audit_event_payloads(snapshot),
+        "limitations": [
+            {"code": item.code, "message_zh": item.message_zh}
+            for item in snapshot.limitations
+        ],
         "disclaimer_zh": _FIXED_DISCLAIMER_ZH,
     }
     return payload, [
@@ -575,13 +581,13 @@ def build_evidence_bundle(
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{destination.name}.",
+            prefix=".otce-",
             suffix=".tmp",
             dir=destination.parent,
         )
         temporary = Path(temporary_name)
         with tempfile.TemporaryDirectory(
-            prefix=f".{destination.name}.stage.",
+            prefix=".otcz-",
             dir=destination.parent,
         ) as staging_name:
             output = os.fdopen(descriptor, "w+b")

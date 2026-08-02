@@ -16,7 +16,17 @@ class PackageContractTests(unittest.TestCase):
     def test_package_exposes_version(self):
         import open_tax_check
 
-        self.assertEqual(open_tax_check.__version__, "0.1.0")
+        self.assertEqual(open_tax_check.__version__, "1.0.0")
+
+    def test_package_metadata_uses_runtime_version_as_single_source(self):
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertNotIn("version", data["project"])
+        self.assertIn("version", data["project"]["dynamic"])
+        self.assertEqual(
+            data["tool"]["setuptools"]["dynamic"]["version"]["attr"],
+            "open_tax_check.__version__",
+        )
 
     def test_packaged_tax_pack_prototype_is_available_as_a_resource(self):
         manifest = files("open_tax_check.tax_packs").joinpath(

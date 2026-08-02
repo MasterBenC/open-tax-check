@@ -1,17 +1,23 @@
 # OpenTaxCheck｜开源税务健康检查
 
-OpenTaxCheck 将确定性的 Python 税务规则引擎、AI 税务项目助理和强制专业复核结合起来，用于中国企业税务风险筛查。它提高资料盘点、计算、追溯和交付效率，不替代税务专业人员的判断。
+OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目助理结合起来，用于中国企业税务健康自查。宿主 AI 负责理解资料、向客户追问和解释结果；Python 负责来源绑定、金额、期间、勾稽、规则、状态和交付。报告不以税务专业人员批准为生成条件，但不替代涉税鉴证、专业税务意见或纳税申报结论。
 
 ## 当前版本范围
 
-当前仓库处于未发布的 **v0.1 / Phase 2B**：
+当前仓库处于未发布的 **self-service v1** 收尾状态；Python 包版本为 `1.0.0`，GitHub tag/Release 尚未创建：
 
 - `.xlsx`、`.xlsm`、`.xls` 可进入安全盘点层，程序会记录文件哈希、工作表结构、有限表头信号、候选角色、公式/合并/隐藏信息和资料覆盖矩阵；
 - 唯一、可见、高置信且不含隐藏数据的工作表才可自动选择；其他情况进入 `needs_sheet_selection`，由复核人运行 `select-sheet`；
 - 隐藏工作表不得自动选择；选择含隐藏数据的工作表时，隐藏行必须明确选择 `include` 或 `exclude`；
 - CSV 和已确认映射的 Excel 都支持业务行标准化、凭证借贷平衡检查、试算平衡表勾稽、首批确定性规则、语义候选和内部 Markdown 草稿。
+- 常见资产负债表、利润表、现金流量表和纳税申报表可解析为严格来源绑定合同，并执行实体、期间、币种、单位、报表内部和跨表勾稽；强制勾稽失败进入 `blocked_data_quality`；
+- 自助案件状态、中文补件任务、客户确认和受影响税种增量重跑可持久化恢复，宿主不能自行把案件改写为已完成。
+- 安全压缩包（ZIP）输入会拒绝路径穿越、链接、重复成员、加密成员、压缩炸弹、过深目录、Windows 保留设备名和缓存篡改，并支持同一案件安全重跑。
+- Fengniao 企业信息和云 OCR 已提供 provider 合同、授权边界和正式离线 provider 回放；仓库不内置真实网络传输或客户凭证。
+- `--complete` 完整虚构案例覆盖 2023–2026 的序时账、试算平衡表、三张财报、四类申报表、PNG/PDF、客户冲突确认、工作底稿、报告和证据包。
+- Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code、OpenClaw 已提供 host-neutral 离线合同回放，并分别校验不同的目标布局与发现标记；这不运行任何真实宿主，真实宿主运行时验证仍 pending。
 
-Excel 映射提案在复核人明确执行 `confirm-mapping` 前始终不生效；`needs_professional_review` 也不是正式客户报告。财务报表和纳税申报表即使已提供但仍为 `present_unparsed`，也不能宣称已完成完整基线健康检查。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。可验证证据包和 DOCX/PDF 报告已提供基础导出，专业 Excel 工作底稿、财务报表及纳税申报表解析仍未实现。公开路线不代表已经交付的能力；详见 [docs/roadmap.md](docs/roadmap.md)。
+Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经结构化导入的资料仍标记为 `present_unparsed`。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。真实联网 provider 仍需宿主环境单独验证。可验证证据包、中文 DOCX/PDF 正式客户报告、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已经提供；公开路线不代表已经交付的能力，详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 
@@ -41,6 +47,32 @@ opentaxcheck confirm-mapping --case .\cases\demo --mapping .\mapping.json
 opentaxcheck run --case .\cases\demo --ai-mode off
 ```
 
+结构化财报和申报表由宿主 Agent 输出 `financial-statement/v1`、`tax-return/v1` 合同后验证；案件导入会从 `work/input_manifest.json` 重新绑定来源文件和 SHA-256，不信任宿主提供的路径、实体或期间：
+
+```powershell
+opentaxcheck validate-structured-document --kind financial-statement --input .\financial-statement.json
+opentaxcheck import-structured-document --case .\cases\demo --source <source_id> --kind tax-return --input .\tax-return.json
+```
+
+`proposed` 只表示待客户确认；不确定的宿主 AI 输出不得进入税务计算，也不能自行升级为 `confirmed`。合同验证不证明申报正确、来源真实或税务处理适用。
+
+### 可恢复的自助案件
+
+准备严格的 `TaxCheckRequest` JSON 后，可让任一宿主 Agent 使用同一组命令：
+
+```powershell
+opentaxcheck case-self-check --case .\cases\demo --request .\request.json
+opentaxcheck case-status --case .\cases\demo
+opentaxcheck case-tasks --case .\cases\demo
+opentaxcheck case-confirm --case .\cases\demo --input .\confirmations.json
+```
+
+私有恢复快照保存在 `work/tax-health-snapshot.private.json`；面向宿主的脱敏快照、中文补件清单和报告分别保存在 `work/tax-health-snapshot.json`、`work/customer-tasks.json` 和 `output/税务健康检查报告.md`。确认回写只接受问题标识、事实键、值、确认人、带时区时间戳和证据引用，不接受宿主提供的案件状态。前置账务或报表勾稽已处于 `blocked_data_quality` 时，命令拒绝生成正常税务报告。
+
+补件完成后，可用 `opentaxcheck case-delivery --case .\\cases\\demo` 发布一个不可变的 `tax-delivery/v1` 修订。交付目录为 `work/deliveries/revision-0001/`（实际编号跟随案件快照），其中的报告、DOCX/PDF、`workpaper.xlsx`、机器快照和证据包都引用同一个快照修订号，并由 `work/delivery.json` 指向。重复调用同一快照和同一 `delivery_options` 幂等；选项变化会显式返回 `delivery_revision_conflict`。`--include-pdf` 没有可用渲染器时交付状态为 `partial`，不会伪造 PDF。
+
+`customer-confirmation:<question_id>` 表示宿主代客户提交的声明引用，只用于记录声明与问题的绑定，不是文件证据、签名或税务事实真实性证明；宿主仍必须向客户展示中文问题并保留限制说明。
+
 `aaaaaaaaaaaaaaaa` 仅是命令格式示例，绝不是可复用的真实 `source_id`。必须从当前案件的 `work/workbook_inventory.json` 或 `work/sheet_selection.json` 读取实际来源标识，并在来源变更后重新 `inspect`。
 
 若状态为 `needs_sheet_selection`，先从 `work/workbook_inventory.json` 和 `work/sheet_selection.json` 取得 `source_id`、`sheet_id` 和候选表头行，再由复核人执行：
@@ -66,7 +98,7 @@ Excel 文件不能交给 CSV 适配器冒充 CSV 处理；只有来源绑定映�
 
 ## 运行虚构示例
 
-仓库保留一份完全虚构且借贷平衡的 CSV 文本作为可审查的示例源。runner 会在独立案件目录中生成 `journal.xlsx`、`trial-balance.xlsx`，以及仅供 Phase 2A 检测且保持 `present_unparsed` 的财务报表和纳税申报表文本占位证据；随后从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构映射。仓库不提交 `.xlsx` 二进制。
+仓库保留一份完全虚构且借贷平衡的 CSV 文本作为可审查的示例源。默认模式会在独立案件目录中生成 `journal.xlsx`、`trial-balance.xlsx`，以及仅供兼容流程检测且保持 `present_unparsed` 的财务报表和纳税申报表文本占位证据；随后从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构映射。仓库不提交 `.xlsx` 二进制。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_fictional_example.py --output work\phase-2b-demo --format excel
@@ -78,7 +110,15 @@ Excel 文件不能交给 CSV 适配器冒充 CSV 处理；只有来源绑定映�
 python scripts/run_fictional_example.py --output work/fictional-demo
 ```
 
-`--output` 必须指向不存在或空目录；runner 会拒绝非空目录，避免覆盖已有数据或混杂旧产物。Excel 和 CSV 示例的业务招待费发现及金额一致；Excel 的序时账与试算平衡表勾稽通过，状态为 `needs_professional_review`。主要产物包括 `work/normalized_journal.jsonl`、`work/normalized_trial_balance.jsonl`、`work/reconciliation.json`、`work/coverage_matrix.json`、`output/findings.json` 和内部 `output/report.md`。财务报表和纳税申报表相关程序仍是 `present_unparsed`，因此示例不构成完整基线健康检查。公司、交易、凭证、金额、人物和结论均为完全虚构。
+完整的 2023–2026 自助案例使用一条命令运行：
+
+```powershell
+python scripts/run_fictional_example.py --output work/self-service-v1-demo --complete
+```
+
+完整模式只生成 `input/journal.xlsx`，不会再复制 `journal.csv`；同时包含试算平衡表、三张结构化财报、增值税/附加税费/企业所得税/个人所得税四类申报、PNG 和 PDF。它会执行客户确认冲突与重新确认，并在 `work/deliveries/revision-*/` 生成 Markdown、DOCX、Excel 工作底稿、机器快照和证据包。请求 PDF 时，如果宿主没有可用的 LibreOffice 渲染器，`delivery-manifest.json` 会如实记录 `status=partial`、`pdf_status=pdf_renderer_unavailable`，不会生成或宣称一个未经验证的 PDF。
+
+`--output` 必须指向不存在或空目录；runner 会拒绝非空目录，避免覆盖已有数据或混杂旧产物。Excel 和 CSV 示例的业务招待费发现及金额一致；Excel 的序时账与试算平衡表勾稽通过，状态为 `needs_professional_review`。主要中间产物包括 `work/normalized_journal.jsonl`、`work/normalized_trial_balance.jsonl`、`work/reconciliation.json` 和 `work/coverage_matrix.json`。默认模式的财务报表和纳税申报表相关程序仍是 `present_unparsed`，只有 `--complete` 构成完整虚构验收基线。公司、交易、凭证、金额、人物和结论均为完全虚构。
 
 ## 输出
 
@@ -113,6 +153,10 @@ opentaxcheck tax-health-check `
 `--evidence-manifest` 和 `--evidence-root` 必须同时出现。生成的 `税务健康检查证据包.zip` 默认不复制客户原始证据文件，只保存已验证证据的标识和摘要；只有显式追加 `--include-evidence-files` 时，才会复制经过大小限制、路径安全检查和哈希验证的原件。
 
 SHA-256 只验证文件身份和完整性，不证明客户陈述属实、纳税申报正确或不存在税务风险。证据包是交付审计包，不是可脱离原系统完整重跑的输入，也不是涉税鉴证或税务保证意见。宿主 Agent 上传含原件的证据包前，必须取得客户明确授权。
+
+### 统一税务健康检查交付
+
+`case-delivery` 的活动指针和修订清单只允许指向案件 `work/deliveries/` 下的普通文件。`delivery-manifest.json` 至少包含 `schema_version`、`revision`、`snapshot_revision`、`snapshot_digest`、`delivery_options`、`status`、`pdf_status` 和每个 artifact 的 SHA-256。PDF 渲染未请求时为 `not_requested`；渲染器缺失或失败时为 `partial`，宿主必须如实展示该状态。
 
 ### 兼容的 CSV `run` 输出
 
@@ -154,6 +198,17 @@ from open_tax_check.tax_reporting import write_tax_health_report, write_tax_heal
 全国 20 个税费项目的 2023–2026 年适用性筛查规则包已经随版本内置，并且每项至少具备一条受控正式计算路径；这不等于已经覆盖每个税目、优惠和特殊计税情形。正式计算包括增值税的一般计税 13%/9%/6% 和符合条件的小规模 1% 路径，以及印花税、契税、房产税常见路径、城市维护建设税、教育费附加、地方教育附加、车辆购置税、车船税、船舶吨税、耕地占用税、城镇土地使用税、资源税、环境保护税、关税、消费税单一组成、土地增值税客户确认档次、烟叶税、企业所得税常见路径和居民个人综合所得年度汇算。个人所得税年度综合所得路径根据客户确认的应纳税所得额自动选择3%–45%法定档位和速算扣除数；经营所得、非居民、股息红利、财产所得和奖金单独计税等路径不会混用。增值税按 2026 年《增值税法》施行日分段，并要求客户确认不含税销售额、允许抵扣进项税额和税率路径；小规模路径禁止填入进项抵扣额。房产税只在地方减除幅度和计征方式已有证据时，按确认的房产余值1.2%或租金收入12%计算。车辆购置税按客户确认的法定计税价格乘 10%，烟叶税按实际支付价款总额乘 20%；免税、减税或特殊计税情形不会自动套用。印花税按 2023-08-28 证券交易税率调整分段；契税接受客户确认的省级具体税率并强制校验 3%–5% 法定幅度；附加税费以客户确认的实际增值税、消费税计征基础计算；小型微利企业路径强制校验 300 万元应纳税所得额上限。车船税、船舶吨税、耕地占用税、城镇土地使用税和环境保护税采用“计税数量×适用单位税额”，但只有客户已按同一税目、计税单位、期间和减免口径确认数量、单位税额、分类说明及证据时才计算。资源税和关税支持客户确认的单一从价或单一从量计算；关税按 2024-12-01《关税法》施行日分段。消费税只覆盖已拆分的单一从价或单一从量组成，复合计税须分别核对；土地增值税由客户提供增值额、增值率档次和速算扣除额，程序绑定四档法定税率但不替客户判定清算事实。程序和 AI 不会自动选择地方税额、产品税目、土地增值税档次、税则号列、原产地或税率。优惠、非居民、核定征收、复合计征、预征清算和贸易救济税等路径仍不完整。客户不需要单独安装规则包，升级 OpenTaxCheck 包即可获得新版官方规则包。规则包之外的第三方内容不会自动信任。
 
 宿主 Agent 接入见 [七生态接入契约](skills/open-tax-check/references/host-integrations.md)。Python 核心同时提供 `build_agent_question_tasks`、`task_payload` 和 `confirmation_from_task`，用于把缺口问题交给客户宿主 Agent 对话，再把结构化确认交回确定性核心。该契约覆盖 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 的共同业务字段，但不声明平台认证，也未实现 MCP/HTTP 部署、认证或租户隔离。
+
+维护者可以在无网络、无客户资料的环境中重放 provider 和七宿主合同：
+
+```powershell
+python scripts/replay_external_providers.py
+python scripts/replay_host_integrations.py
+```
+
+两个命令只读取 `tests/fixtures/provider-replays/` 和 `tests/fixtures/host-replays/` 中的虚构 JSON，输出机器可读状态；它们不证明真实第三方服务可用，也不上传任何资料。
+
+发行验收在 CI 的 Python 3.11、3.12、3.13 矩阵中运行 `python scripts/validate_installed_wheel.py --dist dist`：脚本创建隔离环境、安装刚构建的 `wheel[excel]`，从不含仓库 `src` 的临时目录运行 `--complete`，并核对 `open_tax_check` 来自该环境的 `site-packages`。完整案例 runner 与虚构 fixture 是仓库验收驱动，按设计不放入 wheel；因此安装 wheel 的普通用户应使用 `opentaxcheck` 入口，只有仓库维护者运行上述验收脚本。
 
 也可以直接使用 CLI 生成首版报告：`opentaxcheck tax-health-check --request request.json --output-dir output/`。请求 JSON 只接受期间、地区、结构化事实和输入哈希；输出为中文 Markdown 报告及机器可读快照。需要 Word 交付物时追加 `--include-docx`；在安装 LibreOffice 的宿主环境中可再追加 `--include-pdf`。DOCX/PDF 与 Markdown 共享同一快照，不会新增税务结论。
 

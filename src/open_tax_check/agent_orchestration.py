@@ -19,6 +19,7 @@ class AgentQuestionTask:
     question_zh: str
     help_zh: str
     evidence_help_zh: str
+    evidence_types: tuple[str, ...]
     answer_type: str
     choices: tuple[PromptChoice, ...]
     priority: int
@@ -65,6 +66,7 @@ def build_agent_question_tasks(
             question_zh=question.question_zh,
             help_zh=question.help_zh,
             evidence_help_zh=question.evidence_help_zh,
+            evidence_types=question.evidence_types,
             answer_type=question.answer_type,
             choices=question.choices,
             priority=question.priority,

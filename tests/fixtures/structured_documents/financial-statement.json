@@ -1,0 +1,35 @@
+{
+  "schema_version": "financial-statement/v1",
+  "statement_id": "example.invalid/financial-statement-2026-12",
+  "source_id": "example.invalid/financial-source",
+  "entity_name": "完全虚构科技有限公司",
+  "statement_type": "balance_sheet",
+  "period_start": "2026-01-01",
+  "period_end": "2026-12-31",
+  "as_of_date": "2026-12-31",
+  "currency": "CNY",
+  "unit_multiplier": "1",
+  "lines": [
+    {
+      "line_code": "BS-ASSETS-TOTAL",
+      "original_name": "资产总计",
+      "standard_name": "资产总计",
+      "current_amount": "1000.00",
+      "prior_amount": "800.00",
+      "source_anchor": {
+        "source_id": "example.invalid/financial-source",
+        "page_number": null,
+        "sheet_name": "资产负债表",
+        "cell": "D32",
+        "coordinates": null
+      },
+      "confidence_source": "template",
+      "confirmation_state": "confirmed"
+    }
+  ],
+  "totals": {
+    "assets": "1000.00",
+    "liabilities_and_equity": "1000.00"
+  },
+  "issues": []
+}

@@ -10,18 +10,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from io import BytesIO
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 from typing import Iterable, Mapping
+import unicodedata
+import uuid
+from zipfile import BadZipFile, ZipFile
 
 from .schemas import CoverageItem, SourceRecord
 
 
 SUPPORTED = frozenset({".csv", ".xlsx", ".xlsm", ".xls"})
+ARCHIVE_EXTENSIONS = frozenset({".zip"})
 MAX_ENTRIES = 50
 MAX_FILE_BYTES = 100 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 500
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
+MAX_ARCHIVE_MEMBER_BYTES = 100 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSION_RATIO = 100
+MAX_ARCHIVE_DEPTH = 8
+_ARCHIVE_CACHE_PREFIX = ".opentaxcheck-archive-"
+_ARCHIVE_CACHE_NAME = re.compile(r"^\.opentaxcheck-archive-[0-9a-f]{64}$")
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", "conin$", "conout$"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
+_WINDOWS_DEVICE_DIGITS = str.maketrans("¹²³", "123")
+_WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"|?*')
+# Each archive member can introduce one node per path component.  Shared
+# ancestors reduce the actual count, so this is a conservative bounded cap.
+_MAX_ARCHIVE_CACHE_NODES = MAX_ARCHIVE_MEMBERS * MAX_ARCHIVE_DEPTH
 _CHUNK_BYTES = 1024 * 1024
 
 REQUIRED_ROLES = (
@@ -81,6 +104,19 @@ class IntakeResult:
     next_action: str
 
 
+@dataclass(slots=True)
+class _ArchiveBudget:
+    members: int = 0
+    uncompressed_bytes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _ExtractedArchiveMember:
+    path: Path
+    digest: str
+    size_bytes: int
+
+
 def _entry_kind(path: Path) -> str:
     """Classify an entry without following directory links or reparse points."""
 
@@ -118,10 +154,16 @@ def _bounded_entries(input_dir: Path) -> tuple[Path, ...] | None:
 
     entries: list[Path] = []
     for path in input_dir.iterdir():
+        if _is_archive_cache_directory(path):
+            continue
         entries.append(path)
         if len(entries) > MAX_ENTRIES:
             return None
     return tuple(sorted(entries, key=lambda item: item.name.casefold()))
+
+
+def _is_archive_cache_directory(path: Path) -> bool:
+    return _ARCHIVE_CACHE_NAME.fullmatch(path.name) is not None and _entry_kind(path) == "directory"
 
 
 def sha256_file(path: Path) -> str:
@@ -134,6 +176,32 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return metadata.st_dev, metadata.st_ino, metadata.st_size
+
+
+def _snapshot_regular_file(path: Path, metadata: os.stat_result) -> tuple[bytes, str]:
+    """Read one bounded file from a verified handle and bind the bytes to its path identity."""
+
+    with path.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if _metadata_kind(opened) != "regular_file" or _file_identity(opened) != _file_identity(metadata):
+            raise OSError("input_changed_during_intake")
+        content = handle.read(MAX_FILE_BYTES + 1)
+        after_read = os.fstat(handle.fileno())
+    current = _lstat(path)
+    if (
+        len(content) > MAX_FILE_BYTES
+        or len(content) != metadata.st_size
+        or _file_identity(after_read) != _file_identity(opened)
+        or current is None
+        or _file_identity(current) != _file_identity(opened)
+        or _metadata_kind(current) != "regular_file"
+    ):
+        raise OSError("input_changed_during_intake")
+    return content, hashlib.sha256(content).hexdigest()
+
+
 def _source_record(path: Path, metadata: os.stat_result, digest: str, status: str) -> SourceRecord:
     return SourceRecord.from_digest(
         filename=path.name,
@@ -142,6 +210,254 @@ def _source_record(path: Path, metadata: os.stat_result, digest: str, status: st
         extension=path.suffix.lower(),
         status=status,
     )
+
+
+def _archive_member_name(raw_name: str) -> tuple[str, tuple[str, ...], str, bool]:
+    """Return a portable member name, path parts, comparison key, and directory flag."""
+
+    if not isinstance(raw_name, str) or not raw_name or "\x00" in raw_name:
+        raise ValueError("archive_unsafe_member_name")
+    normalised = raw_name.replace("\\", "/")
+    is_directory = normalised.endswith("/")
+    member_name = normalised[:-1] if is_directory else normalised
+    raw_parts = member_name.split("/")
+    if (
+        normalised.startswith("/")
+        or re.match(r"^[A-Za-z]:", normalised)
+        or not raw_parts
+        or any(part in {"", ".", ".."} for part in raw_parts)
+        or len(raw_parts) > MAX_ARCHIVE_DEPTH
+    ):
+        raise ValueError("archive_unsafe_member_name")
+    parts: list[str] = []
+    for raw_part in raw_parts:
+        part = unicodedata.normalize("NFC", raw_part).rstrip(" .")
+        basename = (
+            part.split(".", 1)[0]
+            .rstrip(" .")
+            .casefold()
+            .translate(_WINDOWS_DEVICE_DIGITS)
+        )
+        if (
+            not part
+            or part in {".", ".."}
+            or basename in _WINDOWS_RESERVED_NAMES
+            or any(character in _WINDOWS_FORBIDDEN_CHARACTERS for character in part)
+            or any(ord(character) < 32 for character in part)
+        ):
+            raise ValueError("archive_unsafe_member_name")
+        parts.append(part)
+    portable_name = "/".join(parts)
+    return portable_name, tuple(parts), portable_name.casefold(), is_directory
+
+
+def _archive_member_is_link(info) -> bool:
+    mode = (info.external_attr >> 16) & 0o170000
+    return stat.S_ISLNK(mode)
+
+
+def _safe_archive_cache_dir(input_dir: Path, digest: str) -> Path:
+    cache_dir = input_dir / f"{_ARCHIVE_CACHE_PREFIX}{digest}"
+    if cache_dir.parent != input_dir:
+        raise ValueError("archive_cache_path_invalid")
+    return cache_dir
+
+
+def _cache_tree(cache_dir: Path) -> tuple[dict[tuple[str, ...], os.stat_result], set[tuple[str, ...]]] | None:
+    files: dict[tuple[str, ...], os.stat_result] = {}
+    directories: set[tuple[str, ...]] = set()
+    node_count = 0
+    pending: list[tuple[Path, tuple[str, ...]]] = [(cache_dir, ())]
+    while pending:
+        directory, relative = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    node_count += 1
+                    if node_count > _MAX_ARCHIVE_CACHE_NODES:
+                        return None
+                    path = Path(entry.path)
+                    entry_metadata = entry.stat(follow_symlinks=False)
+                    kind = _metadata_kind(entry_metadata)
+                    child_relative = relative + (entry.name,)
+                    metadata = _lstat(path)
+                    if metadata is None or _metadata_kind(metadata) != kind:
+                        return None
+                    if kind == "directory":
+                        directories.add(child_relative)
+                        pending.append((path, child_relative))
+                    elif kind == "regular_file":
+                        files[child_relative] = metadata
+                    else:
+                        return None
+        except OSError:
+            return None
+    return files, directories
+
+
+def _cache_ancestors_are_directories(cache_dir: Path, parts: tuple[str, ...]) -> bool:
+    current = cache_dir
+    if _entry_kind(current) != "directory":
+        return False
+    for part in parts[:-1]:
+        current = current / part
+        if _entry_kind(current) != "directory":
+            return False
+    return True
+
+
+def _remove_archive_temp(path: Path, input_dir: Path) -> None:
+    try:
+        if path.resolve(strict=False).parent != input_dir.resolve(strict=False):
+            return
+        if path.name.startswith(_ARCHIVE_CACHE_PREFIX) and path.exists():
+            shutil.rmtree(path)
+    except OSError:
+        pass
+
+
+def _extract_safe_archive(
+    archive_snapshot: bytes,
+    input_dir: Path,
+    archive_digest: str,
+    budget: _ArchiveBudget,
+) -> tuple[tuple[_ExtractedArchiveMember, ...], tuple[str, ...]]:
+    """Validate and extract a bounded ZIP into a case-local deterministic cache."""
+
+    cache_dir = _safe_archive_cache_dir(input_dir, archive_digest)
+    temp_dir = input_dir / f"{_ARCHIVE_CACHE_PREFIX}{archive_digest}.tmp-{uuid.uuid4().hex}"
+    members: list[tuple[object, tuple[str, ...], str]] = []
+    directories: set[tuple[str, ...]] = set()
+    seen_member_keys: set[str] = set()
+    file_keys: set[str] = set()
+    directory_keys: set[str] = set()
+    try:
+        with ZipFile(BytesIO(archive_snapshot)) as archive:
+            infos = archive.infolist()
+            budget.members += len(infos)
+            if budget.members > MAX_ARCHIVE_MEMBERS:
+                return (), ("archive_member_limit_exceeded",)
+            for info in infos:
+                try:
+                    portable_name, parts, key, name_is_directory = _archive_member_name(info.filename)
+                except ValueError as error:
+                    return (), (str(error),)
+                if key in seen_member_keys:
+                    return (), ("archive_duplicate_member",)
+                seen_member_keys.add(key)
+                parent_keys = {
+                    "/".join(parts[:index]).casefold()
+                    for index in range(1, len(parts))
+                }
+                is_directory = info.is_dir() or name_is_directory
+                if key in file_keys or (not is_directory and key in directory_keys) or parent_keys & file_keys:
+                    return (), ("archive_member_path_collision",)
+                if _archive_member_is_link(info):
+                    return (), ("archive_link_member",)
+                if info.flag_bits & 0x1:
+                    return (), ("archive_encrypted_member",)
+                directory_keys.update(parent_keys)
+                directories.update(parts[:index] for index in range(1, len(parts)))
+                if is_directory:
+                    directory_keys.add(key)
+                    directories.add(parts)
+                    continue
+                file_keys.add(key)
+                if info.file_size > MAX_ARCHIVE_MEMBER_BYTES:
+                    return (), ("archive_member_too_large",)
+                ratio = info.file_size / max(info.compress_size, 1)
+                if ratio > MAX_ARCHIVE_COMPRESSION_RATIO:
+                    return (), ("archive_compression_ratio_exceeded",)
+                budget.uncompressed_bytes += info.file_size
+                if budget.uncompressed_bytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+                    return (), ("archive_uncompressed_limit_exceeded",)
+                members.append((info, parts, portable_name))
+            if _lstat(cache_dir) is not None:
+                if _entry_kind(cache_dir) != "directory":
+                    return (), ("archive_cache_unsafe",)
+                tree = _cache_tree(cache_dir)
+                expected_files = {parts for _, parts, _ in members}
+                if tree is None or set(tree[0]) != expected_files or tree[1] != directories:
+                    return (), ("archive_cache_changed",)
+                extracted: list[_ExtractedArchiveMember] = []
+                for info, parts, _ in members:
+                    candidate = cache_dir.joinpath(*parts)
+                    if not _cache_ancestors_are_directories(cache_dir, parts):
+                        return (), ("archive_cache_changed",)
+                    try:
+                        actual, actual_digest = _snapshot_regular_file(candidate, tree[0][parts])
+                        expected = archive.read(info)
+                    except OSError:
+                        return (), ("archive_cache_changed",)
+                    if (
+                        len(expected) != info.file_size
+                        or len(actual) != info.file_size
+                        or actual != expected
+                    ):
+                        return (), ("archive_cache_changed",)
+                    extracted.append(_ExtractedArchiveMember(candidate, actual_digest, len(actual)))
+                return tuple(extracted), ()
+
+            temp_dir.mkdir()
+            for parts in sorted(directories, key=lambda item: (len(item), item)):
+                temp_dir.joinpath(*parts).mkdir()
+            extracted: list[_ExtractedArchiveMember] = []
+            for info, parts, _ in members:
+                destination = temp_dir.joinpath(*parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                digest = hashlib.sha256()
+                size = 0
+                with archive.open(info) as source, destination.open("xb") as target:
+                    for chunk in iter(lambda: source.read(_CHUNK_BYTES), b""):
+                        size += len(chunk)
+                        if size > info.file_size or size > MAX_ARCHIVE_MEMBER_BYTES:
+                            return (), ("archive_member_too_large",)
+                        digest.update(chunk)
+                        target.write(chunk)
+                if size != info.file_size:
+                    return (), ("archive_member_size_mismatch",)
+                extracted.append(
+                    _ExtractedArchiveMember(cache_dir.joinpath(*parts), digest.hexdigest(), size)
+                )
+            try:
+                os.replace(temp_dir, cache_dir)
+            except OSError:
+                return (), ("archive_cache_race",)
+            return tuple(extracted), ()
+    except BadZipFile:
+        return (), ("archive_corrupt",)
+    except (OSError, RuntimeError, ValueError):
+        return (), ("archive_read_error",)
+    finally:
+        if temp_dir.exists():
+            _remove_archive_temp(temp_dir, input_dir)
+
+
+def _archive_sources(
+    archive_name: str,
+    archive_snapshot: bytes,
+    input_dir: Path,
+    archive_digest: str,
+    budget: _ArchiveBudget,
+) -> tuple[list[SourceRecord], list[IntakeIssue]]:
+    extracted, codes = _extract_safe_archive(archive_snapshot, input_dir, archive_digest, budget)
+    issues = [IntakeIssue(archive_name, code) for code in codes]
+    if codes:
+        return [], issues
+    sources: list[SourceRecord] = []
+    for member in extracted:
+        relative = member.path.relative_to(input_dir).as_posix()
+        status = "accepted" if member.path.suffix.lower() in SUPPORTED else "present_unparsed"
+        sources.append(
+            SourceRecord.from_digest(
+                filename=relative,
+                digest=member.digest,
+                size_bytes=member.size_bytes,
+                extension=member.path.suffix.lower(),
+                status=status,
+            )
+        )
+    return sources, issues
 
 
 def _ignored_lock_record(path: Path, metadata: os.stat_result) -> SourceRecord:
@@ -299,8 +615,11 @@ def inventory_inputs(case_dir: Path, review_period: dict | None = None) -> Intak
 
     sources: list[SourceRecord] = []
     issues: list[IntakeIssue] = []
+    archive_budget = _ArchiveBudget()
     for path in entries:
         kind = _entry_kind(path)
+        if _is_archive_cache_directory(path):
+            continue
         if kind != "regular_file":
             issues.append(IntakeIssue(path.name, f"rejected_{kind}"))
             continue
@@ -316,11 +635,24 @@ def inventory_inputs(case_dir: Path, review_period: dict | None = None) -> Intak
             issues.append(IntakeIssue(path.name, "file_too_large"))
             continue
         try:
-            digest = sha256_file(path)
+            if path.suffix.lower() in ARCHIVE_EXTENSIONS:
+                snapshot, digest = _snapshot_regular_file(path, metadata)
+            else:
+                digest = sha256_file(path)
         except OSError:
             issues.append(IntakeIssue(path.name, "unreadable_input_entry"))
             continue
         status = "accepted" if path.suffix.lower() in SUPPORTED else "present_unparsed"
         sources.append(_source_record(path, metadata, digest, status))
+        if path.suffix.lower() in ARCHIVE_EXTENSIONS:
+            member_sources, archive_issues = _archive_sources(
+                path.name,
+                snapshot,
+                input_dir,
+                digest,
+                archive_budget,
+            )
+            sources.extend(member_sources)
+            issues.extend(archive_issues)
 
     return _result(sources, issues, review_period=review_period)

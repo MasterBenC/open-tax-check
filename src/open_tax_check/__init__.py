@@ -1,6 +1,6 @@
 """OpenTaxCheck deterministic accounting and tax-health-check core."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 from .document_extraction import (
     DOCUMENT_EXTRACTION_SCHEMA_VERSION,
@@ -22,6 +22,39 @@ from .agent_orchestration import (
     confirmation_from_task,
     evidence_bundle_delivery_payload,
     task_payload,
+)
+from .external_providers import (
+    CloudOcrProvider,
+    CloudOcrReplayTransport,
+    CloudOcrRequest,
+    ExternalCompanyObservation,
+    FengniaoProvider,
+    FengniaoReplayTransport,
+    FengniaoQuery,
+)
+from .host_replays import (
+    HOST_NAMES,
+    HostReplayResult,
+    install_and_replay_all,
+    validate_delivery_payload,
+    validate_task_payload,
+)
+
+from .case_orchestration import (
+    CASE_SCHEMA_VERSION,
+    TASKS_SCHEMA_VERSION,
+    CaseStatus,
+    apply_case_confirmations,
+    build_case_customer_tasks,
+    case_status_payload,
+    load_case_snapshot,
+    run_case_self_check,
+)
+from .delivery import (
+    DELIVERY_POINTER_NAME,
+    DELIVERY_SCHEMA_VERSION,
+    DeliveryError,
+    build_case_delivery,
 )
 
 from .evidence_bundle import (
@@ -48,9 +81,48 @@ from .tax_calculation import TaxCalculationRequest, TaxCalculationResult, calcul
 from .tax_models import (
     CalculationRecord,
     CalculationSpec,
+    Limitation,
     StatutoryBracketEntry,
     StatutoryBracketTable,
     StatutoryRateRange,
 )
 from .tax_registry import load_builtin_parameterized_calculation_packs
 from .evidence import EvidenceVerification, verify_evidence_file
+from .source_paths import resolve_safe_source
+from .workpaper import (
+    WORKPAPER_NAME,
+    WORKPAPER_SCHEMA_VERSION,
+    WorkpaperError,
+    write_tax_health_workpaper,
+)
+from .structured_documents import (
+    FinancialStatement,
+    FinancialStatementLine,
+    SourceAnchor,
+    StructuredIssue,
+    TaxReturn,
+    TaxReturnLine,
+    financial_statement_from_dict,
+    financial_statement_to_dict,
+    tax_return_from_dict,
+    tax_return_to_dict,
+)
+from .structured_document_providers import (
+    StructuredDocumentImportError,
+    StructuredDocumentSource,
+    import_financial_statement,
+    import_tax_return,
+    persist_financial_statement,
+    persist_tax_return,
+)
+from .template_documents import (
+    TemplateIssue,
+    TemplateParseResult,
+    financial_statement_template,
+    tax_return_template,
+)
+from .structured_reconciliation import (
+    DocumentReconciliationIssue,
+    DocumentReconciliationResult,
+    reconcile_structured_documents,
+)

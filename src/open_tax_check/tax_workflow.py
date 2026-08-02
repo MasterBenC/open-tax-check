@@ -313,4 +313,5 @@ def apply_confirmations(
         audit_events=snapshot.audit_events + tuple(audit_events),
         revision=snapshot.revision + 1,
         question_history=_question_history(snapshot),
+        limitations=snapshot.limitations,
     )

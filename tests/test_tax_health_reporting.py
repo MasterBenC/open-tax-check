@@ -320,7 +320,11 @@ class TaxHealthReportingTests(unittest.TestCase):
             self.assertEqual(write_tax_health_snapshot(snapshot_with_every_status(), json_path), json_path)
             self.assertTrue(markdown_path.read_text(encoding="utf-8").startswith("# "))
             payload = json.loads(json_path.read_text(encoding="utf-8"))
-            self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
+            self.assertEqual(
+                set(payload),
+                {"schema_version", "revision", "request", "results", "questions", "audit_events", "limitations"},
+            )
+            self.assertEqual(payload["limitations"], [])
             calculation = next(
                 item["calculation"] for item in payload["results"] if item["calculation"] is not None
             )

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-tax-check"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Open-source AI-assisted tax health check for Chinese enterprises"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -46,3 +46,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "open_tax_check.tax_packs" = ["*.json"]
+
+[tool.setuptools.dynamic]
+version = {attr = "open_tax_check.__version__"}

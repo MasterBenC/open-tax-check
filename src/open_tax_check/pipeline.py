@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .intake import (
+    ARCHIVE_EXTENSIONS,
     IntakeResult,
     build_coverage_matrix,
     detect_filename_roles,
@@ -44,6 +46,25 @@ from .rules import business_entertainment_adjustment
 from .schemas import SCHEMA_VERSION, SheetRecord, SourceRecord, to_dict
 from .semantic import detect_semantic_candidates
 from .sheet_detection import confidence_band, detect_sheet, selected_headers
+from .source_paths import resolve_safe_source
+from .structured_documents import (
+    FinancialStatement,
+    TaxReturn,
+    financial_statement_from_dict,
+    tax_return_from_dict,
+)
+from .structured_document_providers import (
+    STRUCTURED_DOCUMENT_INDEX_MAX_BYTES,
+    STRUCTURED_DOCUMENT_INDEX_MAX_DOCUMENTS,
+    STRUCTURED_DOCUMENT_INDEX_NAME,
+    STRUCTURED_DOCUMENT_INDEX_SCHEMA_VERSION,
+    STRUCTURED_DOCUMENT_MAX_BYTES,
+)
+from .structured_reconciliation import (
+    DocumentReconciliationIssue,
+    DocumentReconciliationResult,
+    reconcile_structured_documents,
+)
 from .workbooks import (
     WORKBOOK_ADAPTER_VERSION,
     WorkbookError,
@@ -52,9 +73,9 @@ from .workbooks import (
 
 
 _CURRENT_VIEW_DIRS = ("work", "output")
-_STAGING_PREFIX = ".opentaxcheck-current-stage-"
-_BACKUP_PREFIX = ".opentaxcheck-current-backup-"
-_STATE_BACKUP_PREFIX = ".opentaxcheck-state-backup-"
+_STAGING_PREFIX = ".otcs-"
+_BACKUP_PREFIX = ".otcb-"
+_STATE_BACKUP_PREFIX = ".otcx-"
 _EXCEL_EXTENSIONS = frozenset({".xlsx", ".xlsm", ".xls"})
 _INSPECTION_ROLES = ("journal", "trial_balance")
 STATUS_PRIORITY = (
@@ -186,6 +207,29 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _read_bounded_file(path: Path, max_bytes: int) -> bytes:
+    """Read an ordinary file without allocating beyond its declared budget."""
+
+    try:
+        with path.open("rb") as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
+                raise ValueError("structured_document_budget_exceeded")
+            content = handle.read(max_bytes + 1)
+            after = os.fstat(handle.fileno())
+    except ValueError:
+        raise
+    except OSError:
+        raise ValueError("unsafe_source_path") from None
+    identity_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if identity_before != identity_after or len(content) != before.st_size:
+        raise ValueError("unsafe_source_path")
+    if len(content) > max_bytes:
+        raise ValueError("structured_document_budget_exceeded")
+    return content
+
+
 def _source_snapshot(
     path: Path,
     expected_sha256: str,
@@ -289,7 +333,7 @@ def _json_business_value(value):
 
 def _transaction_dir(case_dir: Path, prefix: str, run_id: str) -> Path:
     case_root = case_dir.resolve()
-    path = case_dir / f"{prefix}{run_id}-{uuid.uuid4().hex}"
+    path = case_dir / f"{prefix}{run_id.removeprefix('run-')}-{uuid.uuid4().hex[:12]}"
     if path.resolve(strict=False).parent != case_root or not path.name.startswith(prefix):
         raise RuntimeError("invalid current-view transaction path")
     return path
@@ -297,7 +341,9 @@ def _transaction_dir(case_dir: Path, prefix: str, run_id: str) -> Path:
 
 def _transaction_file(case_dir: Path, prefix: str, run_id: str) -> Path:
     case_root = case_dir.resolve()
-    path = case_dir / f"{prefix}{run_id}-{uuid.uuid4().hex}.json"
+    path = case_dir / (
+        f"{prefix}{run_id.removeprefix('run-')}-{uuid.uuid4().hex[:12]}.json"
+    )
     if path.resolve(strict=False).parent != case_root or not path.name.startswith(prefix):
         raise RuntimeError("invalid state transaction path")
     return path
@@ -789,6 +835,165 @@ def _render_markdown(entity_name: str, row_count: int, findings: list[dict], ai_
 
 def load_case_state(case_dir: Path) -> dict:
     return json.loads((case_dir / "state.json").read_text(encoding="utf-8"))
+
+
+def load_case_structured_documents(
+    case_dir: Path,
+) -> tuple[tuple[FinancialStatement, ...], tuple[TaxReturn, ...], tuple[str, ...]]:
+    """Load only imported structured contracts from the managed case directory."""
+
+    root = case_dir / "work" / "structured-documents"
+    try:
+        metadata = root.lstat()
+    except FileNotFoundError:
+        return (), (), ()
+    except OSError:
+        return (), (), ("unsafe_structured_document_path",)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or bool(getattr(metadata, "st_file_attributes", 0) & reparse_flag)
+        or not stat.S_ISDIR(metadata.st_mode)
+    ):
+        return (), (), ("unsafe_structured_document_path",)
+
+    index_path = case_dir / "work" / STRUCTURED_DOCUMENT_INDEX_NAME
+    manifest_path = case_dir / "work" / "input_manifest.json"
+    try:
+        safe_index = resolve_safe_source(index_path, case_dir / "work")
+        safe_manifest = resolve_safe_source(manifest_path, case_dir / "work")
+        index_bytes = _read_bounded_file(
+            safe_index, STRUCTURED_DOCUMENT_INDEX_MAX_BYTES
+        )
+        manifest_bytes = _read_bounded_file(
+            safe_manifest, STRUCTURED_DOCUMENT_INDEX_MAX_BYTES
+        )
+        index_payload = json.loads(index_bytes.decode("utf-8"))
+        manifest_payload = json.loads(manifest_bytes.decode("utf-8"))
+        receipts = index_payload.get("documents") if isinstance(index_payload, dict) else None
+        sources = manifest_payload.get("sources") if isinstance(manifest_payload, dict) else None
+        if (
+            index_payload.get("schema_version") != STRUCTURED_DOCUMENT_INDEX_SCHEMA_VERSION
+            or not isinstance(receipts, list)
+            or len(receipts) > STRUCTURED_DOCUMENT_INDEX_MAX_DOCUMENTS
+            or any(not isinstance(item, dict) for item in receipts)
+            or not isinstance(sources, list)
+            or any(not isinstance(item, dict) for item in sources)
+        ):
+            raise ValueError("invalid_receipt")
+    except ValueError as error:
+        if str(error) == "unsafe_source_path":
+            return (), (), ("unsafe_structured_document_path",)
+        if str(error) == "structured_document_budget_exceeded":
+            return (), (), ("structured_document_budget_exceeded",)
+        return (), (), ("structured_document_receipt_mismatch",)
+    except FileNotFoundError:
+        return (), (), ("structured_document_index_missing",)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return (), (), ("structured_document_receipt_mismatch",)
+
+    source_by_id: dict[str, dict[str, object]] = {}
+    for item in sources:
+        source_id = item.get("source_id")
+        if not isinstance(source_id, str) or source_id in source_by_id:
+            return (), (), ("structured_document_receipt_mismatch",)
+        source_by_id[source_id] = item
+    receipt_by_path: dict[str, dict[str, object]] = {}
+    for receipt in receipts:
+        relative_path = receipt.get("relative_path")
+        if not isinstance(relative_path, str) or relative_path in receipt_by_path:
+            return (), (), ("structured_document_receipt_mismatch",)
+        receipt_by_path[relative_path] = receipt
+
+    statements: list[FinancialStatement] = []
+    tax_returns: list[TaxReturn] = []
+    issues: list[str] = []
+    seen_ids: set[str] = set()
+    try:
+        entries = sorted(root.iterdir(), key=lambda path: path.name.casefold())
+    except OSError:
+        return (), (), ("unsafe_structured_document_path",)
+    if len(entries) > STRUCTURED_DOCUMENT_INDEX_MAX_DOCUMENTS:
+        return (), (), ("structured_document_budget_exceeded",)
+    for entry in entries:
+        if entry.suffix.casefold() != ".json":
+            continue
+        if entry.name.endswith((".financial-statement.json", ".fs.json")):
+            kind = "financial"
+        elif entry.name.endswith((".tax-return.json", ".tr.json")):
+            kind = "tax"
+        else:
+            issues.append("unsupported_structured_document")
+            continue
+        receipt = receipt_by_path.pop(entry.name, None)
+        if receipt is None:
+            issues.append("unregistered_structured_document")
+            continue
+        try:
+            safe_entry = resolve_safe_source(entry, root)
+            content = _read_bounded_file(safe_entry, STRUCTURED_DOCUMENT_MAX_BYTES)
+            source_id = receipt.get("source_id")
+            source_sha256 = receipt.get("source_sha256")
+            document_sha256 = receipt.get("document_sha256")
+            expected_kind = "financial_statement" if kind == "financial" else "tax_return"
+            source = source_by_id.get(source_id) if isinstance(source_id, str) else None
+            if (
+                receipt.get("kind") != expected_kind
+                or not isinstance(source, dict)
+                or source.get("sha256") != source_sha256
+                or hashlib.sha256(content).hexdigest() != document_sha256
+                or source.get("status") not in {"accepted", "present_unparsed"}
+                or not isinstance(source.get("filename"), str)
+            ):
+                raise RuntimeError("receipt_mismatch")
+            source_path = resolve_safe_source(
+                case_dir / "input" / source["filename"], case_dir / "input"
+            )
+            if _sha256(source_path) != source_sha256:
+                raise RuntimeError("receipt_mismatch")
+            payload = json.loads(content.decode("utf-8"))
+            value = (
+                financial_statement_from_dict(payload)
+                if kind == "financial"
+                else tax_return_from_dict(payload)
+            )
+            document_id = value.statement_id if isinstance(value, FinancialStatement) else value.return_id
+            if (
+                receipt.get("document_id") != document_id
+                or value.source_id != source_id
+            ):
+                raise RuntimeError("receipt_mismatch")
+            anchors = tuple(line.source_anchor.source_id for line in value.lines)
+            if any(anchor != source_id for anchor in anchors):
+                raise RuntimeError("receipt_mismatch")
+        except RuntimeError:
+            issues.append("structured_document_receipt_mismatch")
+            continue
+        except ValueError as error:
+            if str(error) == "unsafe_source_path":
+                issues.append("unsafe_structured_document_path")
+            elif str(error) == "structured_document_budget_exceeded":
+                issues.append("structured_document_budget_exceeded")
+            else:
+                issues.append("invalid_structured_document")
+            continue
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+            issues.append("invalid_structured_document")
+            continue
+        document_id = value.statement_id if isinstance(value, FinancialStatement) else value.return_id
+        if document_id in seen_ids:
+            issues.append("duplicate_structured_document")
+            continue
+        seen_ids.add(document_id)
+        if isinstance(value, FinancialStatement):
+            statements.append(value)
+        else:
+            tax_returns.append(value)
+    if receipt_by_path:
+        issues.append("structured_document_receipt_mismatch")
+    if issues:
+        return (), (), tuple(dict.fromkeys(issues))
+    return tuple(statements), tuple(tax_returns), tuple(issues)
 
 
 def _used_range(max_row: int, max_column: int) -> str | None:
@@ -1607,11 +1812,49 @@ def _complete_normalized_run(
     journal = normalized["journal"]
     trial_balance = normalized["trial_balance"]
     journal_quality = validate_journal_quality(journal)
+    structured_result: DocumentReconciliationResult | None = None
+    structured_coverage: tuple[ProcedureCoverage, ...] = ()
+    structured_loader_issues: tuple[str, ...] = ()
+    structured_root = context.case_dir / "work" / "structured-documents"
+    if structured_root.is_dir():
+        _preserve_structured_documents(context, structured_root)
+        statements, tax_returns, structured_loader_issues = load_case_structured_documents(
+            context.case_dir
+        )
+        if statements or tax_returns or structured_loader_issues:
+            structured_result = reconcile_structured_documents(statements, tax_returns)
+            if structured_loader_issues:
+                structured_result = DocumentReconciliationResult(
+                    status="blocked_data_quality",
+                    passed=False,
+                    checks=structured_result.checks,
+                    issues=structured_result.issues
+                    + tuple(
+                        DocumentReconciliationIssue(code, "blocking", (), (), ())
+                        for code in structured_loader_issues
+                    ),
+                )
+            _write_json(
+                context.work_dir / "structured-reconciliation.json",
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    **_json_business_value(structured_result),
+                },
+            )
+            structured_coverage = _structured_coverage(
+                statements,
+                tax_returns,
+                structured_result,
+            )
     quality_payload = [
         _json_business_value(issue)
         for role in _INSPECTION_ROLES
         for issue in role_issues[role]
     ] + journal_quality
+    quality_payload.extend(
+        {"code": issue.code}
+        for issue in (structured_result.issues if structured_result is not None else ())
+    )
     if quality_payload:
         _write_json(context.work_dir / "data_quality.json", quality_payload)
     else:
@@ -1635,10 +1878,24 @@ def _complete_normalized_run(
         trial_result=trial_result,
         journal_result=journal_result,
     )
+    if structured_coverage:
+        structured_by_procedure = {item.procedure: item for item in structured_coverage}
+        coverage = tuple(
+            structured_by_procedure.get(item.procedure, item)
+            for item in coverage
+        )
     _write_json(
         context.work_dir / "coverage_matrix.json",
         {"schema_version": SCHEMA_VERSION, "items": _json_business_value(coverage)},
     )
+
+    if structured_result is not None and not structured_result.passed:
+        return context.finish(
+            4,
+            "blocked_data_quality",
+            "resolve_data_quality_findings",
+            completed_steps + ["reconciliation", "structured_reconciliation", "coverage"],
+        )
 
     journal_eligible = all(
         _coverage_status(coverage, procedure) == "performed"
@@ -1736,6 +1993,16 @@ def _run_excel_case(
             4,
             "needs_intake_review",
             next_action,
+            ["init", "intake", "workbook_inventory"],
+        )
+    if not any(
+        source.status == "accepted" and source.extension in (_EXCEL_EXTENSIONS | {".csv"})
+        for source in intake.sources
+    ):
+        return context.finish(
+            4,
+            "needs_intake_review",
+            "provide_supported_spreadsheet_input",
             ["init", "intake", "workbook_inventory"],
         )
     status, next_action = inspection_state(
@@ -1852,14 +2119,146 @@ def _run_excel_case(
     )
 
 
+def _structured_coverage(
+    statements: tuple[FinancialStatement, ...],
+    tax_returns: tuple[TaxReturn, ...],
+    result: DocumentReconciliationResult,
+) -> tuple[ProcedureCoverage, ...]:
+    roles = {
+        "balance_sheet": any(item.statement_type == "balance_sheet" for item in statements),
+        "income_statement": any(item.statement_type == "income_statement" for item in statements),
+        "vat_return": any(item.tax_id == "vat" for item in tax_returns),
+        "cit_return": any(item.tax_id == "enterprise_income_tax" for item in tax_returns),
+    }
+    financial_status = (
+        "blocked" if not result.passed and (roles["balance_sheet"] or roles["income_statement"])
+        else "performed"
+        if roles["balance_sheet"] and roles["income_statement"]
+        else "not_performed_missing_evidence"
+    )
+    return (
+        ProcedureCoverage(
+            "financial_statement_reconciliation",
+            ("balance_sheet", "income_statement"),
+            financial_status,
+            ("balance_sheet", "income_statement") if financial_status == "blocked" else (),
+        ),
+        ProcedureCoverage(
+            "vat_return_reconciliation",
+            ("vat_return",),
+            "blocked" if not result.passed and roles["vat_return"] else "performed" if roles["vat_return"] else "not_performed_missing_evidence",
+            ("vat_return",) if not result.passed and roles["vat_return"] else (),
+        ),
+        ProcedureCoverage(
+            "cit_return_reconciliation",
+            ("cit_return",),
+            "blocked" if not result.passed and roles["cit_return"] else "performed" if roles["cit_return"] else "not_performed_missing_evidence",
+            ("cit_return",) if not result.passed and roles["cit_return"] else (),
+        ),
+    )
+
+
+def _preserve_structured_documents(context: _CaseRun, source_root: Path) -> None:
+    preserved_root = context.work_dir / "structured-documents"
+    preserved_root.mkdir(parents=True, exist_ok=True)
+    try:
+        entries = sorted(source_root.iterdir(), key=lambda path: path.name.casefold())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.suffix.casefold() != ".json":
+            continue
+        try:
+            safe_entry = resolve_safe_source(entry, source_root)
+            _atomic_write_bytes(
+                preserved_root / entry.name,
+                _read_bounded_file(safe_entry, STRUCTURED_DOCUMENT_MAX_BYTES),
+            )
+        except (OSError, ValueError):
+            continue
+    index_path = context.case_dir / "work" / STRUCTURED_DOCUMENT_INDEX_NAME
+    try:
+        safe_index = resolve_safe_source(index_path, context.case_dir / "work")
+        _atomic_write_bytes(
+            context.work_dir / STRUCTURED_DOCUMENT_INDEX_NAME,
+            _read_bounded_file(safe_index, STRUCTURED_DOCUMENT_INDEX_MAX_BYTES),
+        )
+    except (OSError, ValueError):
+        pass
+    manifest_path = context.case_dir / "work" / "input_manifest.json"
+    try:
+        safe_manifest = resolve_safe_source(manifest_path, context.case_dir / "work")
+        _atomic_write_bytes(
+            context.work_dir / "input_manifest.json",
+            _read_bounded_file(safe_manifest, STRUCTURED_DOCUMENT_INDEX_MAX_BYTES),
+        )
+    except (OSError, ValueError):
+        pass
+
+
+def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
+    statements, tax_returns, loader_issues = load_case_structured_documents(context.case_dir)
+    source_root = context.case_dir / "work" / "structured-documents"
+    _preserve_structured_documents(context, source_root)
+    result = reconcile_structured_documents(statements, tax_returns)
+    if loader_issues:
+        result = DocumentReconciliationResult(
+            status="blocked_data_quality",
+            passed=False,
+            checks=result.checks,
+            issues=result.issues
+            + tuple(
+                DocumentReconciliationIssue(code, "blocking", (), (), ())
+                for code in loader_issues
+            ),
+        )
+    _write_json(
+        context.work_dir / "structured-reconciliation.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            **_json_business_value(result),
+        },
+    )
+    quality = [{"code": issue.code} for issue in result.issues]
+    _write_json(context.work_dir / "data_quality.json", quality)
+    coverage = _structured_coverage(statements, tax_returns, result)
+    _write_json(
+        context.work_dir / "coverage_matrix.json",
+        {"schema_version": SCHEMA_VERSION, "items": _json_business_value(coverage)},
+    )
+
+    if result.passed:
+        return context.finish(
+            0,
+            "partial_scope_ready",
+            "review_coverage",
+            ["init", "structured_documents", "reconciliation", "coverage"],
+        )
+    return context.finish(
+        4,
+        "blocked_data_quality",
+        "resolve_data_quality_findings",
+        ["init", "structured_documents", "reconciliation", "coverage"],
+    )
+
+
 def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
     context = _start_case_run(case_dir, ai_mode)
     try:
         state = load_case_state(case_dir)
         has_excel = any(
-            path.is_file() and path.suffix.lower() in _EXCEL_EXTENSIONS
+            path.is_file()
+            and path.suffix.lower() in (_EXCEL_EXTENSIONS | ARCHIVE_EXTENSIONS)
             for path in (case_dir / "input").iterdir()
         )
+        has_spreadsheet_input = has_excel or any(
+            path.is_file() and path.suffix.lower() == ".csv"
+            for path in (case_dir / "input").iterdir()
+        )
+        structured_root = case_dir / "work" / "structured-documents"
+        has_structured_documents = structured_root.exists()
+        if has_structured_documents and not has_spreadsheet_input:
+            return _run_structured_case(context)
         return _run_excel_case(context, state) if has_excel else _run_csv_case(context)
     except _RunPublicationError as error:
         cause = error.__cause__

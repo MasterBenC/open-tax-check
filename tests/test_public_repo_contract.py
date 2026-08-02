@@ -7,10 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ROADMAP_MILESTONES = (
     "1. 阶段 1：仓库基础与确定性 CSV 核心 — 已完成",
     "2. 阶段 2A：Excel 安全盘点与人工选表 — 已完成",
-    "3. 阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成（正式客户报告未实现）",
+    "3. 阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成",
     "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 本地 OCR、20 项全国筛查及每项至少一条受控正式计算路径已完成，优惠、复合计税、预征清算及其他特殊路径仍在进行",
-    "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 宿主 Agent 中文补件、《税务健康检查报告》基础交付、DOCX/PDF 页面级版式验收及可验证证据包已完成，财务报表和纳税申报表解析仍在进行",
-    "6. 阶段 5：联网企业数据适配、隐私加固、完整虚构案例验收与公开 v1 — 计划中",
+    "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 财务报表/纳税申报表合同、常见模板解析、跨文档勾稽、可恢复案件状态、宿主 Agent 中文补件、《税务健康检查报告》基础交付、DOCX/PDF 页面级版式验收、可验证证据包、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已完成",
+    "6. 阶段 5：联网企业数据适配、隐私加固与完整虚构案例 — 安全压缩包、provider 合同离线回放和完整虚构案例已完成；七宿主仅完成 host-neutral 合同回放及宿主专属目标布局/发现标记校验，真实宿主运行时验证仍 pending",
+    "7. 阶段 6：公开 v1 发布 — 隔离 wheel 验收门禁及 CI 3.11–3.13 矩阵合同已加入；真实跨平台 CI 证据、GitHub tag/Release 仍待验证和授权",
 )
 LOCAL_OCR_SCOPE_SENTENCE = "PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。"
 
@@ -44,7 +45,7 @@ def assert_roadmap_milestones(test_case, text):
 def assert_changelog_is_unreleased(test_case, text):
     test_case.assertIn("https://keepachangelog.com/en/1.1.0/", text)
     test_case.assertIn("## [未发布]", text)
-    test_case.assertIn("0.1.0", text)
+    test_case.assertIn("1.0.0", text)
     test_case.assertIn("未发布", text)
     test_case.assertIn(
         "remains unpublished until creation of a GitHub tag is explicitly authorized.",
@@ -58,11 +59,15 @@ def assert_changelog_is_unreleased(test_case, text):
 
 def assert_readme_phase_scope(test_case, text):
     scope = current_release_scope(text)
-    test_case.assertIn("当前仓库处于未发布的 **v0.1 / Phase 2B**", scope)
+    test_case.assertIn("当前仓库处于未发布的 **self-service v1**", scope)
     test_case.assertIn("`.xlsx`、`.xlsm`、`.xls`", scope)
     test_case.assertIn("CSV 和已确认映射的 Excel", scope)
     test_case.assertIn("confirm-mapping", scope)
     test_case.assertIn("present_unparsed", scope)
+    test_case.assertIn("安全压缩包", scope)
+    test_case.assertIn("离线 provider 回放", scope)
+    test_case.assertIn("完整虚构案例", scope)
+    test_case.assertIn("真实宿主运行时验证仍 pending", scope)
     test_case.assertIn("公开路线不代表已经交付的能力", scope)
     test_case.assertIn("[docs/roadmap.md](docs/roadmap.md)", scope)
     test_case.assertIn(LOCAL_OCR_SCOPE_SENTENCE, scope)
@@ -123,12 +128,14 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("微信：PosterNote；添加时请备注 GitHub。", text)
         self.assertIn("请勿通过 GitHub Issue、Discussion 或微信发送未经脱敏的客户资料。", text)
         current_scope = current_release_scope(text)
-        self.assertIn("v0.1 / Phase 2B", current_scope)
+        self.assertIn("self-service v1", current_scope)
         self.assertIn("CSV 和已确认映射的 Excel", current_scope)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", current_scope)
         self.assertIn(LOCAL_OCR_SCOPE_SENTENCE, current_scope)
         self.assertIn("正式客户报告", current_scope)
         self.assertIn("公开路线不代表已经交付的能力", current_scope)
+        self.assertIn("replay_external_providers.py", text)
+        self.assertIn("replay_host_integrations.py", text)
 
     def test_readme_links_scope_and_roadmap(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -212,6 +219,19 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("默认不复制客户原始证据文件", text)
         self.assertIn("SHA-256 只验证文件身份和完整性", text)
 
+    def test_readme_documents_revisioned_case_delivery(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        for value in (
+            "opentaxcheck case-delivery",
+            "tax-delivery/v1",
+            "work/deliveries/revision-0001",
+            "workpaper.xlsx",
+            "pdf_status",
+            "partial",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
     def test_host_contract_names_all_supported_ecosystems_and_common_bundle_fields(self):
         text = (
             ROOT / "skills/open-tax-check/references/host-integrations.md"
@@ -237,6 +257,22 @@ class PublicRepositoryContractTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, text)
         self.assertIn("未经客户明确授权", text)
+
+    def test_host_contract_documents_case_delivery_and_customer_statement_boundary(self):
+        text = (
+            ROOT / "skills/open-tax-check/references/host-integrations.md"
+        ).read_text(encoding="utf-8")
+        for value in (
+            "case-delivery",
+            "tax-delivery/v1",
+            "delivery_options",
+            "workpaper.xlsx",
+            "customer-confirmation:<question_id>",
+            "宿主代客户声明",
+            "不等于文件证据",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
 
     def test_experimental_report_has_self_use_boundary_without_approval_gate(self):
         readme = experimental_report_scope(
@@ -268,10 +304,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
 
         self.assertTrue(roadmap.startswith("# 路线图\n"))
         self.assertIn("阶段 2A：Excel 安全盘点与人工选表 — 已完成", roadmap)
-        self.assertIn(
-            "阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成（正式客户报告未实现）",
-            roadmap,
-        )
+        self.assertIn("阶段 2B：Excel 业务行标准化、勾稽与规则 — 已完成", roadmap)
         self.assertTrue(changelog.startswith("# 更新日志\n"))
         self.assertIn("### 新增", changelog)
         self.assertIn("运行时生成", example)
@@ -338,6 +371,30 @@ class PublicRepositoryContractTests(unittest.TestCase):
             "document-extraction/v1.1",
         ):
             self.assertIn(required, contract)
+
+    def test_structured_document_contract_is_public_and_truthful(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        contract = (ROOT / "docs/document-extraction-contract.md").read_text(encoding="utf-8")
+        for text in (readme, contract):
+            for required in (
+                "financial-statement/v1",
+                "tax-return/v1",
+                "validate-structured-document",
+                "import-structured-document",
+                "proposed",
+                "confirmed",
+                "SHA-256",
+                "source_id",
+            ):
+                self.assertIn(required, text)
+            self.assertIn("不确定的宿主 AI 输出不得进入税务计算", text)
+        for fixture in (
+            "tests/fixtures/structured_documents/financial-statement.json",
+            "tests/fixtures/structured_documents/tax-return.json",
+        ):
+            payload = (ROOT / fixture).read_text(encoding="utf-8")
+            self.assertIn("example.invalid", payload)
+            self.assertNotIn("@", payload)
 
     def test_public_docs_describe_local_ocr_boundary(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

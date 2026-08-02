@@ -19,6 +19,43 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseValidationTests(unittest.TestCase):
+    def test_distribution_versions_must_match_package_and_release_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "src/open_tax_check"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text(
+                '__version__ = "1.0.0"\n', encoding="utf-8"
+            )
+            matching = (
+                root / "dist/open_tax_check-1.0.0-py3-none-any.whl",
+                root / "dist/open_tax_check-1.0.0.tar.gz",
+            )
+
+            self.assertIsNone(
+                validate_release.validate_distribution_versions(
+                    root,
+                    matching,
+                    {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v1.0.0"},
+                )
+            )
+            self.assertEqual(
+                validate_release.validate_distribution_versions(
+                    root,
+                    matching,
+                    {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v1.0.1"},
+                ),
+                "release_version_invalid:tag_version_mismatch",
+            )
+            self.assertEqual(
+                validate_release.validate_distribution_versions(
+                    root,
+                    (matching[0].with_name("open_tax_check-0.1.0-py3-none-any.whl"), matching[1]),
+                    {},
+                ),
+                "release_version_invalid:artifact_version_mismatch",
+            )
+
     def create_repository(self, directory, missing=()):
         root = Path(directory)
         for name in validate_release.REQUIRED:
@@ -27,6 +64,11 @@ class ReleaseValidationTests(unittest.TestCase):
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("safe public content\n", encoding="utf-8")
+        package = root / "src/open_tax_check"
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "__init__.py").write_text(
+            '__version__ = "1.0.0"\n', encoding="utf-8"
+        )
         subprocess.run(
             ["git", "init", "--quiet"], cwd=root, check=True, capture_output=True
         )
@@ -50,14 +92,30 @@ class ReleaseValidationTests(unittest.TestCase):
         *,
         wheel_members=(),
         sdist_members=(),
+        include_self_service_contracts=True,
     ):
+        if include_self_service_contracts:
+            wheel_members = tuple(wheel_members) + (
+                "open_tax_check/external_providers.py",
+                "open_tax_check/host_replays.py",
+            )
+            sdist_members = tuple(sdist_members) + (
+                "open_tax_check-1.0.0/src/open_tax_check/external_providers.py",
+                "open_tax_check-1.0.0/src/open_tax_check/host_replays.py",
+                "open_tax_check-1.0.0/scripts/replay_external_providers.py",
+                "open_tax_check-1.0.0/scripts/replay_host_integrations.py",
+                "open_tax_check-1.0.0/scripts/validate_installed_wheel.py",
+                "open_tax_check-1.0.0/tests/fixtures/host-replays/common-contract.json",
+                "open_tax_check-1.0.0/tests/fixtures/provider-replays/cloud-ocr-page-2.json",
+                "open_tax_check-1.0.0/tests/fixtures/provider-replays/fengniao-basic-info.json",
+            )
         distribution = root / "dist"
         distribution.mkdir()
-        wheel = distribution / "open_tax_check-0.1.0-py3-none-any.whl"
+        wheel = distribution / "open_tax_check-1.0.0-py3-none-any.whl"
         with zipfile.ZipFile(wheel, "w") as archive:
             for member in wheel_members:
                 archive.writestr(member, b"{}\n")
-        sdist = distribution / "open_tax_check-0.1.0.tar.gz"
+        sdist = distribution / "open_tax_check-1.0.0.tar.gz"
         with tarfile.open(sdist, "w:gz") as archive:
             for member in sdist_members:
                 payload = b"{}\n"
@@ -339,10 +397,18 @@ class ReleaseValidationTests(unittest.TestCase):
             "      - run: python scripts/validate_release.py "
             "--require-distributions"
         )
+        installed_wheel_step = (
+            "      - run: python scripts/validate_installed_wheel.py --dist dist"
+        )
 
         self.assertIn(strict_validation_step, workflow)
+        self.assertIn(installed_wheel_step, workflow)
         self.assertLess(
             workflow.index(build_step),
+            workflow.index(installed_wheel_step),
+        )
+        self.assertLess(
+            workflow.index(installed_wheel_step),
             workflow.index(strict_validation_step),
         )
         self.assertNotIn(
@@ -367,14 +433,14 @@ class ReleaseValidationTests(unittest.TestCase):
 
     def test_require_distributions_rejects_incomplete_or_ambiguous_sets(self):
         cases = (
-            ("wheel_only", ("open_tax_check-0.1.0-py3-none-any.whl",)),
-            ("sdist_only", ("open_tax_check-0.1.0.tar.gz",)),
+            ("wheel_only", ("open_tax_check-1.0.0-py3-none-any.whl",)),
+            ("sdist_only", ("open_tax_check-1.0.0.tar.gz",)),
             (
                 "duplicate_wheel",
                 (
-                    "open_tax_check-0.1.0-py3-none-any.whl",
-                    "open_tax_check-0.1.0-2-py3-none-any.whl",
-                    "open_tax_check-0.1.0.tar.gz",
+                    "open_tax_check-1.0.0-py3-none-any.whl",
+                    "open_tax_check-1.0.0-2-py3-none-any.whl",
+                    "open_tax_check-1.0.0.tar.gz",
                 ),
             ),
         )
@@ -410,15 +476,23 @@ class ReleaseValidationTests(unittest.TestCase):
                 root,
                 wheel_members=(
                     "open_tax_check/evidence_bundle.py",
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     "open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                 ),
                 sdist_members=(
-                    "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
-                    "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+                    "open_tax_check-1.0.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/source_paths.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
-                    "open_tax_check-0.1.0/skills/open-tax-check/references/"
+                    "open_tax_check-1.0.0/skills/open-tax-check/references/"
                     "host-integrations.md",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
             )
 
@@ -430,26 +504,97 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(result, 0, message)
         self.assertIn("release validation passed", message.lower())
 
+    def test_require_distributions_rejects_missing_self_service_replay_contracts(self):
+        wheel_members = (
+            "open_tax_check/evidence_bundle.py",
+            "open_tax_check/external_providers.py",
+            "open_tax_check/host_replays.py",
+            "open_tax_check/structured_documents.py",
+            "open_tax_check/structured_document_providers.py",
+            "open_tax_check/source_paths.py",
+            "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
+        )
+        sdist_suffixes = (
+            "src/open_tax_check/evidence_bundle.py",
+            "src/open_tax_check/external_providers.py",
+            "src/open_tax_check/host_replays.py",
+            "src/open_tax_check/structured_documents.py",
+            "src/open_tax_check/structured_document_providers.py",
+            "src/open_tax_check/source_paths.py",
+            "src/open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
+            "skills/open-tax-check/references/host-integrations.md",
+            "scripts/replay_external_providers.py",
+            "scripts/replay_host_integrations.py",
+            "scripts/validate_installed_wheel.py",
+            "tests/fixtures/host-replays/common-contract.json",
+            "tests/fixtures/provider-replays/cloud-ocr-page-2.json",
+            "tests/fixtures/provider-replays/fengniao-basic-info.json",
+            "tests/fixtures/structured_documents/financial-statement.json",
+            "tests/fixtures/structured_documents/tax-return.json",
+        )
+        cases = tuple(("wheel", member) for member in wheel_members[1:3]) + tuple(
+            ("sdist", member) for member in sdist_suffixes[8:13]
+        )
+
+        for archive_kind, missing_member in cases:
+            with self.subTest(archive_kind=archive_kind, missing_member=missing_member):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self.create_repository(directory)
+                    (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
+                    self.write_distribution_archives(
+                        root,
+                        wheel_members=tuple(
+                            member
+                            for member in wheel_members
+                            if archive_kind != "wheel" or member != missing_member
+                        ),
+                        sdist_members=tuple(
+                            "open_tax_check-1.0.0/" + member
+                            for member in sdist_suffixes
+                            if archive_kind != "sdist" or member != missing_member
+                        ),
+                        include_self_service_contracts=False,
+                    )
+
+                    result, message = self.run_validator(
+                        root,
+                        "--require-distributions",
+                    )
+
+                self.assertEqual(result, 1, message)
+                self.assertEqual(
+                    message,
+                    f"missing required package data: {missing_member}\n",
+                )
+
     def test_require_distributions_rejects_missing_evidence_delivery_contracts(self):
         required_wheel_member = "open_tax_check/evidence_bundle.py"
         required_sdist_document = (
             "skills/open-tax-check/references/host-integrations.md"
         )
         archived_sdist_document = (
-            "open_tax_check-0.1.0/" + required_sdist_document
+            "open_tax_check-1.0.0/" + required_sdist_document
         )
         cases = (
             (
                 "wheel_module",
                 (
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     "open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                 ),
                 (
-                    "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
-                    "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+                    "open_tax_check-1.0.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/source_paths.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                     archived_sdist_document,
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
                 required_wheel_member,
             ),
@@ -457,13 +602,21 @@ class ReleaseValidationTests(unittest.TestCase):
                 "sdist_document",
                 (
                     required_wheel_member,
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     "open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
                 ),
                 (
-                    "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
-                    "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+                    "open_tax_check-1.0.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/source_paths.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/tax_packs/"
                     "vat-cn-2023-2026.prototype.json",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
                 required_sdist_document,
             ),
@@ -496,7 +649,7 @@ class ReleaseValidationTests(unittest.TestCase):
             "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json"
         )
         required_sdist_member = (
-            "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+            "open_tax_check-1.0.0/src/open_tax_check/tax_packs/"
             "vat-cn-2023-2026.prototype.json"
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -504,12 +657,22 @@ class ReleaseValidationTests(unittest.TestCase):
             (root / ".gitignore").write_text("dist/\n", encoding="utf-8")
             self.write_distribution_archives(
                 root,
-                wheel_members=("open_tax_check/evidence_bundle.py",),
+                wheel_members=(
+                    "open_tax_check/evidence_bundle.py",
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
+                ),
                 sdist_members=(
-                    "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/source_paths.py",
                     required_sdist_member,
-                    "open_tax_check-0.1.0/skills/open-tax-check/references/"
+                    "open_tax_check-1.0.0/skills/open-tax-check/references/"
                     "host-integrations.md",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
             )
 
@@ -538,12 +701,20 @@ class ReleaseValidationTests(unittest.TestCase):
                 root,
                 wheel_members=(
                     "open_tax_check/evidence_bundle.py",
+                    "open_tax_check/structured_documents.py",
+                    "open_tax_check/structured_document_providers.py",
+                    "open_tax_check/source_paths.py",
                     required_wheel_member,
                 ),
                 sdist_members=(
-                    "open_tax_check-0.1.0/src/open_tax_check/evidence_bundle.py",
-                    "open_tax_check-0.1.0/skills/open-tax-check/references/"
+                    "open_tax_check-1.0.0/src/open_tax_check/evidence_bundle.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_documents.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/structured_document_providers.py",
+                    "open_tax_check-1.0.0/src/open_tax_check/source_paths.py",
+                    "open_tax_check-1.0.0/skills/open-tax-check/references/"
                     "host-integrations.md",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/financial-statement.json",
+                    "open_tax_check-1.0.0/tests/fixtures/structured_documents/tax-return.json",
                 ),
             )
 
@@ -705,7 +876,7 @@ class ReleaseValidationTests(unittest.TestCase):
         )
 
     def test_oversized_distribution_artifacts_are_rejected(self):
-        for name in ("open_tax_check-0.1.0-py3-none-any.whl", "open-tax-check.tar.gz"):
+        for name in ("open_tax_check-1.0.0-py3-none-any.whl", "open-tax-check.tar.gz"):
             with self.subTest(name=name):
                 with tempfile.TemporaryDirectory() as directory:
                     root = self.create_repository(directory)

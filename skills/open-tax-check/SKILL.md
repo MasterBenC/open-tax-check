@@ -13,6 +13,7 @@ description: Use when checking Chinese enterprise tax materials from CSV or Exce
 - 现有 CSV `run` 流程继续支持业务行标准化、数据质量检查、首批规则、语义候选、JSON/JSONL 和内部 Markdown 草稿。
 - Phase 2B 支持已确认来源绑定映射的 Excel 业务行标准化、试算平衡表勾稽、确定性规则和内部 Markdown 草稿；映射提案在 `confirm-mapping` 前一律不生效。
 - PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。
+- 安全 ZIP 输入、Fengniao/cloud provider 合同与正式离线回放、`--complete` 完整虚构案例和七宿主合同回放已提供；真实联网服务仍需宿主环境单独验证。
 - 不得把 `partial_scope_ready`、`calculated` 或“未触发”解释为无风险、完整或最终结论。
 - 不得自动选择隐藏工作表。含隐藏数据的可见工作表也必须人工确认。
 - 不得把关键词或语义命中变成税务结论；其状态保持 `candidate`，直到税务专业人员复核。

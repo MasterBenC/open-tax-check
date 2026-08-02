@@ -3,17 +3,40 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
 from open_tax_check.case import init_case
+from open_tax_check.case_orchestration import (
+    apply_case_confirmations,
+    build_case_customer_tasks,
+    case_status_payload,
+    run_case_self_check,
+)
+from open_tax_check.delivery import build_case_delivery
 from open_tax_check.pipeline import inspect_case, run_case
 from open_tax_check.reviews import confirm_mapping
+from open_tax_check.structured_document_providers import (
+    persist_financial_statement,
+    persist_tax_return,
+)
+from open_tax_check.tax_models import (
+    Confirmation,
+    DateRange,
+    FactState,
+    Limitation,
+    TaxCheckRequest,
+    TaxFact,
+)
 
-
-ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "examples" / "fictional-company" / "input" / "journal.csv"
 TRIAL_BALANCE_ROWS = (
     (
@@ -73,6 +96,8 @@ class FictionalCaseResult:
     rule_amounts: dict[str, str]
     trial_balance_passed: bool
     journal_to_trial_balance_passed: bool
+    delivery_status: str | None = None
+    delivery_revision: int | None = None
 
 
 def _configure_utf8_output() -> None:
@@ -192,15 +217,343 @@ def _run_fictional_case(case_dir: Path, format: str) -> FictionalCaseResult:
     return _result(case_dir, result["status"])
 
 
+COMPLETE_PERIOD_START = "2023-01-01"
+COMPLETE_PERIOD_END = "2026-12-31"
+COMPLETE_STRUCTURED_SOURCES = {
+    "balance-sheet.txt": "虚构资产负债表：资产总计975000元，负债和所有者权益总计975000元。\n",
+    "income-statement.txt": "虚构利润表：营业收入1000000元，费用25000元，净利润975000元。\n",
+    "cash-flow-statement.txt": "虚构现金流量表：期末现金及现金等价物余额975000元。\n",
+    "vat-return.txt": "虚构增值税申报表：应税销售额1000000元，进项税额0元，应纳税额60000元。\n",
+    "surcharge-return.txt": "虚构附加税费申报表：增值税及消费税税额基础60000元，教育费附加1800元。\n",
+    "cit-return.txt": "虚构企业所得税申报表：营业收入1000000元，应纳税所得额975000元，应纳税额243750元。\n",
+    "iit-return.txt": "虚构个人所得税申报表：年度综合所得应纳税所得额5000元，应纳税额150元。\n",
+}
+
+
+def _source_id_by_name(case_dir: Path, filename: str) -> str:
+    manifest = json.loads(
+        (case_dir / "work" / "input_manifest.json").read_text(encoding="utf-8")
+    )
+    for source in manifest.get("sources", []):
+        if source.get("filename") == filename:
+            return source["source_id"]
+    raise RuntimeError(f"fictional source missing: {filename}")
+
+
+def _anchor(source_id: str, *, page: int = 1) -> dict:
+    return {
+        "source_id": source_id,
+        "page_number": page,
+        "sheet_name": None,
+        "cell": None,
+        "coordinates": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.2], [0.1, 0.2]],
+    }
+
+
+def _statement_payload(
+    source_id: str,
+    statement_id: str,
+    statement_type: str,
+    totals: dict[str, str],
+    line_code: str,
+    line_name: str,
+    amount: str,
+) -> dict:
+    return {
+        "schema_version": "financial-statement/v1",
+        "statement_id": statement_id,
+        "source_id": source_id,
+        "entity_name": "虚构科技有限公司",
+        "statement_type": statement_type,
+        "period_start": COMPLETE_PERIOD_START,
+        "period_end": COMPLETE_PERIOD_END,
+        "as_of_date": COMPLETE_PERIOD_END,
+        "currency": "CNY",
+        "unit_multiplier": "1",
+        "lines": [{
+            "line_code": line_code,
+            "original_name": line_name,
+            "standard_name": line_name,
+            "current_amount": amount,
+            "prior_amount": "0.00",
+            "source_anchor": _anchor(source_id),
+            "confidence_source": "template",
+            "confirmation_state": "confirmed",
+        }],
+        "totals": totals,
+        "issues": [],
+    }
+
+
+def _return_payload(
+    source_id: str,
+    return_id: str,
+    tax_id: str,
+    form_code: str,
+    fact_key: str | None,
+    value: str,
+    *,
+    tax_payable: str | None = None,
+) -> dict:
+    return {
+        "schema_version": "tax-return/v1",
+        "return_id": return_id,
+        "source_id": source_id,
+        "entity_name": "虚构科技有限公司",
+        "tax_id": tax_id,
+        "return_type": "annual_return",
+        "period_start": COMPLETE_PERIOD_START,
+        "period_end": COMPLETE_PERIOD_END,
+        "filing_status": "filed",
+        "filed_at": "2027-02-10T09:00:00+08:00",
+        "currency": "CNY",
+        "unit_multiplier": "1",
+        "lines": [{
+            "form_code": form_code,
+            "line_number": "1",
+            "original_name": "虚构申报项目",
+            "fact_key": fact_key,
+            "value": value,
+            "value_type": "decimal",
+            "source_anchor": _anchor(source_id),
+            "confidence_source": "template",
+            "confirmation_state": "confirmed",
+        }],
+        "totals": {"tax_payable": tax_payable if tax_payable is not None else value},
+        "issues": [],
+    }
+
+
+def _write_complete_structured_documents(case_dir: Path) -> None:
+    statement_specs = (
+        ("balance-sheet.txt", "balance-sheet-2023-2026", "balance_sheet",
+            {"assets": "975000.00", "liabilities_and_equity": "975000.00", "cash": "975000.00"},
+            "BS-ASSETS-TOTAL", "资产总计", "975000.00"),
+        ("income-statement.txt", "income-statement-2023-2026", "income_statement",
+            {"revenue": "1000000.00", "cost": "0.00", "expenses": "25000.00", "taxes": "0.00", "net_profit": "975000.00"},
+            "IS-NET-PROFIT", "净利润", "975000.00"),
+        ("cash-flow-statement.txt", "cash-flow-2023-2026", "cash_flow_statement",
+            {"ending_cash": "975000.00"},
+            "CF-END-CASH", "期末现金", "975000.00"),
+    )
+    for filename, statement_id, statement_type, totals, line_code, line_name, amount in statement_specs:
+        source_id = _source_id_by_name(case_dir, filename)
+        payload = _statement_payload(
+            source_id,
+            statement_id,
+            statement_type,
+            totals,
+            line_code,
+            line_name,
+            amount,
+        )
+        persist_financial_statement(case_dir, source_id, payload)
+    return_specs = (
+        ("vat-return.txt", "vat-return-2023-2026", "vat", "VAT-MAIN", "vat.taxable_sales", "1000000.00", "60000.00"),
+        ("surcharge-return.txt", "surcharge-return-2023-2026", "education_surcharge", "EDU-MAIN", "surcharge.vat_consumption_tax_base", "60000.00", "1800.00"),
+        ("cit-return.txt", "cit-return-2023-2026", "enterprise_income_tax", "CIT-MAIN", "cit.revenue", "1000000.00", "243750.00"),
+        ("iit-return.txt", "iit-return-2023-2026", "individual_income_tax", "IIT-MAIN", "individual_income_tax.annual_comprehensive_taxable_income", "5000.00", "150.00"),
+    )
+    returns = []
+    for filename, return_id, tax_id, form_code, fact_key, value, tax_payable in return_specs:
+        source_id = _source_id_by_name(case_dir, filename)
+        returns.append((source_id, _return_payload(
+            source_id, return_id, tax_id, form_code, fact_key, value,
+            tax_payable=tax_payable,
+        )))
+    vat_source_id, vat_return = returns[0]
+    vat_return["lines"].append({
+        "form_code": "VAT-MAIN",
+        "line_number": "2",
+        "original_name": "进项税额",
+        "fact_key": "vat.input_tax_credits",
+        "value": "0.00",
+        "value_type": "decimal",
+        "source_anchor": _anchor(vat_source_id),
+        "confidence_source": "template",
+        "confirmation_state": "confirmed",
+    })
+    cit_source_id, cit_return = returns[2]
+    cit_return["lines"].append({
+        "form_code": "CIT-MAIN",
+        "line_number": "2",
+        "original_name": "净利润",
+        "fact_key": "cit.net_profit",
+        "value": "975000.00",
+        "value_type": "decimal",
+        "source_anchor": _anchor(cit_source_id),
+        "confidence_source": "template",
+        "confirmation_state": "confirmed",
+    })
+    cit_return["lines"].append({
+        "form_code": "CIT-MAIN",
+        "line_number": "3",
+        "original_name": "应纳税所得额",
+        "fact_key": "enterprise_income_tax.taxable_income",
+        "value": "975000.00",
+        "value_type": "decimal",
+        "source_anchor": _anchor(cit_source_id),
+        "confidence_source": "template",
+        "confirmation_state": "confirmed",
+    })
+    for source_id, payload in returns:
+        persist_tax_return(case_dir, source_id, payload)
+
+
+def _fictional_answer(task):
+    if task.answer_type == "boolean":
+        return task.fact_key in {
+            "activity.has_vat_taxable_transaction",
+            "activity.has_individual_income_tax_duty",
+            "entity.has_enterprise_income_tax_scope",
+            "tax.has_vat_or_consumption_tax_payable",
+        }
+    if task.answer_type == "choice":
+        choices = {
+            "vat.rate_path": "general_taxpayer_6",
+            "enterprise_income_tax.rate_path": "standard_resident_enterprise",
+            "individual_income_tax.calculation_path": "resident_annual_comprehensive_income",
+            "urban_maintenance_construction_tax.rate_path": "urban_area_standard",
+            "education_surcharge.rate_path": "standard",
+            "local_education_surcharge.rate_path": "standard",
+        }
+        return choices.get(task.fact_key, task.choices[0].value)
+    if task.answer_type == "integer":
+        return 0
+    if task.answer_type == "decimal":
+        return {
+            "vat.taxable_sales": "1000000.00",
+            "vat.input_tax_credits": "0.00",
+            "enterprise_income_tax.taxable_income": "975000.00",
+            "individual_income_tax.annual_comprehensive_taxable_income": "5000.00",
+            "surcharge.vat_consumption_tax_base": "60000.00",
+        }.get(task.fact_key, "0.00")
+    if task.answer_type == "date":
+        return COMPLETE_PERIOD_END
+    return "客户确认无其他相关应税事实"
+
+
+def _confirmation_source(case_dir: Path, fact_key: str) -> str | None:
+    source_name = None
+    if fact_key == "activity.has_vat_taxable_transaction" or fact_key.startswith("vat."):
+        source_name = "vat-return.txt"
+    elif fact_key == "tax.has_vat_or_consumption_tax_payable" or fact_key.startswith((
+        "surcharge.",
+        "urban_maintenance_construction_tax.",
+        "education_surcharge.",
+        "local_education_surcharge.",
+    )):
+        source_name = "surcharge-return.txt"
+    elif fact_key == "entity.has_enterprise_income_tax_scope" or fact_key.startswith(
+        "enterprise_income_tax."
+    ):
+        source_name = "cit-return.txt"
+    elif fact_key == "activity.has_individual_income_tax_duty" or fact_key.startswith(
+        "individual_income_tax."
+    ):
+        source_name = "iit-return.txt"
+    return _source_id_by_name(case_dir, source_name) if source_name else None
+
+
+def _confirm_task(case_dir: Path, task, value, occurred_at: datetime) -> None:
+    source_id = _confirmation_source(case_dir, task.fact_key)
+    evidence_refs = [f"customer-confirmation:{task.question_id}"]
+    if source_id is not None:
+        evidence_refs.append(source_id)
+    apply_case_confirmations(
+        case_dir,
+        (
+            Confirmation(
+                task.question_id,
+                task.fact_key,
+                value,
+                "customer",
+                occurred_at.isoformat(),
+                tuple(evidence_refs),
+            ),
+        ),
+    )
+
+
+def _run_complete_fictional_case(case_dir: Path) -> FictionalCaseResult:
+    init_case(case_dir, "虚构科技有限公司", COMPLETE_PERIOD_START, COMPLETE_PERIOD_END)
+    create_fictional_workbook(case_dir / "input" / "journal.xlsx")
+    create_fictional_trial_balance(case_dir / "input" / "trial-balance.xlsx")
+    fixture_root = ROOT / "tests" / "fixtures" / "ocr"
+    shutil.copyfile(fixture_root / "fictional-tax-note.png", case_dir / "input" / "fictional-tax-note.png")
+    shutil.copyfile(fixture_root / "fictional-digital.pdf", case_dir / "input" / "fictional-digital.pdf")
+    for filename, content in COMPLETE_STRUCTURED_SOURCES.items():
+        (case_dir / "input" / filename).write_text(content, encoding="utf-8")
+    inspect_code, _ = inspect_case(case_dir)
+    if inspect_code not in (0, 4):
+        raise RuntimeError("complete fictional inspection failed")
+    first_code, _ = run_case(case_dir, "off")
+    if first_code != 3:
+        raise RuntimeError("complete fictional case did not require mapping confirmation")
+    mapping_payloads = _mapping_payloads(case_dir)
+    for payload in mapping_payloads:
+        confirm_mapping(case_dir, payload)
+    _write_complete_structured_documents(case_dir)
+    code, response = run_case(case_dir, "off")
+    if code != 0 or response["status"] != "needs_professional_review":
+        raise RuntimeError("complete fictional case did not pass deterministic checks")
+
+    manifest = json.loads((case_dir / "work" / "input_manifest.json").read_text(encoding="utf-8"))
+    hashes = tuple(item["sha256"] for item in manifest["sources"] if item.get("sha256"))
+    request = TaxCheckRequest(
+        DateRange(date.fromisoformat(COMPLETE_PERIOD_START), date.fromisoformat(COMPLETE_PERIOD_END)),
+        "CN",
+        facts=(TaxFact("activity.has_vat_taxable_transaction", True, FactState.OBSERVED, ()),),
+        input_hashes=hashes,
+    )
+    limitation = Limitation(
+        "special_tax_path_not_covered",
+        "零税率、免税及不动产特殊增值税路径未纳入本次确定性计算。",
+    )
+    run_case_self_check(
+        case_dir,
+        request,
+        occurred_at="2027-02-15T10:00:00+08:00",
+        limitations=(limitation,),
+    )
+    occurred_at = datetime.fromisoformat("2027-02-15T10:01:00+08:00")
+    conflict_task = next(
+        item
+        for item in build_case_customer_tasks(case_dir)
+        if item.answer_type == "boolean"
+    )
+    for value in (False, True, False):
+        _confirm_task(case_dir, conflict_task, value, occurred_at)
+        occurred_at += timedelta(seconds=1)
+
+    for _ in range(200):
+        tasks = build_case_customer_tasks(case_dir)
+        if not tasks:
+            break
+        task = tasks[0]
+        _confirm_task(case_dir, task, _fictional_answer(task), occurred_at)
+        occurred_at += timedelta(seconds=1)
+    else:
+        raise RuntimeError("complete fictional customer task loop did not converge")
+    final_status = case_status_payload(case_dir)
+    if final_status["status"] != "completed_with_limitations":
+        raise RuntimeError("complete fictional case did not close with limitations")
+    delivery = build_case_delivery(case_dir, include_pdf=True)
+    result = _result(case_dir, final_status["status"])
+    return FictionalCaseResult(
+        **{**result.__dict__, "delivery_status": delivery["status"], "delivery_revision": delivery["revision"]}
+    )
+
+
 def run_fictional_case(
-    *, format: str, output: Path | None = None
+    *, format: str, output: Path | None = None, complete: bool = False
 ) -> FictionalCaseResult:
     if format not in {"csv", "excel"}:
         raise ValueError("format must be csv or excel")
     if output is None:
         with tempfile.TemporaryDirectory() as temporary:
-            return _run_fictional_case(Path(temporary), format)
-    return _run_fictional_case(output, format)
+            return _run_complete_fictional_case(Path(temporary)) if complete else _run_fictional_case(Path(temporary), format)
+    return _run_complete_fictional_case(output) if complete else _run_fictional_case(output, format)
 
 
 def main() -> int:
@@ -208,12 +561,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--format", choices=("csv", "excel"), default="excel")
+    parser.add_argument("--complete", action="store_true")
     args = parser.parse_args()
     if args.output.exists() and (
         not args.output.is_dir() or any(args.output.iterdir())
     ):
         parser.error("output directory must not exist or must be empty")
-    result = run_fictional_case(format=args.format, output=args.output)
+    result = run_fictional_case(format=args.format, output=args.output, complete=args.complete)
     print(
         json.dumps(
             {"entity_name": "虚构科技有限公司", **result.__dict__},

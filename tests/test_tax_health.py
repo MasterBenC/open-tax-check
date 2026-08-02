@@ -210,7 +210,11 @@ class TaxHealthFacadeTests(unittest.TestCase):
         payload = tax_snapshot_payload(snapshot)
         serialized = json.dumps(payload, ensure_ascii=False)
 
-        self.assertEqual(set(payload), {"schema_version", "revision", "request", "results", "questions", "audit_events"})
+        self.assertEqual(
+            set(payload),
+            {"schema_version", "revision", "request", "results", "questions", "audit_events", "limitations"},
+        )
+        self.assertEqual(payload["limitations"], [])
         self.assertEqual(set(payload["request"]), {"period", "jurisdiction", "input_hashes"})
         self.assertEqual(payload["request"]["input_hashes"], ["a" * 64])
         self.assertEqual(

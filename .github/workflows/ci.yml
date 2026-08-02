@@ -25,6 +25,7 @@ jobs:
       - run: python -m pytest -q
       - run: python scripts/run_fictional_example.py --output work/ci-demo
       - run: python -m build
+      - run: python scripts/validate_installed_wheel.py --dist dist
       - run: python scripts/validate_release.py --require-distributions
 
   ocr-smoke:

@@ -6,7 +6,7 @@
 
 仓库中的 `input/journal.csv` 是可直接审查的虚构文本源，包含三张借贷平衡的凭证：销售收入 1,000,000 元、业务招待费 20,000 元，以及摘要含“中秋礼品及高档茶叶”的办公费 5,000 元。
 
-`scripts/run_fictional_example.py` 会在 `--output` 指定的独立案件中运行时生成 `input/journal.xlsx`、`input/trial-balance.xlsx`，以及仅供 Phase 2A 检测的财务报表和纳税申报表文本占位证据；这些占位证据保持 `present_unparsed`。runner 从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构 mapping JSON。仓库不提交 `.xlsx` 二进制。预期产物包括：
+`scripts/run_fictional_example.py` 默认会在 `--output` 指定的独立案件中运行时生成 `input/journal.xlsx`、`input/trial-balance.xlsx`，以及仅供兼容流程检测的财务报表和纳税申报表文本占位证据；这些占位证据保持 `present_unparsed`。runner 从 `inspect` 产物读取真实 `source_id`，取得映射提案后写入并确认来源绑定的虚构 mapping JSON。仓库不提交 `.xlsx` 二进制。预期产物包括：
 
 - `state.json`，状态为 `needs_professional_review`；
 - `work/input_manifest.json`、`work/workbook_inventory.json`、`work/sheet_selection.json` 和 `work/coverage_matrix.json`；
@@ -16,3 +16,11 @@
 Excel 与 CSV 示例均产生同一笔业务招待费规则金额；Excel 序时账和试算平衡表勾稽通过。勾稽通过不表示不存在税务风险，所有结果保持 `needs_professional_review`，不会生成正式客户报告。财务报表和纳税申报表程序仍为 `present_unparsed`，因此不能宣称已完成完整基线健康检查。
 
 `--output` 必须指向不存在或空目录；runner 会拒绝非空目录，避免覆盖已有数据或混杂旧产物。runner 不会修改示例源数据。
+
+完整的 2023–2026 自助验收案例运行：
+
+```powershell
+python scripts/run_fictional_example.py --output work/self-service-v1-demo --complete
+```
+
+完整模式不会在案件输入目录复制 `journal.csv`，而是生成唯一的 `journal.xlsx` 账源；同时提供试算平衡表、三张结构化财报、四类结构化申报、虚构 PNG/PDF。财报和申报只通过正式导入/持久化 API 写入并生成来源哈希收据；runner 逐项回答当前客户任务（布尔问题优先选择“否”），留下 `confirmation_conflict` 和 `confirmation_reaffirmed` 审计事件，最终以零活动任务的 `completed_with_limitations` 生成 Markdown、DOCX、Excel 工作底稿、机器快照和证据包。明确限制来自同一不可变快照，不使用旁路 `limitations.json`。若本机没有 LibreOffice，交付清单保持 `status=partial` 和 `pdf_status=pdf_renderer_unavailable`；这表示 PDF 尚未渲染，不是 PDF 验证通过。

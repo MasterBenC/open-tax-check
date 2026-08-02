@@ -16,6 +16,10 @@ _CONFIRMATION_EVIDENCE_REFERENCE = re.compile(
 _SUPPORTED_ANSWER_TYPES = frozenset(
     {"text", "choice", "integer", "boolean", "date", "decimal"}
 )
+_MAX_LIMITATIONS = 100
+_MAX_LIMITATION_CODE_CHARS = 128
+_MAX_LIMITATION_MESSAGE_CHARS = 4000
+_MAX_LIMITATIONS_UTF8_BYTES = 128 * 1024
 
 
 class FactState(StrEnum):
@@ -672,6 +676,22 @@ class AuditEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class Limitation:
+    code: str
+    message_zh: str
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.code)
+        if (
+            len(self.code) > _MAX_LIMITATION_CODE_CHARS
+            or not isinstance(self.message_zh, str)
+            or not self.message_zh.strip()
+            or len(self.message_zh) > _MAX_LIMITATION_MESSAGE_CHARS
+        ):
+            raise ValueError("invalid_limitation")
+
+
+@dataclass(frozen=True, slots=True)
 class TaxCheckRequest:
     period: DateRange
     jurisdiction: str
@@ -705,11 +725,25 @@ class TaxCheckSnapshot:
     revision: int
     schema_version: str = TAX_SCHEMA_VERSION
     question_history: tuple[Question, ...] = ()
+    limitations: tuple[Limitation, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "results", tuple(self.results))
         object.__setattr__(self, "questions", tuple(self.questions))
         object.__setattr__(self, "audit_events", tuple(self.audit_events))
         object.__setattr__(self, "question_history", tuple(self.question_history))
+        object.__setattr__(self, "limitations", tuple(self.limitations))
         if len({result.tax_id for result in self.results}) != len(self.results):
             raise ValueError("duplicate_result_tax_id")
+        if (
+            any(not isinstance(item, Limitation) for item in self.limitations)
+            or len(self.limitations) > _MAX_LIMITATIONS
+            or len({item.code for item in self.limitations}) != len(self.limitations)
+            or sum(
+                len(item.code.encode("utf-8"))
+                + len(item.message_zh.encode("utf-8"))
+                for item in self.limitations
+            )
+            > _MAX_LIMITATIONS_UTF8_BYTES
+        ):
+            raise ValueError("invalid_limitations")

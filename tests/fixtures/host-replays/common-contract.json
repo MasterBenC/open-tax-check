@@ -1,0 +1,39 @@
+{
+  "schema_version": "host-replay/v1",
+  "task_payloads": [
+    {
+      "task_id": "fictional-task-001",
+      "question_id": "fictional-question-001",
+      "fact_key": "activity.has_vat_taxable_transaction",
+      "tax_ids": [
+        "vat"
+      ],
+      "question_zh": "请确认本案是否存在增值税应税交易。",
+      "help_zh": "请根据账簿和申报资料选择。",
+      "evidence_help_zh": "可提供增值税申报表或销售明细作为依据。",
+      "evidence_types": [
+        "tax_return",
+        "journal"
+      ],
+      "answer_type": "choice",
+      "choices": [
+        {
+          "value": "true",
+          "label_zh": "是"
+        },
+        {
+          "value": "false",
+          "label_zh": "否"
+        }
+      ],
+      "priority": 10,
+      "blocking": true
+    }
+  ],
+  "delivery": {
+    "evidence_bundle_status": null,
+    "evidence_bundle_path": null,
+    "evidence_bundle_sha256": null,
+    "includes_evidence_files": false
+  }
+}
