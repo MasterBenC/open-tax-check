@@ -7,22 +7,91 @@ import os
 from pathlib import Path
 import tempfile
 from typing import Mapping
+import unicodedata
 import xml.etree.ElementTree as ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .tax_models import TaxCheckSnapshot, TaxStatus
+from .tax_registry import TAX_DEFINITIONS
 
 
 WORKPAPER_SCHEMA_VERSION = "tax-workpaper/v1"
 WORKPAPER_NAME = "税务健康检查工作底稿.xlsx"
 
 _SHEETS = (
-    "项目概览", "资料清单", "数据质量", "账务勾稽", "财报勾稽", "申报勾稽",
-    "税务筛查", "正式计算", "客户问题", "证据索引", "规则版本", "运行记录",
+    "项目概览", "资料清单", "抽取与映射", "数据质量", "账务勾稽", "财报勾稽", "申报勾稽",
+    "税费筛查", "正式计算", "客户问题", "证据索引", "规则版本", "报告选取", "运行记录",
 )
 _HEADER_FILL = "1F4E78"
 _HEADER_FONT = "FFFFFF"
 _ALT_FILL = "EAF2F8"
+_TAX_NAMES_ZH = {item.tax_id: item.name_zh for item in TAX_DEFINITIONS}
+_TAX_STATUS_ZH = {
+    TaxStatus.CALCULATED: "已完成计算",
+    TaxStatus.NOT_APPLICABLE: "经资料确认不适用",
+    TaxStatus.NEEDS_EVIDENCE: "待补充资料",
+    TaxStatus.NEEDS_LOCAL_POLICY: "待确认当地政策",
+    TaxStatus.BLOCKED: "暂时无法判断",
+}
+_SOURCE_STATUS_ZH = {
+    "accepted": "已接收",
+    "present_unparsed": "已接收，待解析",
+    "rejected": "已拒绝",
+}
+_RECONCILIATION_CHECK_ZH = {
+    "document_set": "文档集合",
+    "balance_sheet_identity": "资产负债表恒等式",
+    "income_statement_identity": "利润表恒等式",
+    "cash_flow_identity": "现金流量表恒等式",
+    "tax_fact": "申报事实勾稽",
+}
+_RECONCILIATION_STATUS_ZH = {
+    "passed": "通过",
+    "blocked": "阻塞",
+    "not_performed_missing_fact": "未执行（缺少事实）",
+}
+_FORMULA_LABELS_ZH = {
+    "generic.base_times_rate.v1": "计税基础乘税率",
+    "generic.base_minus_deductions_times_rate.v1": "计税基础减扣除额后乘税率",
+    "generic.base_times_rate_minus_credits.v1": "计税基础乘税率后减允许抵扣税额",
+    "generic.base_times_rate_minus_quick_deduction.v1": "计税基础乘税率后减速算扣除数",
+    "generic.quantity_times_unit_amount.v1": "计税数量乘适用单位税额",
+    "generic.base_times_applicable_parameter.v1": "已确认计税依据乘适用计税参数",
+    "generic.base_times_rate_minus_confirmed_deduction.v1": "增值额乘确认税率后减确认速算扣除额",
+}
+_ANSWER_TYPE_ZH = {
+    "text": "文本",
+    "choice": "选择",
+    "integer": "整数",
+    "boolean": "是/否",
+    "date": "日期",
+    "decimal": "金额或小数",
+}
+_AUDIT_EVENT_ZH = {
+    "check_started": "检查开始",
+    "fact_confirmed": "事实已确认",
+    "confirmation_conflict": "确认内容发生冲突",
+    "confirmation_reaffirmed": "原确认已再次确认",
+}
+_MIN_COLUMN_WIDTHS = {
+    "税种编号": 30,
+    "来源编号": 28,
+    "证据引用": 40,
+    "SHA-256": 48,
+    "文件名": 28,
+    "稳定诊断": 28,
+    "文档或事实": 30,
+    "规则包": 40,
+    "公式编号": 32,
+    "问题": 40,
+    "涉及事实键": 36,
+    "证据类型": 32,
+    "来源标题": 36,
+    "文号": 28,
+    "官方链接": 48,
+    "选取说明": 24,
+    "确认摘要": 48,
+}
 _FIXED_TIME = datetime(2026, 1, 1)
 _CORE_PROPERTIES_NS = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 _DCTERMS_NS = "http://purl.org/dc/terms/"
@@ -68,7 +137,17 @@ def _unique_evidence_refs(snapshot: TaxCheckSnapshot) -> tuple[str, ...]:
                 ref for ref in result.calculation.evidence_refs
                 if isinstance(ref, str) and ref
             )
-    return tuple(sorted(refs))
+    return tuple(sorted(ref for ref in refs if not ref.startswith("customer-confirmation:")))
+
+
+def _tax_label(tax_id: str) -> str:
+    name = _TAX_NAMES_ZH.get(tax_id)
+    return f"{name}（{tax_id}）" if name else tax_id
+
+
+def _source_status(value: object) -> str:
+    text = _as_text(value)
+    return _SOURCE_STATUS_ZH.get(text, text)
 
 
 def _manifest_index(source_manifest: Mapping[str, object] | None) -> dict[str, dict[str, object]]:
@@ -90,25 +169,134 @@ def _manifest_index(source_manifest: Mapping[str, object] | None) -> dict[str, d
 
 def _write_table(sheet, headers: tuple[str, ...], rows: list[tuple[object, ...]]) -> None:
     from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
 
-    sheet.append(headers)
+    def text_safe(value: object) -> object:
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+            return "'" + value
+        return value
+
+    def display_width(value: object) -> int:
+        return sum(
+            2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+            for character in _as_text(value)
+        )
+
+    safe_headers = tuple(text_safe(value) for value in headers)
+    safe_rows = [tuple(text_safe(value) for value in row) for row in rows]
+    sheet.append(safe_headers)
     for cell in sheet[1]:
         cell.fill = PatternFill("solid", fgColor=_HEADER_FILL)
         cell.font = Font(color=_HEADER_FONT, bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-    for row_number, row in enumerate(rows, start=2):
+        cell.alignment = Alignment(
+            horizontal="center", vertical="center", wrap_text=True
+        )
+    sheet.row_dimensions[1].height = 24
+    for row_number, row in enumerate(safe_rows, start=2):
         sheet.append(row)
+        for cell in sheet[row_number]:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
         if row_number % 2 == 0:
             for cell in sheet[row_number]:
                 cell.fill = PatternFill("solid", fgColor=_ALT_FILL)
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
-    widths = [max(12, min(48, len(_as_text(value)) + 2)) for value in headers]
+    widths = []
+    for index, header in enumerate(headers):
+        populated = [header, *(row[index] for row in safe_rows if index < len(row))]
+        widths.append(
+            min(
+                48,
+                max(
+                    12,
+                    _MIN_COLUMN_WIDTHS.get(header, 0),
+                    max(display_width(value) for value in populated) + 2,
+                ),
+            )
+        )
     for index, width in enumerate(widths, start=1):
-        sheet.column_dimensions[chr(64 + index)].width = width
+        sheet.column_dimensions[get_column_letter(index)].width = width
 
 
-def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, delivery_revision=None):
+def _audit_mapping(case_audit: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:
+    if case_audit is None:
+        return None
+    if not isinstance(case_audit, Mapping):
+        raise WorkpaperError("invalid_workpaper_case_audit")
+    value = case_audit.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise WorkpaperError("invalid_workpaper_case_audit")
+    return value
+
+
+def _accounting_reconciliation_rows(case_audit: Mapping[str, object] | None) -> list[tuple[object, ...]]:
+    payload = _audit_mapping(case_audit, "reconciliation")
+    if payload is None:
+        return [("账务勾稽", "未提供", "当前快照未直接包含账务勾稽明细")]
+    rows = []
+    for key, label in (
+        ("trial_balance", "试算平衡表"),
+        ("journal_to_trial_balance", "序时账至试算平衡表"),
+    ):
+        result = payload.get(key)
+        if not isinstance(result, Mapping):
+            continue
+        issues = result.get("issues", [])
+        items = result.get("items", [])
+        if not isinstance(issues, list) or not isinstance(items, list):
+            raise WorkpaperError("invalid_workpaper_case_audit")
+        status = "通过" if result.get("passed") is True else "未通过"
+        detail = f"问题 {len(issues)} 项"
+        if key == "journal_to_trial_balance":
+            detail = f"匹配 {len(items)} 项；{detail}"
+        rows.append((label, status, detail))
+    return rows or [("账务勾稽", "未提供", "当前快照未直接包含账务勾稽明细")]
+
+
+def _structured_reconciliation_rows(
+    case_audit: Mapping[str, object] | None,
+    *,
+    tax_checks: bool,
+) -> list[tuple[object, ...]]:
+    payload = _audit_mapping(case_audit, "structured_reconciliation")
+    if payload is None:
+        label = "申报勾稽" if tax_checks else "财报勾稽"
+        return [(label, "", "未提供")]
+    checks = payload.get("checks", [])
+    if not isinstance(checks, list):
+        raise WorkpaperError("invalid_workpaper_case_audit")
+    rows = []
+    for check in checks:
+        if not isinstance(check, Mapping):
+            raise WorkpaperError("invalid_workpaper_case_audit")
+        is_tax_check = check.get("check") == "tax_fact"
+        if is_tax_check != tax_checks:
+            continue
+        subject = check.get("fact_key") or check.get("document_id") or "案件整体"
+        if subject == "document_set":
+            subject = "案件整体"
+        check_code = _as_text(check.get("check"))
+        status_code = _as_text(check.get("status"))
+        rows.append((
+            _RECONCILIATION_CHECK_ZH.get(check_code, check_code),
+            subject,
+            _RECONCILIATION_STATUS_ZH.get(status_code, status_code),
+        ))
+    if rows:
+        return rows
+    label = "申报勾稽" if tax_checks else "财报勾稽"
+    return [(label, "", "未提供")]
+
+
+def _build_workbook(
+    snapshot: TaxCheckSnapshot,
+    *,
+    source_manifest=None,
+    delivery_revision=None,
+    case_audit: Mapping[str, object] | None = None,
+):
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font
@@ -143,6 +331,10 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
     ]
     if delivery_revision is not None:
         overview_rows.append(("交付修订号", delivery_revision))
+    overview_rows.extend(
+        (f"明确限制：{item.code}", item.message_zh)
+        for item in snapshot.limitations
+    )
     _write_table(first, ("字段", "值"), overview_rows)
     first["A1"].font = Font(color=_HEADER_FONT, bold=True)
     first["B1"].font = Font(color=_HEADER_FONT, bold=True)
@@ -158,7 +350,21 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
                 source_id,
                 _as_text(item.get("sha256"))[:64],
                 _as_text(item.get("media_type") or item.get("extension")),
-                _as_text(item.get("status")),
+                _source_status(item.get("status")),
+            )
+            for source_id, item in sorted(manifest.items())
+        ],
+    )
+
+    _write_table(
+        workbook["抽取与映射"],
+        ("来源编号", "文件名", "解析状态", "映射状态"),
+        [
+            (
+                source_id,
+                _as_text(item.get("filename")),
+                _source_status(item.get("status")),
+                "待确认" if item.get("status") == "present_unparsed" else "已绑定",
             )
             for source_id, item in sorted(manifest.items())
         ],
@@ -166,23 +372,37 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
 
     quality_rows: list[tuple[object, ...]] = []
     for result in snapshot.results:
-        quality_rows.append((result.tax_id, result.status.value, ";".join(result.diagnostics)))
+        quality_rows.append((
+            _tax_label(result.tax_id),
+            _TAX_STATUS_ZH[result.status],
+            ";".join(result.diagnostics),
+        ))
     _write_table(workbook["数据质量"], ("税种编号", "状态", "稳定诊断"), quality_rows)
 
-    for sheet_name, title in (("账务勾稽", "当前快照未直接包含账务勾稽明细"),
-                              ("财报勾稽", "当前快照未直接包含财报勾稽明细"),
-                              ("申报勾稽", "当前快照未直接包含申报勾稽明细")):
-        _write_table(workbook[sheet_name], ("控制范围", "状态", "说明"),
-                     [(sheet_name, "未提供", title)])
+    _write_table(
+        workbook["账务勾稽"],
+        ("检查项目", "状态", "说明"),
+        _accounting_reconciliation_rows(case_audit),
+    )
+    _write_table(
+        workbook["财报勾稽"],
+        ("检查项目", "文档或事实", "状态"),
+        _structured_reconciliation_rows(case_audit, tax_checks=False),
+    )
+    _write_table(
+        workbook["申报勾稽"],
+        ("检查项目", "文档或事实", "状态"),
+        _structured_reconciliation_rows(case_audit, tax_checks=True),
+    )
 
     _write_table(
-        workbook["税务筛查"],
+        workbook["税费筛查"],
         ("税种编号", "状态", "状态说明", "规则包", "规则版本"),
         [
             (
-                result.tax_id,
-                result.status.value,
-                result.status.value,
+                _tax_label(result.tax_id),
+                _TAX_STATUS_ZH[result.status],
+                _TAX_STATUS_ZH[result.status],
                 ",".join(result.rule_pack_ids),
                 ",".join(result.rule_pack_versions),
             )
@@ -196,8 +416,8 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
             continue
         calculation = result.calculation
         calculation_rows.append((
-            result.tax_id,
-            calculation.formula_id,
+            _tax_label(result.tax_id),
+            f"{_FORMULA_LABELS_ZH.get(calculation.formula_id, '参数化计算公式')}（{calculation.formula_id}）",
             calculation.tax_base,
             calculation.deductions,
             calculation.net_base,
@@ -218,9 +438,9 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
             (
                 question.question_id,
                 question.fact_key,
-                ",".join(question.tax_ids),
+                "、".join(_tax_label(tax_id) for tax_id in question.tax_ids),
                 question.question_zh,
-                question.answer_type,
+                _ANSWER_TYPE_ZH.get(question.answer_type, question.answer_type),
                 "是" if question.blocking else "否",
                 ",".join(question.evidence_types),
             )
@@ -243,7 +463,7 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
     for result in snapshot.results:
         for source in result.rule_sources:
             rule_rows.append((
-                result.tax_id,
+                _tax_label(result.tax_id),
                 source.title,
                 source.document_number,
                 source.published_on.isoformat(),
@@ -253,13 +473,27 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
     _write_table(workbook["规则版本"], ("税种编号", "来源标题", "文号", "发布日期", "官方链接", "核验日期"), rule_rows)
 
     _write_table(
+        workbook["报告选取"],
+        ("税种编号", "检查状态", "是否进入报告", "选取说明"),
+        [
+            (
+                _tax_label(result.tax_id),
+                _TAX_STATUS_ZH[result.status],
+                "否" if result.status is TaxStatus.BLOCKED else "是",
+                "数据质量阻断" if result.status is TaxStatus.BLOCKED else "按当前快照选取",
+            )
+            for result in snapshot.results
+        ],
+    )
+
+    _write_table(
         workbook["运行记录"],
         ("事件类型", "发生时间", "涉及税种", "涉及事实键", "确认摘要"),
         [
             (
-                event.event_type,
+                f"{_AUDIT_EVENT_ZH.get(event.event_type, '审计事件')}（{event.event_type}）",
                 event.occurred_at,
-                ",".join(event.tax_ids),
+                "、".join(_tax_label(tax_id) for tax_id in event.tax_ids),
                 ",".join(event.fact_keys),
                 event.confirmation_digest or "",
             )
@@ -267,10 +501,6 @@ def _build_workbook(snapshot: TaxCheckSnapshot, *, source_manifest=None, deliver
         ],
     )
 
-    for sheet in workbook.worksheets:
-        for row in sheet.iter_rows():
-            for cell in row:
-                cell.alignment = Alignment(vertical="top", wrap_text=True)
     return workbook
 
 
@@ -289,6 +519,7 @@ def write_tax_health_workpaper(
     *,
     source_manifest: Mapping[str, object] | None = None,
     delivery_revision: int | None = None,
+    case_audit: Mapping[str, object] | None = None,
 ) -> Path:
     """Write a deterministic, redacted Excel workpaper atomically."""
     snapshot = _require_snapshot(snapshot)
@@ -298,6 +529,7 @@ def write_tax_health_workpaper(
         snapshot,
         source_manifest=source_manifest,
         delivery_revision=delivery_revision,
+        case_audit=case_audit,
     )
     temporary: Path | None = None
     try:

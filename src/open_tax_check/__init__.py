@@ -1,6 +1,6 @@
 """OpenTaxCheck deterministic accounting and tax-health-check core."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 from .document_extraction import (
     DOCUMENT_EXTRACTION_SCHEMA_VERSION,
@@ -22,6 +22,22 @@ from .agent_orchestration import (
     confirmation_from_task,
     evidence_bundle_delivery_payload,
     task_payload,
+)
+from .external_providers import (
+    CloudOcrProvider,
+    CloudOcrReplayTransport,
+    CloudOcrRequest,
+    ExternalCompanyObservation,
+    FengniaoProvider,
+    FengniaoReplayTransport,
+    FengniaoQuery,
+)
+from .host_replays import (
+    HOST_NAMES,
+    HostReplayResult,
+    install_and_replay_all,
+    validate_delivery_payload,
+    validate_task_payload,
 )
 
 from .case_orchestration import (
@@ -65,6 +81,7 @@ from .tax_calculation import TaxCalculationRequest, TaxCalculationResult, calcul
 from .tax_models import (
     CalculationRecord,
     CalculationSpec,
+    Limitation,
     StatutoryBracketEntry,
     StatutoryBracketTable,
     StatutoryRateRange,
@@ -95,6 +112,8 @@ from .structured_document_providers import (
     StructuredDocumentSource,
     import_financial_statement,
     import_tax_return,
+    persist_financial_statement,
+    persist_tax_return,
 )
 from .template_documents import (
     TemplateIssue,

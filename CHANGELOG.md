@@ -10,12 +10,16 @@
 - 公开的完全虚构 Excel/CSV 端到端示例；Excel 在运行时生成，不提交二进制文件。
 - 财务报表和纳税申报表严格合同、常见模板解析、跨文档勾稽，以及可恢复的自助案件状态、中文补件任务和客户确认增量重跑。
 - `case-delivery` 统一发布 `tax-delivery/v1` 修订快照，生成中文报告、DOCX/PDF、Excel 工作底稿、机器快照和可验证证据包。
+- 安全 ZIP 输入、Fengniao/云 OCR provider 合同及离线回放、Codex/Hermes/WorkBuddy/扣子/Qoder/Claude Code/OpenClaw 七宿主合同回放。
+- 一条命令运行的 2023–2026 完整虚构案例，覆盖平衡账套、三张财报、四类申报、PNG/PDF、客户冲突确认和统一交付。
 
 ### 限制
 
-- 勾稽通过不表示不存在税务风险；未经结构化导入的财务报表和纳税申报表仍可处于 `present_unparsed`。安全压缩包、联网 provider、完整虚构案件和 v1 发布门禁仍未完成。
+- 勾稽通过不表示不存在税务风险；未经结构化导入的财务报表和纳税申报表仍可处于 `present_unparsed`。
+- 真实联网 provider 调用仍需由客户宿主使用自己的凭证验证；离线回放不等于真实第三方服务通过。
+- PDF 渲染器不可用时交付为 `partial/pdf_renderer_unavailable`；跨平台 CI、GitHub tag 和 Release 只有在远端验证和明确授权后才能声明完成。
 
-下一计划版本为 `0.1.0`（未发布）。除非明确授权创建 GitHub tag，否则本仓库保持未发布状态（remains unpublished until creation of a GitHub tag is explicitly authorized.）。
+下一计划版本为 `1.0.0`（未发布）。除非明确授权创建 GitHub tag，否则本仓库保持未发布状态（remains unpublished until creation of a GitHub tag is explicitly authorized.）。
 
 ### 新增
 
@@ -42,7 +46,7 @@
 
 - 现有 CSV `run` 流程、字段映射、数据质量门槛、确定性规则、语义候选和内部 Markdown 草稿保持兼容。
 
-### 尚未实现
+### 尚未完成的外部验证
 
-- 安全压缩包输入、联网企业数据与 provider 授权回放仍未实现。
-- 七宿主安装/发现/任务/交付一致性回放、完整虚构案件和公开 v1 发布门禁仍未完成。
+- 使用真实凭证的联网企业信息和云 OCR 调用。
+- Windows、macOS、Linux 的 GitHub Actions 全矩阵，以及远端 `main`、tag 和 GitHub Release 一致性验证。

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from zipfile import ZipFile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,6 +116,156 @@ class FictionalExampleTests(unittest.TestCase):
         self.assertEqual(excel_result.status, "needs_professional_review")
         self.assertTrue(excel_result.trial_balance_passed)
         self.assertTrue(excel_result.journal_to_trial_balance_passed)
+
+    def test_complete_fictional_case_uses_only_the_generated_excel_journal(self):
+        from scripts.run_fictional_example import run_fictional_case
+
+        result = run_fictional_case(format="excel", complete=True)
+
+        self.assertEqual(result.status, "completed_with_limitations")
+        self.assertEqual(result.rule_amounts, {"CIT-BE-001": "15000.00"})
+        self.assertTrue(result.trial_balance_passed)
+        self.assertTrue(result.journal_to_trial_balance_passed)
+
+    def test_complete_cli_builds_the_documented_case_and_delivery(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "complete-case"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/run_fictional_example.py"),
+                    "--output",
+                    str(case_dir),
+                    "--complete",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse((case_dir / "input/journal.csv").exists())
+            for filename in (
+                "journal.xlsx",
+                "trial-balance.xlsx",
+                "fictional-tax-note.png",
+                "fictional-digital.pdf",
+                "balance-sheet.txt",
+                "income-statement.txt",
+                "cash-flow-statement.txt",
+                "vat-return.txt",
+                "surcharge-return.txt",
+                "cit-return.txt",
+                "iit-return.txt",
+            ):
+                self.assertTrue((case_dir / "input" / filename).is_file(), filename)
+
+            structured = case_dir / "work/structured-documents"
+            self.assertEqual(
+                len(list(structured.glob("*.fs.json"))),
+                3,
+            )
+            self.assertEqual(len(list(structured.glob("*.tr.json"))), 4)
+            self.assertTrue((case_dir / "work/structured-document-index.json").is_file())
+            structured_index = json.loads(
+                (case_dir / "work/structured-document-index.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                len({item["source_id"] for item in structured_index["documents"]}),
+                7,
+            )
+
+            private_snapshot = json.loads(
+                (case_dir / "work/tax-health-snapshot.private.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            event_types = {
+                event["event_type"] for event in private_snapshot["audit_events"]
+            }
+            self.assertIn("confirmation_conflict", event_types)
+            self.assertIn("confirmation_reaffirmed", event_types)
+            self.assertEqual(
+                private_snapshot["limitations"][0]["code"],
+                "special_tax_path_not_covered",
+            )
+            facts = {
+                item["key"]: item["value"]
+                for item in private_snapshot["request"]["facts"]
+            }
+            self.assertIs(facts["activity.has_vat_taxable_transaction"], True)
+            self.assertIs(facts["entity.has_enterprise_income_tax_scope"], True)
+            self.assertEqual(facts["vat.taxable_sales"], "1000000.00")
+            calculated = {
+                item["tax_id"]: item["calculation"]
+                for item in private_snapshot["results"]
+                if item["calculation"] is not None
+            }
+            self.assertIn("vat", calculated)
+            self.assertIn("enterprise_income_tax", calculated)
+            self.assertGreater(float(calculated["vat"]["amount"]), 0)
+            self.assertGreater(
+                float(calculated["enterprise_income_tax"]["amount"]), 0
+            )
+            tasks = json.loads(
+                (case_dir / "work/customer-tasks.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(tasks["status"], "completed_with_limitations")
+            self.assertEqual(tasks["tasks"], [])
+            self.assertFalse((case_dir / "work/limitations.json").exists())
+
+            pointer = json.loads(
+                (case_dir / "work/delivery.json").read_text(encoding="utf-8")
+            )
+            manifest_path = case_dir / pointer["manifest_path"]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            artifact_kinds = {item["kind"] for item in manifest["artifacts"]}
+            self.assertTrue(
+                {
+                    "markdown_report",
+                    "docx_report",
+                    "workpaper",
+                    "machine_snapshot",
+                    "evidence_bundle",
+                }.issubset(artifact_kinds)
+            )
+            revision_dir = manifest_path.parent
+            for item in manifest["artifacts"]:
+                self.assertTrue((revision_dir / item["relative_path"]).is_file())
+            with ZipFile(revision_dir / "evidence-bundle.zip") as archive:
+                self.assertIsNone(archive.testzip())
+                self.assertIn(
+                    "case-audit/structured-document-index.json", archive.namelist()
+                )
+                bundle_manifest = json.loads(archive.read("bundle-manifest.json"))
+                self.assertEqual(
+                    bundle_manifest["limitations"], private_snapshot["limitations"]
+                )
+
+            machine_snapshot = json.loads(
+                (revision_dir / "tax-health-snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(machine_snapshot["limitations"], private_snapshot["limitations"])
+            report = (revision_dir / "report.md").read_text(encoding="utf-8")
+            self.assertIn(private_snapshot["limitations"][0]["message_zh"], report)
+            from openpyxl import load_workbook
+            workbook = load_workbook(revision_dir / "税务健康检查工作底稿.xlsx", read_only=True)
+            try:
+                overview_values = {
+                    cell.value
+                    for row in workbook["项目概览"].iter_rows()
+                    for cell in row
+                }
+                self.assertIn(private_snapshot["limitations"][0]["message_zh"], overview_values)
+            finally:
+                workbook.close()
+
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["delivery_status"], manifest["status"])
+            self.assertEqual(payload["delivery_revision"], manifest["revision"])
+            self.assertEqual(payload["status"], "completed_with_limitations")
 
     def test_example_generates_and_runs_fictional_xlsx_with_confirmed_mapping(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -56,14 +56,12 @@ from .source_paths import resolve_safe_source
 from .structured_document_providers import (
     StructuredDocumentImportError,
     StructuredDocumentSource,
-    import_financial_statement,
-    import_tax_return,
+    persist_financial_statement,
+    persist_tax_return,
 )
 from .structured_documents import (
     financial_statement_from_dict,
     tax_return_from_dict,
-    financial_statement_to_dict,
-    tax_return_to_dict,
 )
 
 
@@ -529,20 +527,13 @@ def main() -> int:
             print(json.dumps({"status": "failed", "error_code": "invalid_kind"}, ensure_ascii=False))
             return 4
         try:
-            source = _structured_case_source(args.case, args.source)
+            _structured_case_source(args.case, args.source)
             payload = _read_structured_json(args.input)
-            value = (
-                import_financial_statement(source, payload)
+            target = (
+                persist_financial_statement(args.case, args.source, payload)
                 if args.kind == "financial-statement"
-                else import_tax_return(source, payload)
+                else persist_tax_return(args.case, args.source, payload)
             )
-            serialized = (
-                financial_statement_to_dict(value)
-                if args.kind == "financial-statement"
-                else tax_return_to_dict(value)
-            )
-            target = source.input_root.parent / "work" / "structured-documents" / f"{args.source}.{args.kind}.json"
-            _write_json_atomic(target, serialized)
         except StructuredDocumentImportError as error:
             print(json.dumps({"status": "failed", "error_code": error.code}, ensure_ascii=False))
             return 4

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from dataclasses import replace
 from enum import StrEnum
 import json
 from pathlib import Path
@@ -26,6 +27,7 @@ from .tax_models import (
     DateRange,
     FactGap,
     FactState,
+    Limitation,
     PromptChoice,
     Question,
     RuleSource,
@@ -257,7 +259,8 @@ def _snapshot_from_dict(payload: object) -> TaxCheckSnapshot:
         raw_questions = payload.get("questions", ())
         raw_history = payload.get("question_history", ())
         raw_results = payload.get("results", ())
-        for collection in (raw_events, raw_questions, raw_history, raw_results):
+        raw_limitations = payload.get("limitations", ())
+        for collection in (raw_events, raw_questions, raw_history, raw_results, raw_limitations):
             if not isinstance(collection, list | tuple) or any(
                 not isinstance(item, Mapping) for item in collection
             ):
@@ -282,6 +285,10 @@ def _snapshot_from_dict(payload: object) -> TaxCheckSnapshot:
             revision=payload["revision"],
             schema_version=payload.get("schema_version", "1.0.0"),
             question_history=history,
+            limitations=tuple(
+                Limitation(item["code"], item["message_zh"])
+                for item in raw_limitations
+            ),
         )
     except (KeyError, TypeError, ValueError) as error:
         if isinstance(error, ValueError) and str(error) == "invalid_case_snapshot":
@@ -303,7 +310,7 @@ def _derive_status(snapshot: TaxCheckSnapshot) -> CaseStatus:
     statuses = {result.status for result in snapshot.results}
     if TaxStatus.BLOCKED in statuses:
         return CaseStatus.BLOCKED_DATA_QUALITY
-    if statuses & {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY}:
+    if snapshot.limitations or statuses & {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY}:
         return CaseStatus.COMPLETED_WITH_LIMITATIONS
     return CaseStatus.COMPLETED
 
@@ -398,6 +405,7 @@ def run_case_self_check(
     occurred_at: str | None = None,
     packs=None,
     evaluators: Mapping[str, object] | None = None,
+    limitations: tuple[Limitation, ...] = (),
 ) -> dict[str, object]:
     """Run the deterministic check and atomically publish its resumable view."""
     root = _case_dir(case_dir)
@@ -414,7 +422,7 @@ def run_case_self_check(
     private_path = root / "work" / PRIVATE_SNAPSHOT_NAME
     if private_path.is_file():
         existing = load_case_snapshot(root)
-        if existing.request == request:
+        if existing.request == request and existing.limitations == tuple(limitations):
             return case_status_payload(root)
         raise ValueError("case_snapshot_exists")
     snapshot = run_tax_health_check(
@@ -423,6 +431,7 @@ def run_case_self_check(
         evaluators=evaluators,
         occurred_at=occurred_at,
     )
+    snapshot = replace(snapshot, limitations=tuple(limitations))
     return _persist_case_view(root, snapshot)
 
 

@@ -1,6 +1,6 @@
 # 文档抽取合同
 
-当前版本提供跨宿主交换的 `document-extraction/v1.1` JSON 合同（兼容导入 `v1`），以及 `off`、`host` 和可选的本地 `local-paddleocr` provider。PDF/PNG/JPEG 的本地离线提取已实现；联网 provider、复杂版式理解和联网企业数据尚未实现。
+当前版本提供跨宿主交换的 `document-extraction/v1.1` JSON 合同（兼容导入 `v1`），以及 `off`、`host`、`cloud` 和可选的本地 `local-paddleocr` provider。PDF/PNG/JPEG 的本地离线提取已实现；云 OCR 具备逐页授权、来源重新绑定和正式离线回放；真实联网传输、复杂版式理解和联网企业数据仍需宿主环境单独验证。
 
 ## 状态
 
@@ -16,7 +16,7 @@
 
 - `off`：不读取文档内容，明确返回 `not_performed`。
 - `host`：导入宿主 Agent 已生成的结果，并重新绑定本地来源。
-- `cloud`：仅定义授权和披露合同；当前没有网络调用实现。
+- `cloud`：仅通过显式授权的页级 payload 调用 provider 合同；仓库不内置真实网络 SDK，正式回放使用 `tests/fixtures/provider-replays/cloud-ocr-page-2.json`。
 
 ## 授权
 
@@ -55,6 +55,16 @@ opentaxcheck import-structured-document --case CASE_DIR --source SOURCE_ID --kin
 ## 结果结构
 
 结果包含文档元数据、provider 与授权信息、页码与旋转、文本块（四点坐标和 `[0,1]` 置信度）、表格单元格、机器可读问题及案件来源引用。合同版本独立于现有 `SCHEMA_VERSION` 和税务规则包版本。
+
+## Provider 离线回放
+
+Fengniao 的 discover、模糊搜索和实体详情流程，以及云 OCR 的页级授权请求，可以在无网络环境中用固定虚构 fixture 重放：
+
+```text
+python scripts/replay_external_providers.py
+```
+
+回放只验证合同、调用顺序、来源绑定和页摘要，不证明真实第三方服务可用，也不接受或保存客户凭证。
 ## Local OCR provider
 
 `local-paddleocr` is an optional, offline provider for bounded PDF, PNG, and JPEG extraction. Install it with `pip install -e ".[ocr]"`, prepare a verified local model directory with `opentaxcheck prepare-ocr --model-dir PATH`, then run `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`. Extraction never downloads models; missing dependencies or an invalid manifest produce `not_performed`. The opt-in smoke gate is controlled by `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` and is explicitly skipped otherwise. The dedicated CI smoke may download PaddleOCR official mobile models before processing the fictional fixture; that download is isolated from case extraction and an opted-in runtime failure is reported as failed, never skipped.

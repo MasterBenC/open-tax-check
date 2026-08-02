@@ -1,0 +1,49 @@
+{
+  "schema_version": "provider-replay/v1",
+  "provider": "fengniao",
+  "provider_version": "replay-v1",
+  "query": {
+    "search_term": "虚构科技",
+    "dimension_zh": "企业基本信息",
+    "selected_legal_name": "虚构科技有限公司"
+  },
+  "discover_intent": "企业基本信息",
+  "discovery": {
+    "tools": [
+      {
+        "name": "biz_basic_info"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "tool": "biz_fuzzy_search",
+      "params": {
+        "key": "虚构科技"
+      },
+      "response": {
+        "code": 20000,
+        "data": [
+          {
+            "entid": "fixture-entid",
+            "entname": "虚构科技有限公司"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "biz_basic_info",
+      "params": {
+        "entid": "fixture-entid"
+      },
+      "response": {
+        "code": 20000,
+        "data": {
+          "entid": "fixture-entid",
+          "entname": "虚构科技有限公司",
+          "credit_code": "91310000TEST000001"
+        }
+      }
+    }
+  ]
+}

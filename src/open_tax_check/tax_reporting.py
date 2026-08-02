@@ -85,6 +85,7 @@ def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
             }
             for event in snapshot.audit_events
         ],
+        "limitations": [to_dict(item) for item in snapshot.limitations],
     }
 
 
@@ -207,6 +208,14 @@ def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
     else:
         lines.append("- 当前快照没有可用规则来源。")
 
+    lines.extend(("", "## 明确限制"))
+    if snapshot.limitations:
+        lines.extend(
+            f"- {item.message_zh}（{item.code}）"
+            for item in snapshot.limitations
+        )
+    else:
+        lines.append("- 当前快照没有另行登记的明确限制。")
     lines.extend(("", "## 局限性与声明"))
     lines.extend(f"- {line}" for line in _FIXED_DISCLAIMER)
     return "\n".join(lines) + "\n"

@@ -24,6 +24,8 @@ PUBLIC_RELEASE_LIMIT_BYTES = 5 * 1024 * 1024
 DISTRIBUTION_FILE_LIMIT_BYTES = 1 * 1024 * 1024
 REQUIRED_WHEEL_MEMBERS = {
     "open_tax_check/evidence_bundle.py",
+    "open_tax_check/external_providers.py",
+    "open_tax_check/host_replays.py",
     "open_tax_check/structured_documents.py",
     "open_tax_check/structured_document_providers.py",
     "open_tax_check/source_paths.py",
@@ -31,11 +33,19 @@ REQUIRED_WHEEL_MEMBERS = {
 }
 REQUIRED_SDIST_MEMBER_SUFFIXES = {
     "src/open_tax_check/evidence_bundle.py",
+    "src/open_tax_check/external_providers.py",
+    "src/open_tax_check/host_replays.py",
     "src/open_tax_check/structured_documents.py",
     "src/open_tax_check/structured_document_providers.py",
     "src/open_tax_check/source_paths.py",
     "src/open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
     "skills/open-tax-check/references/host-integrations.md",
+    "scripts/replay_external_providers.py",
+    "scripts/replay_host_integrations.py",
+    "scripts/validate_installed_wheel.py",
+    "tests/fixtures/host-replays/common-contract.json",
+    "tests/fixtures/provider-replays/cloud-ocr-page-2.json",
+    "tests/fixtures/provider-replays/fengniao-basic-info.json",
     "tests/fixtures/structured_documents/financial-statement.json",
     "tests/fixtures/structured_documents/tax-return.json",
 }
@@ -327,6 +337,49 @@ def api_key_block_scalar_position(content: str) -> int | None:
     return None
 
 
+def package_version(root: Path) -> str | None:
+    """Read the release version from the package's single source of truth."""
+
+    try:
+        content = (root / "src/open_tax_check/__init__.py").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(
+        r'^__version__\s*=\s*["\'](?P<version>\d+\.\d+\.\d+)["\']\s*$',
+        content,
+        re.MULTILINE,
+    )
+    return match.group("version") if match else None
+
+
+def validate_distribution_versions(
+    root: Path,
+    artifacts: tuple[Path, ...],
+    environment: dict[str, str] | os._Environ[str],
+) -> str | None:
+    """Bind wheel, sdist, and an optional GitHub release tag to one version."""
+
+    version = package_version(root)
+    if version is None:
+        return "release_version_invalid:package_version_missing"
+    expected_wheel_prefix = f"open_tax_check-{version}-"
+    expected_sdist = f"open_tax_check-{version}.tar.gz"
+    for artifact in artifacts:
+        name = artifact.name
+        if name.casefold().endswith(".whl"):
+            matches = name.startswith(expected_wheel_prefix)
+        elif name.casefold().endswith(".tar.gz"):
+            matches = name == expected_sdist
+        else:
+            continue
+        if not matches:
+            return "release_version_invalid:artifact_version_mismatch"
+    if environment.get("GITHUB_REF_TYPE") == "tag":
+        if environment.get("GITHUB_REF_NAME") != f"v{version}":
+            return "release_version_invalid:tag_version_mismatch"
+    return None
+
+
 def sensitive_category(content: str) -> str | None:
     candidates = []
     for pattern, category in (
@@ -466,8 +519,11 @@ def expected_package_data_members(root: Path, *, sdist: bool) -> tuple[str, ...]
     package_root = root / "src" / "open_tax_check" / "tax_packs"
     if not package_root.is_dir():
         return ()
+    version = package_version(root)
+    if version is None:
+        return ()
     prefix = (
-        "open_tax_check-0.1.0/src/open_tax_check/tax_packs/"
+        f"open_tax_check-{version}/src/open_tax_check/tax_packs/"
         if sdist
         else "open_tax_check/tax_packs/"
     )
@@ -554,6 +610,10 @@ def main() -> int:
                 f"and one sdist (found wheels={len(wheels)}, "
                 f"sdists={len(sdists)})"
             )
+            return 1
+        version_error = validate_distribution_versions(ROOT, artifacts, os.environ)
+        if version_error is not None:
+            print(version_error)
             return 1
         for artifact, required_members, sdist in (
             (wheels[0], REQUIRED_WHEEL_MEMBERS, False),

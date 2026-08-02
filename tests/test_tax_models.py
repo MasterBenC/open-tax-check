@@ -13,6 +13,7 @@ from open_tax_check.tax_models import (
     EvaluationOutcome,
     FactRequirement,
     FactState,
+    Limitation,
     PackMaturity,
     PromptChoice,
     Question,
@@ -33,6 +34,39 @@ from open_tax_check.tax_models import (
 
 
 class TaxModelTests(unittest.TestCase):
+    def test_limitations_have_per_message_collection_and_total_budgets(self):
+        with self.assertRaisesRegex(ValueError, "^invalid_limitation$"):
+            Limitation("oversized", "限" * 4001)
+
+        request = TaxCheckRequest(
+            DateRange(date(2026, 1, 1), date(2026, 1, 31)), "CN"
+        )
+        with self.assertRaisesRegex(ValueError, "^invalid_limitations$"):
+            TaxCheckSnapshot(
+                request,
+                (),
+                (),
+                (),
+                0,
+                limitations=tuple(
+                    Limitation(f"limit-{index}", "明确限制")
+                    for index in range(101)
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "^invalid_limitations$"):
+            TaxCheckSnapshot(
+                request,
+                (),
+                (),
+                (),
+                0,
+                limitations=tuple(
+                    Limitation(f"limit-{index}", "限" * 4000)
+                    for index in range(20)
+                ),
+            )
+
     def test_tax_result_keeps_pack_versions_parallel_to_pack_ids(self):
         result = TaxResult(
             "vat",

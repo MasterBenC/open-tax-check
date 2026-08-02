@@ -27,6 +27,7 @@ def make_case(tmp_path):
         "filename": source_path.name,
         "media_type": "application/pdf",
         "sha256": digest,
+        "status": "present_unparsed",
     }]}), encoding="utf-8")
     return case
 
@@ -99,12 +100,16 @@ def test_import_structured_document_rebinds_and_writes_case_output(tmp_path, mon
         "--kind", "financial-statement", "--input", input_path,
     ) == 0
     output = json.loads(capsys.readouterr().out)
-    target = case / "work" / "structured-documents" / "trusted-source.financial-statement.json"
+    target = Path(output["output_path"])
     assert output["status"] == "completed"
     assert output["kind"] == "financial-statement"
     assert output["source_id"] == "trusted-source"
     assert Path(output["output_path"]) == target
     assert json.loads(target.read_text(encoding="utf-8"))["source_id"] == "trusted-source"
+    receipt = json.loads(
+        (case / "work/structured-document-index.json").read_text(encoding="utf-8")
+    )
+    assert receipt["documents"][0]["relative_path"] == target.name
 
 
 def test_import_structured_document_preserves_existing_output_on_write_failure(tmp_path, monkeypatch, capsys):

@@ -1,3 +1,9 @@
 include skills/open-tax-check/references/host-integrations.md
+include scripts/replay_external_providers.py
+include scripts/replay_host_integrations.py
+include scripts/validate_installed_wheel.py
+include tests/fixtures/host-replays/common-contract.json
+include tests/fixtures/provider-replays/cloud-ocr-page-2.json
+include tests/fixtures/provider-replays/fengniao-basic-info.json
 include tests/fixtures/structured_documents/financial-statement.json
 include tests/fixtures/structured_documents/tax-return.json

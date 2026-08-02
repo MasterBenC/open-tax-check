@@ -46,6 +46,16 @@ Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 必须原
 
 未经客户明确授权，任何宿主都不得上传包含原始证据文件的证据包。上传前还必须披露服务商、发送字段、保存期限和风险。证据包仅用于交付审计，不是独立完整重跑输入，也不是涉税鉴证或税务保证意见。
 
+## 本地合同回放
+
+维护者可以在无网络和无客户资料的环境中验证七宿主共同字段：
+
+```text
+python scripts/replay_host_integrations.py
+```
+
+该命令从 `tests/fixtures/host-replays/common-contract.json` 把同一 Skill 复制到七种不同的目标布局（`.codex/skills/`、`.hermes/skills/`、`.workbuddy/skills/`、`.coze/skills/`、`.qoder/skills/`、`.claude/skills/`、`.openclaw/skills/`），校验各自的 `SKILL.md` 发现标记，再重放中文任务字段和四字段交付 envelope。状态使用 `layout_validated`、`marker_validated` 和 `runtime_validation=pending`；它是 host-neutral 离线合同及目标布局校验，不调用真实宿主 CLI/provider，不表示安装发现或真实宿主运行已经完成。
+
 ## 能力矩阵
 
 | 宿主 | 首选路线 | 说明 |

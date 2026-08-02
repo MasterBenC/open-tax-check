@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import open_tax_check.pipeline as pipeline
 from open_tax_check.case import init_case
@@ -149,6 +150,54 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(
                 (case_dir / "runs" / "run-0001" / "output" / "findings.json").is_file()
             )
+
+    def test_run_accepts_csv_journal_from_safe_zip_input(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            case_dir = root / "case-archive"
+            init_case(case_dir, "绀轰緥浼佷笟", "2025-01-01", "2025-12-31")
+            source = root / "journal-source.csv"
+            self._write_balanced_journal(source)
+            with ZipFile(case_dir / "input" / "customer-materials.zip", "w", compression=ZIP_DEFLATED) as archive:
+                archive.write(source, "nested/journal.csv")
+
+            code, response = pipeline.run_case(case_dir, "off")
+
+            normalized_path = case_dir / "work" / "normalized_journal.jsonl"
+            normalized = [
+                json.loads(line)
+                for line in normalized_path.read_text(encoding="utf-8").splitlines()
+            ]
+            manifest = json.loads(
+                (case_dir / "work" / "input_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(response["status"], "needs_professional_review")
+        self.assertTrue(normalized)
+        self.assertEqual(normalized[0]["source_file"], "journal.csv")
+        self.assertTrue(
+            any(
+                item["filename"].startswith(".opentaxcheck-archive-")
+                and item["filename"].endswith("/nested/journal.csv")
+                for item in manifest["sources"]
+            )
+        )
+
+    def test_run_empty_zip_does_not_report_partial_scope_ready(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "case-empty-archive"
+            init_case(case_dir, "示例企业", "2025-01-01", "2025-12-31")
+            with ZipFile(case_dir / "input" / "empty.zip", "w"):
+                pass
+
+            code, response = pipeline.run_case(case_dir, "off")
+
+            self.assertNotEqual(code, 0)
+            self.assertEqual(response["status"], "needs_intake_review")
+            self.assertEqual(response["next_action"], "provide_supported_spreadsheet_input")
 
     def test_csv_changed_after_manifest_is_rejected_before_parsing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -954,7 +1003,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(first_manifest.read_bytes(), first_manifest_before)
             self.assertEqual(input_file.read_bytes(), input_before_second_run)
             self.assertTrue((case_dir / "runs" / "run-0002" / "manifest.json").is_file())
-            backups = list(case_dir.glob(".opentaxcheck-state-backup-*.json"))
+            backups = list(case_dir.glob(".otcx-*.json"))
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_bytes(), state_before)
 

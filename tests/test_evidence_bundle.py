@@ -384,8 +384,8 @@ def test_staged_source_tampering_fails_without_replacing_destination(
         )
 
     assert destination.read_bytes() == b"previous-valid-bundle"
-    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
-    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+    assert not list(tmp_path.glob(".otce-*.tmp"))
+    assert not list(tmp_path.glob(".otcz-*"))
 
 
 @pytest.mark.parametrize(
@@ -511,8 +511,10 @@ def test_manifest_nested_payloads_are_allowlisted_and_zip_hash_stays_external(tm
         "rule_sources",
         "artifacts",
         "audit_events",
+        "limitations",
         "disclaimer_zh",
     }
+    assert manifest["limitations"] == []
     assert set(manifest["period"]) == {"start", "end"}
     assert all(
         set(item)
@@ -597,8 +599,8 @@ def test_bundle_write_failure_preserves_existing_valid_destination(
         )
 
     assert destination.read_bytes() == b"previous-valid-bundle"
-    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
-    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+    assert not list(tmp_path.glob(".otce-*.tmp"))
+    assert not list(tmp_path.glob(".otcz-*"))
 
 
 def test_unexpected_write_exception_preserves_destination_and_cleans_temp(
@@ -621,8 +623,8 @@ def test_unexpected_write_exception_preserves_destination_and_cleans_temp(
         )
 
     assert destination.read_bytes() == b"previous-valid-bundle"
-    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
-    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+    assert not list(tmp_path.glob(".otce-*.tmp"))
+    assert not list(tmp_path.glob(".otcz-*"))
 
 
 def test_zip_hash_failure_preserves_destination_and_cleans_temp(
@@ -638,7 +640,7 @@ def test_zip_hash_failure_preserves_destination_and_cleans_temp(
     original_sha256_file = evidence_bundle._sha256_file
 
     def fail_for_zip_temporary(path):
-        if path.name.startswith(".bundle.zip."):
+        if path.name.startswith(".otce-"):
             raise RuntimeError("hash failed")
         return original_sha256_file(path)
 
@@ -656,8 +658,8 @@ def test_zip_hash_failure_preserves_destination_and_cleans_temp(
         )
 
     assert destination.read_bytes() == b"previous-valid-bundle"
-    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
-    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+    assert not list(tmp_path.glob(".otce-*.tmp"))
+    assert not list(tmp_path.glob(".otcz-*"))
 
 
 def test_bundle_replace_failure_preserves_destination_and_cleans_work_files(
@@ -687,8 +689,8 @@ def test_bundle_replace_failure_preserves_destination_and_cleans_work_files(
         )
 
     assert destination.read_bytes() == b"previous-valid-bundle"
-    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
-    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+    assert not list(tmp_path.glob(".otce-*.tmp"))
+    assert not list(tmp_path.glob(".otcz-*"))
 
 
 def test_fdopen_failure_closes_descriptor_preserves_destination_and_cleans_temp(
@@ -717,8 +719,8 @@ def test_fdopen_failure_closes_descriptor_preserves_destination_and_cleans_temp(
     with pytest.raises(OSError):
         os.fstat(captured_descriptors[0])
     assert destination.read_bytes() == b"previous-valid-bundle"
-    assert not list(tmp_path.glob(".bundle.zip.*.tmp"))
-    assert not list(tmp_path.glob(".bundle.zip.stage.*"))
+    assert not list(tmp_path.glob(".otce-*.tmp"))
+    assert not list(tmp_path.glob(".otcz-*"))
 
 
 def test_verify_manifest_hashes_every_file_and_enforces_aggregate_limit(tmp_path, monkeypatch):

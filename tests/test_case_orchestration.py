@@ -113,6 +113,35 @@ class CaseOrchestrationTests(unittest.TestCase):
       self.assertTrue(all(item["tax_ids"] for item in tasks["tasks"]))
       self.assertEqual(load_case_snapshot(case_dir).revision, 1)
 
+  def test_explicit_limitations_are_part_of_the_single_persisted_snapshot_contract(self):
+    from open_tax_check import tax_models
+
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      limitation = tax_models.Limitation(
+        "special_tax_path_not_covered",
+        "零税率、免税及不动产特殊增值税路径未纳入本次确定性计算。",
+      )
+
+      run_case_self_check(
+        case_dir,
+        _request(),
+        occurred_at=OCCURRED_AT,
+        limitations=(limitation,),
+      )
+
+      private = json.loads(
+        (case_dir / "work/tax-health-snapshot.private.json").read_text(encoding="utf-8")
+      )
+      machine = json.loads(
+        (case_dir / "work/tax-health-snapshot.json").read_text(encoding="utf-8")
+      )
+      report = (case_dir / "output/税务健康检查报告.md").read_text(encoding="utf-8")
+      self.assertEqual(private["limitations"], machine["limitations"])
+      self.assertEqual(load_case_snapshot(case_dir).limitations, (limitation,))
+      self.assertIn(limitation.message_zh, report)
+
   def test_confirmation_updates_case_snapshot_revision_and_keeps_unrelated_results(self):
     with __import__("tempfile").TemporaryDirectory() as temp_dir:
       case_dir = __import__("pathlib").Path(temp_dir) / "case"

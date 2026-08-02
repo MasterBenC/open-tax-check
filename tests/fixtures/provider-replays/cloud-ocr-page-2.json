@@ -1,0 +1,52 @@
+{
+  "schema_version": "provider-replay/v1",
+  "provider": "cloud",
+  "provider_version": "recorded-v1",
+  "expected_request": {
+    "source_id": "src-1",
+    "media_type": "application/pdf",
+    "transfer_scope": "rendered_pages",
+    "page_numbers": [
+      2
+    ],
+    "payload_sha256": {
+      "2": "394a8cbe897f1d6164932d1d400748eb5bc28af97c7b94486bfff1b54fc8b8c0"
+    }
+  },
+  "response": {
+    "schema_version": "document-extraction/v1.1",
+    "document_id": "cloud-doc-1",
+    "source_id": "forged-source",
+    "filename": "forged.pdf",
+    "media_type": "application/pdf",
+    "provider": "cloud",
+    "provider_version": "recorded-v1",
+    "executed_at": "2026-07-31T10:01:00+08:00",
+    "authorization": {
+      "provider": "cloud",
+      "provider_version": "recorded-v1",
+      "transfer_scope": "rendered_pages",
+      "subject": "customer-owner",
+      "authorized_at": "2026-07-31T10:00:00+08:00",
+      "scope": "source:src-1;pages:2",
+      "cache_retention": "none",
+      "revoked": false
+    },
+    "status": "completed",
+    "pages": [
+      {
+        "page_number": 2,
+        "width": 100,
+        "height": 100,
+        "unit": "pt",
+        "rotation": 0
+      }
+    ],
+    "blocks": [],
+    "tables": [],
+    "issues": [],
+    "source_refs": [
+      "forged-source"
+    ]
+  }
+}
