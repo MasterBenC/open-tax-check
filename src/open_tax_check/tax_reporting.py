@@ -14,7 +14,7 @@ import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .schemas import to_dict
-from .report_view import effective_limitations
+from .report_view import ReportView, build_report_view, effective_limitations
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
 
@@ -166,7 +166,82 @@ def _question_lines(question: Question) -> list[str]:
     return lines
 
 
-def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
+def render_report_view(view: ReportView) -> str:
+    """Render the bounded owner report followed by its compact appendix."""
+
+    summary = view.executive_summary
+    lines = [
+        "# 税务健康检查报告",
+        "",
+        view.report_status_zh,
+        "",
+        "## 管理层摘要",
+        f"- 当前状态：{summary.status_zh}",
+        f"- 重点核实事项：{summary.issue_count} 项",
+        f"- 待补资料事项：{summary.material_gap_count} 项",
+        f"- 待核对试算：{summary.trial_amount_count} 项",
+        f"- {summary.amount_disclaimer_zh}",
+        "",
+        "## 老板先看这些事",
+    ]
+    if view.issues:
+        for issue in view.issues:
+            lines.extend((
+                f"### {issue.title_zh}",
+                f"- 状态：{issue.client_state}",
+                f"- 发现了什么：{issue.observed_zh}",
+                f"- 为什么需要关注：{issue.why_it_matters_zh}",
+                f"- 目前不能下什么结论：{issue.cannot_conclude_zh}",
+                "- 需要补什么资料：" + (
+                    "、".join(issue.required_materials_zh)
+                    if issue.required_materials_zh else "按核对事项补充可验证资料"
+                ),
+                f"- 建议下一步：{issue.next_action_zh}",
+                "",
+            ))
+    else:
+        lines.append("- 当前没有经复核批准后进入客户报告的重点事项。")
+
+    lines.extend(("", "## 待补资料及影响"))
+    if view.material_gaps:
+        for gap in view.material_gaps:
+            lines.extend((
+                f"### {gap.material_zh}",
+                f"- 影响：{gap.impact_zh}",
+                f"- 补充方式：{gap.next_action_zh}",
+            ))
+    else:
+        lines.append("- 当前没有待补资料事项。")
+
+    lines.extend(("", "## 建议行动顺序"))
+    if view.actions:
+        lines.extend(f"{item.priority}. {item.action_zh}" for item in view.actions)
+    else:
+        lines.append("1. 保存本次报告及交付清单，后续资料变化时重新检查。")
+
+    lines.extend(("", "## 检查范围和限制"))
+    if view.limitations_zh:
+        lines.extend(f"- {item}" for item in view.limitations_zh)
+    else:
+        lines.append("- 本报告仅覆盖当前快照中已执行的检查程序。")
+    lines.extend(f"- {item}" for item in _FIXED_DISCLAIMER)
+    lines.extend(("", '<div style="page-break-before: always;"></div>', "", "## 专业附录"))
+    for item in view.tax_items:
+        lines.extend((
+            "",
+            f"### {item.name_zh}",
+            f"- 客户状态：{item.client_state}",
+            f"- 资料缺口数量：{item.gap_count}",
+        ))
+        if item.trial_amount is not None:
+            lines.extend((
+                f"- 试算金额：{item.trial_amount}",
+                f"- {summary.amount_disclaimer_zh}",
+            ))
+    return "\n".join(lines) + "\n"
+
+
+def _render_technical_report(snapshot: TaxCheckSnapshot) -> str:
     """Render one progressive report from active snapshot questions only."""
     results_by_tax_id = {result.tax_id: result for result in snapshot.results}
     counts = {status: sum(result.status is status for result in snapshot.results) for status in TaxStatus}
@@ -221,6 +296,18 @@ def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
     lines.extend(("", "## 局限性与声明"))
     lines.extend(f"- {line}" for line in _FIXED_DISCLAIMER)
     return "\n".join(lines) + "\n"
+
+
+def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
+    """Render the owner report first and retain the full technical appendix."""
+
+    owner = render_report_view(build_report_view(snapshot))
+    owner_prefix = owner.split("## 专业附录", 1)[0]
+    technical = _render_technical_report(snapshot)
+    technical_lines = technical.splitlines()
+    if technical_lines and technical_lines[0].startswith("# "):
+        technical_lines[0] = "### 技术检查明细"
+    return owner_prefix + "## 专业附录\n\n" + "\n".join(technical_lines) + "\n"
 
 
 def _write_text_atomic(path: Path, content: str) -> Path:

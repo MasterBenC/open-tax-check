@@ -20,9 +20,11 @@ from open_tax_check.tax_models import (
     TaxStatus,
 )
 from open_tax_check.tax_registry import TAX_DEFINITIONS
+from open_tax_check.report_view import build_report_view
 from open_tax_check.tax_reporting import (
     effective_limitations,
     render_tax_health_report,
+    render_report_view,
     tax_snapshot_payload,
     write_tax_health_report,
     write_tax_health_snapshot,
@@ -110,6 +112,51 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
 
 
 class TaxHealthReportingTests(unittest.TestCase):
+    def test_markdown_places_owner_report_before_professional_appendix(self) -> None:
+        report = render_tax_health_report(snapshot_with_every_status())
+        headings = [line for line in report.splitlines() if line.startswith("## ")]
+
+        self.assertEqual(headings[:5], [
+            "## 管理层摘要",
+            "## 老板先看这些事",
+            "## 待补资料及影响",
+            "## 建议行动顺序",
+            "## 检查范围和限制",
+        ])
+        self.assertGreater(
+            headings.index("## 专业附录"),
+            headings.index("## 检查范围和限制"),
+        )
+
+    def test_owner_report_hides_internal_codes_and_uses_five_part_issues(self) -> None:
+        snapshot = snapshot_with_every_status()
+        view = build_report_view(snapshot, reviewed_findings=({
+            "title_zh": "收入勾稽差异",
+            "status": "suspected",
+            "review_status": "reviewed",
+            "report_status": "approved",
+            "source_kind": "deterministic_discrepancy",
+            "observed_zh": "账簿收入与申报口径存在差异。",
+            "why_it_matters_zh": "可能影响相关申报口径。",
+            "cannot_conclude_zh": "尚不能据此认定少缴税款。",
+            "required_materials_zh": ["收入明细", "申报表"],
+            "next_action_zh": "逐月核对差异来源。",
+        },))
+
+        report = render_report_view(view)
+        owner = report.split("## 专业附录", 1)[0]
+
+        for prohibited in (
+            "calculated", "needs_evidence", "generic.base_times_rate",
+            "enterprise_income_tax.taxable_income", "unreviewed_candidate",
+        ):
+            self.assertNotIn(prohibited, owner)
+        for label in (
+            "发现了什么", "为什么需要关注", "目前不能下什么结论",
+            "需要补什么资料", "建议下一步",
+        ):
+            self.assertIn(label, owner)
+
     def test_twelve_pending_items_create_visible_limitations(self) -> None:
         snapshot = snapshot_with_every_status()
         snapshot = replace(snapshot, questions=snapshot.questions * 12)
