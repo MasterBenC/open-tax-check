@@ -41,6 +41,52 @@ def test_missing_confirmation_count_fails_closed():
     )
 
 
+def confirmation_event():
+    return {
+        "question_id": "question-001",
+        "fact_key": "entity.vat_registration",
+        "value": "general",
+        "confirmed_by": "customer",
+        "confirmed_at": "2026-08-03T10:00:00+08:00",
+        "evidence_refs": ["source-001"],
+    }
+
+
+def test_confirmation_claim_requires_a_strict_customer_confirmation_record():
+    payload = load_host_fixture("workbuddy-overclaim.json") | {
+        "confirmation_event_count": 1,
+        "confirmation_events": ["host-supplied-confirmation"],
+    }
+
+    assert validate_host_message(payload) == ("invalid_confirmation_events",)
+
+
+def test_valid_customer_confirmation_event_authorizes_confirmation_wording():
+    payload = load_host_fixture("workbuddy-overclaim.json") | {
+        "confirmation_event_count": 1,
+        "confirmation_events": [confirmation_event()],
+    }
+
+    assert validate_host_message(payload) == (
+        "completion_overclaim",
+        "unreviewed_candidate_in_client_conclusion",
+        "missing_declared_artifact",
+    )
+
+
+def test_confirmation_event_rejects_unknown_fields_host_identity_and_empty_evidence():
+    payload = load_host_fixture("workbuddy-overclaim.json")
+    invalid_events = (
+        confirmation_event() | {"case_status": "completed"},
+        confirmation_event() | {"confirmed_by": "host"},
+        confirmation_event() | {"evidence_refs": []},
+    )
+
+    for event in invalid_events:
+        candidate = payload | {"confirmation_event_count": 1, "confirmation_events": [event]}
+        assert validate_host_message(candidate) == ("invalid_confirmation_events",)
+
+
 def test_host_message_rejects_malformed_or_missing_authoritative_lists():
     payload = load_host_fixture("hermes-overclaim.json")
 
@@ -70,10 +116,24 @@ def test_host_message_rejects_malformed_or_missing_authoritative_lists():
         assert validate_host_message(incomplete) == (issue,)
 
 
+def test_unreviewed_candidate_count_rejects_negative_integers():
+    payload = load_host_fixture("workbuddy-overclaim.json") | {
+        "unreviewed_candidate_count": -1,
+    }
+
+    assert validate_host_message(payload) == ("invalid_unreviewed_candidate_count",)
+
+
 def test_customer_handoff_allows_only_customer_answers_evidence_and_identity():
     handoff = {
         "schema_version": "tax-customer-handoff/v1",
-        "customer_answers": {"entity.vat_registration": "general"},
+        "customer_answers": [
+            {
+                "question_id": "question-001",
+                "fact_key": "entity.vat_registration",
+                "value": "general",
+            }
+        ],
         "evidence_references": ["evidence/tax-return.pdf"],
         "customer_identity": {"customer_id": "customer-001"},
     }
@@ -90,3 +150,50 @@ def test_customer_handoff_allows_only_customer_answers_evidence_and_identity():
         assert validate_customer_handoff(handoff | {field: "host-claim"}) == (
             "unknown_or_host_owned_handoff_field"
         )
+
+
+def test_customer_handoff_requires_all_customer_owned_fields():
+    handoff = {
+        "schema_version": "tax-customer-handoff/v1",
+        "customer_answers": [
+            {
+                "question_id": "question-001",
+                "fact_key": "entity.vat_registration",
+                "value": True,
+            }
+        ],
+        "evidence_references": ["source-001"],
+        "customer_identity": {"customer_id": "customer-001"},
+    }
+
+    for field in ("customer_answers", "evidence_references", "customer_identity"):
+        incomplete = handoff.copy()
+        incomplete.pop(field)
+        assert validate_customer_handoff(incomplete) == "invalid_customer_handoff_payload"
+
+
+def test_customer_handoff_rejects_nested_host_fields_and_non_scalar_answers():
+    handoff = {
+        "schema_version": "tax-customer-handoff/v1",
+        "customer_answers": [
+            {
+                "question_id": "question-001",
+                "fact_key": "entity.vat_registration",
+                "value": True,
+            }
+        ],
+        "evidence_references": ["source-001"],
+        "customer_identity": {"customer_id": "customer-001"},
+    }
+    invalid_answers = (
+        handoff["customer_answers"][0] | {"case_status": "completed"},
+        handoff["customer_answers"][0] | {"value": {"rate": "0.13"}},
+    )
+
+    for answer in invalid_answers:
+        assert validate_customer_handoff(handoff | {"customer_answers": [answer]}) == (
+            "invalid_customer_handoff_payload"
+        )
+    assert validate_customer_handoff(
+        handoff | {"customer_identity": {"customer_id": "customer-001", "tax_conclusions": []}}
+    ) == "invalid_customer_handoff_payload"

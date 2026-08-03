@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from .tax_models import Confirmation
+
 
 HOST_MESSAGE_SCHEMA_VERSION = "host-message-replay/v1"
 HANDOFF_SCHEMA_VERSION = "tax-customer-handoff/v1"
 
 _HOST_MESSAGE_LIST_FIELDS = (
     ("pending_tasks", "invalid_pending_tasks"),
-    ("confirmation_events", "invalid_confirmation_events"),
     ("declared_artifacts", "invalid_declared_artifacts"),
     ("existing_paths", "invalid_existing_paths"),
     ("unresolved_tax_ids", "invalid_unresolved_tax_ids"),
@@ -22,6 +23,33 @@ _HOST_MESSAGE_LIST_FIELDS = (
 _HANDOFF_FIELDS = frozenset(
     {"schema_version", "customer_answers", "evidence_references", "customer_identity"}
 )
+_CONFIRMATION_FIELDS = frozenset(
+    {"question_id", "fact_key", "value", "confirmed_by", "confirmed_at", "evidence_refs"}
+)
+_CUSTOMER_ANSWER_FIELDS = frozenset({"question_id", "fact_key", "value"})
+_CUSTOMER_IDENTITY_FIELDS = frozenset({"customer_id"})
+
+
+def _valid_confirmation_event(event: object) -> bool:
+    if not isinstance(event, Mapping) or set(event) != _CONFIRMATION_FIELDS:
+        return False
+    evidence_refs = event.get("evidence_refs")
+    if not isinstance(evidence_refs, list) or not evidence_refs:
+        return False
+    if event.get("confirmed_by") != "customer":
+        return False
+    try:
+        Confirmation(
+            question_id=event["question_id"],
+            fact_key=event["fact_key"],
+            value=event["value"],
+            confirmed_by=event["confirmed_by"],
+            confirmed_at=event["confirmed_at"],
+            evidence_refs=tuple(evidence_refs),
+        )
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def validate_host_message(payload: Mapping[str, object]) -> tuple[str, ...]:
@@ -36,8 +64,13 @@ def validate_host_message(payload: Mapping[str, object]) -> tuple[str, ...]:
         if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
             invalid_issues.append(issue)
 
-    confirmation_event_count = payload.get("confirmation_event_count")
     confirmation_events = payload.get("confirmation_events")
+    if not isinstance(confirmation_events, list) or not all(
+        _valid_confirmation_event(event) for event in confirmation_events
+    ):
+        invalid_issues.append("invalid_confirmation_events")
+
+    confirmation_event_count = payload.get("confirmation_event_count")
     if (
         isinstance(confirmation_event_count, bool)
         or not isinstance(confirmation_event_count, int)
@@ -47,7 +80,11 @@ def validate_host_message(payload: Mapping[str, object]) -> tuple[str, ...]:
         invalid_issues.append("invalid_confirmation_event_count")
 
     unreviewed_candidate_count = payload.get("unreviewed_candidate_count")
-    if isinstance(unreviewed_candidate_count, bool) or not isinstance(unreviewed_candidate_count, int):
+    if (
+        isinstance(unreviewed_candidate_count, bool)
+        or not isinstance(unreviewed_candidate_count, int)
+        or unreviewed_candidate_count < 0
+    ):
         invalid_issues.append("invalid_unreviewed_candidate_count")
     if invalid_issues:
         return tuple(invalid_issues)
@@ -83,13 +120,35 @@ def validate_customer_handoff(payload: Mapping[str, object]) -> str | None:
         return "invalid_customer_handoff_payload"
     if not set(payload).issubset(_HANDOFF_FIELDS):
         return "unknown_or_host_owned_handoff_field"
-    if "customer_answers" in payload and not isinstance(payload["customer_answers"], Mapping):
+    if set(payload) != _HANDOFF_FIELDS:
         return "invalid_customer_handoff_payload"
-    if "evidence_references" in payload and (
-        not isinstance(payload["evidence_references"], list)
-        or not all(isinstance(reference, str) and reference for reference in payload["evidence_references"])
+
+    customer_answers = payload["customer_answers"]
+    if not isinstance(customer_answers, list) or not customer_answers:
+        return "invalid_customer_handoff_payload"
+    for answer in customer_answers:
+        if not isinstance(answer, Mapping) or set(answer) != _CUSTOMER_ANSWER_FIELDS:
+            return "invalid_customer_handoff_payload"
+        if not all(isinstance(answer[field], str) and answer[field] for field in ("question_id", "fact_key")):
+            return "invalid_customer_handoff_payload"
+        value = answer["value"]
+        if not (value is None or isinstance(value, str | int | bool)) or isinstance(value, float):
+            return "invalid_customer_handoff_payload"
+
+    evidence_references = payload["evidence_references"]
+    if (
+        not isinstance(evidence_references, list)
+        or not evidence_references
+        or not all(isinstance(reference, str) and reference for reference in evidence_references)
     ):
         return "invalid_customer_handoff_payload"
-    if "customer_identity" in payload and not isinstance(payload["customer_identity"], Mapping):
+
+    customer_identity = payload["customer_identity"]
+    if (
+        not isinstance(customer_identity, Mapping)
+        or set(customer_identity) != _CUSTOMER_IDENTITY_FIELDS
+        or not isinstance(customer_identity["customer_id"], str)
+        or not customer_identity["customer_id"]
+    ):
         return "invalid_customer_handoff_payload"
     return None
