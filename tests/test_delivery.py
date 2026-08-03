@@ -8,6 +8,7 @@ import pytest
 from open_tax_check.case import init_case
 from open_tax_check.case_orchestration import (
     apply_case_confirmations,
+    build_case_customer_handoff,
     build_case_customer_tasks,
     run_case_self_check,
 )
@@ -84,6 +85,18 @@ def test_handoff_lists_only_existing_hashed_artifacts(tmp_path: Path):
     assert all((case / item["path"]).is_file() for item in payload["artifacts"])
     assert "request.json" not in {Path(item["path"]).name for item in payload["artifacts"]}
     assert all(item["sha256"] for item in payload["artifacts"])
+
+
+def test_handoff_rejects_tampered_delivery_revision_path(tmp_path: Path):
+    case = _case(tmp_path)
+    build_case_delivery(case)
+    pointer_path = case / "work" / "delivery.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["revision_path"] = "output"
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="^delivery_pointer_invalid$"):
+        build_case_customer_handoff(case)
 
 
 def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(tmp_path: Path):

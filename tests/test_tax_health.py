@@ -214,7 +214,13 @@ class TaxHealthFacadeTests(unittest.TestCase):
             set(payload),
             {"schema_version", "revision", "request", "results", "questions", "audit_events", "limitations"},
         )
-        self.assertEqual(payload["limitations"], [])
+        self.assertEqual(
+            payload["limitations"],
+            [{
+                "code": "pending_customer_evidence",
+                "message_zh": "当前仍有 1 项客户确认或补充资料事项，相关税种尚未形成确定结论。",
+            }],
+        )
         self.assertEqual(set(payload["request"]), {"period", "jurisdiction", "input_hashes"})
         self.assertEqual(payload["request"]["input_hashes"], ["a" * 64])
         self.assertEqual(

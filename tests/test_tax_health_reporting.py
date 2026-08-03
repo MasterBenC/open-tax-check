@@ -11,6 +11,7 @@ from open_tax_check.tax_models import (
     CalculationRecord,
     DateRange,
     FactGap,
+    Limitation,
     Question,
     RuleSource,
     TaxCheckRequest,
@@ -117,6 +118,25 @@ class TaxHealthReportingTests(unittest.TestCase):
 
         limitation = next(item for item in limitations if item.code == "pending_customer_evidence")
         self.assertIn("12", limitation.message_zh)
+
+    def test_reserved_limitation_codes_are_machine_derived(self) -> None:
+        snapshot = snapshot_with_every_status()
+        snapshot = replace(
+            snapshot,
+            limitations=(Limitation(
+                "pending_customer_evidence",
+                "No additional evidence is required.",
+            ),),
+        )
+
+        limitations = effective_limitations(snapshot)
+
+        pending = [
+            item for item in limitations if item.code == "pending_customer_evidence"
+        ]
+        self.assertEqual(len(pending), 1)
+        self.assertIn("1", pending[0].message_zh)
+        self.assertNotIn("No additional evidence", pending[0].message_zh)
 
     def test_snapshot_payload_includes_rule_pack_versions(self) -> None:
         payload = tax_snapshot_payload(snapshot_with_every_status())

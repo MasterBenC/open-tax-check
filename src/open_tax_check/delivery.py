@@ -355,11 +355,14 @@ def verified_delivery_artifacts(case_dir: Path) -> tuple[dict[str, object], ...]
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         raise DeliveryError("delivery_pointer_invalid") from None
     _verify_delivery_artifacts(manifest_path.parent, manifest)
+    if pointer != _pointer_payload(root, manifest, manifest_path.parent):
+        raise DeliveryError("delivery_pointer_invalid")
+    revision_path = manifest_path.parent.relative_to(root)
     excluded = {"customer_handoff", "evidence_bundle"}
     return tuple(
         {
             "kind": item["kind"],
-            "path": (Path(pointer["revision_path"]) / item["relative_path"]).as_posix(),
+            "path": (revision_path / item["relative_path"]).as_posix(),
             "sha256": item["sha256"],
             "size_bytes": item["size_bytes"],
         }

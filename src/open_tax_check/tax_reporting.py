@@ -51,9 +51,11 @@ _FORMULA_LABELS_ZH = {
 def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
     """Combine explicit limitations with deterministic gaps visible in the snapshot."""
 
-    limitations = list(snapshot.limitations)
-    existing_codes = {item.code for item in limitations}
-    if snapshot.questions and "pending_customer_evidence" not in existing_codes:
+    reserved_codes = {"pending_customer_evidence", "unresolved_tax_scope"}
+    limitations = [
+        item for item in snapshot.limitations if item.code not in reserved_codes
+    ]
+    if snapshot.questions:
         limitations.append(Limitation(
             "pending_customer_evidence",
             f"当前仍有 {len(snapshot.questions)} 项客户确认或补充资料事项，相关税种尚未形成确定结论。",
@@ -63,7 +65,7 @@ def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
         for result in snapshot.results
         if result.status in {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY}
     )
-    if unresolved and "unresolved_tax_scope" not in existing_codes:
+    if unresolved:
         limitations.append(Limitation(
             "unresolved_tax_scope",
             f"当前有 {len(unresolved)} 个税种仍受资料或当地政策限制，本次未形成最终判断。",
