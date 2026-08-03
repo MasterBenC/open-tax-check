@@ -1,6 +1,7 @@
 """Boundary tests for the progressive, customer-safe tax-health report."""
 
 from datetime import date
+from dataclasses import replace
 import json
 from zipfile import ZipFile
 import unittest
@@ -19,6 +20,7 @@ from open_tax_check.tax_models import (
 )
 from open_tax_check.tax_registry import TAX_DEFINITIONS
 from open_tax_check.tax_reporting import (
+    effective_limitations,
     render_tax_health_report,
     tax_snapshot_payload,
     write_tax_health_report,
@@ -107,6 +109,15 @@ def snapshot_with_every_status() -> TaxCheckSnapshot:
 
 
 class TaxHealthReportingTests(unittest.TestCase):
+    def test_twelve_pending_items_create_visible_limitations(self) -> None:
+        snapshot = snapshot_with_every_status()
+        snapshot = replace(snapshot, questions=snapshot.questions * 12)
+
+        limitations = effective_limitations(snapshot)
+
+        limitation = next(item for item in limitations if item.code == "pending_customer_evidence")
+        self.assertIn("12", limitation.message_zh)
+
     def test_snapshot_payload_includes_rule_pack_versions(self) -> None:
         payload = tax_snapshot_payload(snapshot_with_every_status())
 
@@ -324,7 +335,10 @@ class TaxHealthReportingTests(unittest.TestCase):
                 set(payload),
                 {"schema_version", "revision", "request", "results", "questions", "audit_events", "limitations"},
             )
-            self.assertEqual(payload["limitations"], [])
+            self.assertEqual(
+                {item["code"] for item in payload["limitations"]},
+                {"pending_customer_evidence", "unresolved_tax_scope"},
+            )
             calculation = next(
                 item["calculation"] for item in payload["results"] if item["calculation"] is not None
             )

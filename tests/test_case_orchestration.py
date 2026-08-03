@@ -6,9 +6,11 @@ from unittest.mock import patch
 
 from open_tax_check.case import init_case
 from open_tax_check import cli
+from open_tax_check.host_contract import validate_customer_handoff
 from open_tax_check.case_orchestration import (
     CaseStatus,
     apply_case_confirmations,
+    build_case_customer_handoff,
     build_case_customer_tasks,
     case_status_payload,
     load_case_snapshot,
@@ -113,6 +115,20 @@ class CaseOrchestrationTests(unittest.TestCase):
       self.assertTrue(all(item["tax_ids"] for item in tasks["tasks"]))
       self.assertEqual(load_case_snapshot(case_dir).revision, 1)
 
+  def test_pending_case_handoff_never_claims_completion(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      run_case_self_check(case_dir, _request(), occurred_at=OCCURRED_AT)
+
+      payload = build_case_customer_handoff(case_dir)
+
+      self.assertEqual(payload["title_zh"], "第一轮账务初筛已完成")
+      self.assertEqual(payload["pending_task_count"], len(load_case_snapshot(case_dir).questions))
+      self.assertIn("不代表应补税额、欠税金额或最终申报金额", payload["amount_disclaimer_zh"])
+      self.assertIsNone(validate_customer_handoff(payload))
+      self.assertTrue((case_dir / "output" / "税务健康检查交付说明.json").is_file())
+
   def test_explicit_limitations_are_part_of_the_single_persisted_snapshot_contract(self):
     from open_tax_check import tax_models
 
@@ -139,7 +155,10 @@ class CaseOrchestrationTests(unittest.TestCase):
       )
       report = (case_dir / "output/税务健康检查报告.md").read_text(encoding="utf-8")
       self.assertEqual(private["limitations"], machine["limitations"])
-      self.assertEqual(load_case_snapshot(case_dir).limitations, (limitation,))
+      persisted_limitations = load_case_snapshot(case_dir).limitations
+      self.assertIn(limitation, persisted_limitations)
+      self.assertIn("pending_customer_evidence", {item.code for item in persisted_limitations})
+      self.assertIn("unresolved_tax_scope", {item.code for item in persisted_limitations})
       self.assertIn(limitation.message_zh, report)
 
   def test_confirmation_updates_case_snapshot_revision_and_keeps_unrelated_results(self):

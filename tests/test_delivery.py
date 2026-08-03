@@ -12,7 +12,7 @@ from open_tax_check.case_orchestration import (
     run_case_self_check,
 )
 from open_tax_check import cli
-from open_tax_check.delivery import DeliveryError, build_case_delivery
+from open_tax_check.delivery import DeliveryError, build_case_delivery, verified_delivery_artifacts
 from open_tax_check.tax_models import (
     Confirmation,
     DateRange,
@@ -71,6 +71,19 @@ def test_case_delivery_publishes_one_revision_for_all_artifacts(tmp_path: Path):
     with ZipFile(bundle) as archive:
         assert archive.testzip() is None
         assert json.loads(archive.read("bundle-manifest.json"))["snapshot_revision"] == 1
+
+
+def test_handoff_lists_only_existing_hashed_artifacts(tmp_path: Path):
+    case = _case(tmp_path)
+    build_case_delivery(case)
+
+    handoff_path = case / "output" / "税务健康检查交付说明.json"
+    payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+
+    assert payload["artifacts"] == list(verified_delivery_artifacts(case))
+    assert all((case / item["path"]).is_file() for item in payload["artifacts"])
+    assert "request.json" not in {Path(item["path"]).name for item in payload["artifacts"]}
+    assert all(item["sha256"] for item in payload["artifacts"])
 
 
 def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(tmp_path: Path):

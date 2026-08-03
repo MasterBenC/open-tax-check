@@ -37,7 +37,7 @@ from .tax_models import (
     TaxResult,
     TaxStatus,
 )
-from .tax_reporting import write_tax_health_report, write_tax_health_snapshot
+from .tax_reporting import effective_limitations, write_tax_health_report, write_tax_health_snapshot
 
 
 CASE_SCHEMA_VERSION = "tax-case/v1"
@@ -45,6 +45,7 @@ TASKS_SCHEMA_VERSION = "tax-customer-tasks/v1"
 PRIVATE_SNAPSHOT_NAME = "tax-health-snapshot.private.json"
 PUBLIC_SNAPSHOT_NAME = "tax-health-snapshot.json"
 REPORT_NAME = "税务健康检查报告.md"
+HANDOFF_NAME = "税务健康检查交付说明.json"
 _INPUT_MANIFEST_LIMIT = 2 * 1024 * 1024
 
 
@@ -353,6 +354,7 @@ def _case_state(root: Path) -> Mapping[str, object]:
 
 
 def _persist_case_view(root: Path, snapshot: TaxCheckSnapshot) -> dict[str, object]:
+    snapshot = replace(snapshot, limitations=effective_limitations(snapshot))
     status = _derive_status(snapshot)
     tasks = tuple(build_agent_question_tasks(snapshot))
     private_path = root / "work" / PRIVATE_SNAPSHOT_NAME
@@ -390,11 +392,13 @@ def _persist_case_view(root: Path, snapshot: TaxCheckSnapshot) -> dict[str, obje
                     "work/" + PUBLIC_SNAPSHOT_NAME,
                     "work/customer-tasks.json",
                     "output/" + REPORT_NAME,
+                    "output/" + HANDOFF_NAME,
                 }
             ),
         }
     )
     _write_json(state_path, state)
+    build_case_customer_handoff(root)
     return case_status_payload(root)
 
 
@@ -422,7 +426,10 @@ def run_case_self_check(
     private_path = root / "work" / PRIVATE_SNAPSHOT_NAME
     if private_path.is_file():
         existing = load_case_snapshot(root)
-        if existing.request == request and existing.limitations == tuple(limitations):
+        expected_limitations = effective_limitations(
+            replace(existing, limitations=tuple(limitations))
+        )
+        if existing.request == request and existing.limitations == expected_limitations:
             return case_status_payload(root)
         raise ValueError("case_snapshot_exists")
     snapshot = run_tax_health_check(
@@ -547,5 +554,53 @@ def case_status_payload(case_dir: Path) -> dict[str, object]:
         "affected_tax_ids": affected_tax_ids,
         "task_path": f"work/customer-tasks.json",
         "report_path": f"output/{REPORT_NAME}",
+        "handoff_path": f"output/{HANDOFF_NAME}",
         "snapshot_path": f"work/{PUBLIC_SNAPSHOT_NAME}",
     }
+
+
+def customer_handoff_payload(
+    snapshot: TaxCheckSnapshot,
+    status: Mapping[str, object],
+    artifacts: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    case_status = str(status["status"])
+    title = (
+        "本次可执行检查程序已完成"
+        if case_status == CaseStatus.COMPLETED.value
+        else "第一轮账务初筛已完成"
+    )
+    pending_count = len(snapshot.questions)
+    unresolved_count = sum(
+        result.status in {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY}
+        for result in snapshot.results
+    )
+    return {
+        "schema_version": "tax-customer-handoff/v1",
+        "revision": snapshot.revision,
+        "case_status": case_status,
+        "title_zh": title,
+        "message_zh": (
+            f"本次已运行现有资料支持的确定性检查程序；仍有 {pending_count} 项待客户确认，"
+            f"{unresolved_count} 个税种受资料或当地政策限制。"
+        ),
+        "amount_disclaimer_zh": "试算金额不代表应补税额、欠税金额或最终申报金额。",
+        "pending_task_count": pending_count,
+        "limitations": [to_dict(item) for item in effective_limitations(snapshot)],
+        "artifacts": list(artifacts),
+    }
+
+
+def build_case_customer_handoff(case_dir: Path) -> dict[str, object]:
+    root = _case_dir(case_dir)
+    snapshot = load_case_snapshot(root)
+    status = case_status_payload(root)
+    from .delivery import verified_delivery_artifacts
+
+    payload = customer_handoff_payload(
+        snapshot,
+        status,
+        verified_delivery_artifacts(root),
+    )
+    _write_json(root / "output" / HANDOFF_NAME, payload)
+    return payload

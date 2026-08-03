@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+import re
 from typing import Mapping
 
 from .tax_models import Confirmation
@@ -9,6 +11,8 @@ from .tax_models import Confirmation
 
 HOST_MESSAGE_SCHEMA_VERSION = "host-message-replay/v1"
 HANDOFF_SCHEMA_VERSION = "tax-customer-handoff/v1"
+RESPONSE_SCHEMA_VERSION = "tax-customer-response/v1"
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 _HOST_MESSAGE_LIST_FIELDS = (
     ("pending_tasks", "invalid_pending_tasks"),
@@ -21,6 +25,12 @@ _HOST_MESSAGE_LIST_FIELDS = (
     ),
 )
 _HANDOFF_FIELDS = frozenset(
+    {
+        "schema_version", "revision", "case_status", "title_zh", "message_zh",
+        "amount_disclaimer_zh", "pending_task_count", "limitations", "artifacts",
+    }
+)
+_RESPONSE_FIELDS = frozenset(
     {"schema_version", "customer_answers", "evidence_references", "customer_identity"}
 )
 _CONFIRMATION_FIELDS = frozenset(
@@ -114,26 +124,75 @@ def validate_host_message(payload: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def validate_customer_handoff(payload: Mapping[str, object]) -> str | None:
-    """Allow only customer answers, evidence references, and identity metadata."""
+    """Validate the exact machine-owned customer delivery explanation."""
 
     if not isinstance(payload, Mapping) or payload.get("schema_version") != HANDOFF_SCHEMA_VERSION:
         return "invalid_customer_handoff_payload"
-    if not set(payload).issubset(_HANDOFF_FIELDS):
-        return "unknown_or_host_owned_handoff_field"
     if set(payload) != _HANDOFF_FIELDS:
+        return "unknown_or_host_owned_handoff_field"
+    revision = payload["revision"]
+    pending_count = payload["pending_task_count"]
+    if (
+        isinstance(revision, bool) or not isinstance(revision, int) or revision < 1
+        or isinstance(pending_count, bool) or not isinstance(pending_count, int) or pending_count < 0
+    ):
         return "invalid_customer_handoff_payload"
+    for field in ("case_status", "title_zh", "message_zh", "amount_disclaimer_zh"):
+        if not isinstance(payload[field], str) or not payload[field].strip():
+            return "invalid_customer_handoff_payload"
+    if payload["case_status"] == "completed" and pending_count:
+        return "invalid_customer_handoff_payload"
+    if "不代表应补税额、欠税金额或最终申报金额" not in payload["amount_disclaimer_zh"]:
+        return "invalid_customer_handoff_payload"
+    limitations = payload["limitations"]
+    if not isinstance(limitations, list) or any(
+        not isinstance(item, Mapping)
+        or set(item) != {"code", "message_zh"}
+        or not all(isinstance(item[key], str) and item[key] for key in item)
+        for item in limitations
+    ):
+        return "invalid_customer_handoff_payload"
+    artifacts = payload["artifacts"]
+    if not isinstance(artifacts, list):
+        return "invalid_customer_handoff_payload"
+    paths: set[str] = set()
+    for item in artifacts:
+        if not isinstance(item, Mapping) or set(item) != {"kind", "path", "sha256", "size_bytes"}:
+            return "invalid_customer_handoff_payload"
+        path = item["path"]
+        if (
+            not isinstance(item["kind"], str) or not item["kind"]
+            or not isinstance(path, str) or not path or "\\" in path or path in paths
+            or PurePosixPath(path).is_absolute() or any(part in {"", ".", ".."} for part in PurePosixPath(path).parts)
+            or not isinstance(item["sha256"], str) or _SHA256.fullmatch(item["sha256"]) is None
+            or isinstance(item["size_bytes"], bool) or not isinstance(item["size_bytes"], int) or item["size_bytes"] < 0
+        ):
+            return "invalid_customer_handoff_payload"
+        paths.add(path)
+    return None
+
+
+def validate_customer_response(payload: Mapping[str, object]) -> str | None:
+    """Allow only customer answers, evidence references, and identity metadata."""
+
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != RESPONSE_SCHEMA_VERSION:
+        return "invalid_customer_response_payload"
+    if not set(payload).issubset(_RESPONSE_FIELDS):
+        return "unknown_or_host_owned_response_field"
+    if set(payload) != _RESPONSE_FIELDS:
+        return "invalid_customer_response_payload"
 
     customer_answers = payload["customer_answers"]
     if not isinstance(customer_answers, list) or not customer_answers:
-        return "invalid_customer_handoff_payload"
+        return "invalid_customer_response_payload"
     for answer in customer_answers:
         if not isinstance(answer, Mapping) or set(answer) != _CUSTOMER_ANSWER_FIELDS:
-            return "invalid_customer_handoff_payload"
+            return "invalid_customer_response_payload"
         if not all(isinstance(answer[field], str) and answer[field] for field in ("question_id", "fact_key")):
-            return "invalid_customer_handoff_payload"
+            return "invalid_customer_response_payload"
         value = answer["value"]
         if not (value is None or isinstance(value, str | int | bool)) or isinstance(value, float):
-            return "invalid_customer_handoff_payload"
+            return "invalid_customer_response_payload"
 
     evidence_references = payload["evidence_references"]
     if (
@@ -141,7 +200,7 @@ def validate_customer_handoff(payload: Mapping[str, object]) -> str | None:
         or not evidence_references
         or not all(isinstance(reference, str) and reference for reference in evidence_references)
     ):
-        return "invalid_customer_handoff_payload"
+        return "invalid_customer_response_payload"
 
     customer_identity = payload["customer_identity"]
     if (
@@ -150,5 +209,5 @@ def validate_customer_handoff(payload: Mapping[str, object]) -> str | None:
         or not isinstance(customer_identity["customer_id"], str)
         or not customer_identity["customer_id"]
     ):
-        return "invalid_customer_handoff_payload"
+        return "invalid_customer_response_payload"
     return None

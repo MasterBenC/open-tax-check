@@ -14,7 +14,7 @@ import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .schemas import to_dict
-from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
+from .tax_models import Limitation, Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
 
 
@@ -46,6 +46,29 @@ _FORMULA_LABELS_ZH = {
     "generic.base_times_applicable_parameter.v1": "已确认计税依据乘适用计税参数",
     "generic.base_times_rate_minus_confirmed_deduction.v1": "增值额乘确认税率后减确认速算扣除额",
 }
+
+
+def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
+    """Combine explicit limitations with deterministic gaps visible in the snapshot."""
+
+    limitations = list(snapshot.limitations)
+    existing_codes = {item.code for item in limitations}
+    if snapshot.questions and "pending_customer_evidence" not in existing_codes:
+        limitations.append(Limitation(
+            "pending_customer_evidence",
+            f"当前仍有 {len(snapshot.questions)} 项客户确认或补充资料事项，相关税种尚未形成确定结论。",
+        ))
+    unresolved = tuple(
+        result
+        for result in snapshot.results
+        if result.status in {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY}
+    )
+    if unresolved and "unresolved_tax_scope" not in existing_codes:
+        limitations.append(Limitation(
+            "unresolved_tax_scope",
+            f"当前有 {len(unresolved)} 个税种仍受资料或当地政策限制，本次未形成最终判断。",
+        ))
+    return tuple(limitations)
 
 
 def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
@@ -85,7 +108,7 @@ def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
             }
             for event in snapshot.audit_events
         ],
-        "limitations": [to_dict(item) for item in snapshot.limitations],
+        "limitations": [to_dict(item) for item in effective_limitations(snapshot)],
     }
 
 
@@ -209,10 +232,11 @@ def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
         lines.append("- 当前快照没有可用规则来源。")
 
     lines.extend(("", "## 明确限制"))
-    if snapshot.limitations:
+    limitations = effective_limitations(snapshot)
+    if limitations:
         lines.extend(
             f"- {item.message_zh}（{item.code}）"
-            for item in snapshot.limitations
+            for item in limitations
         )
     else:
         lines.append("- 当前快照没有另行登记的明确限制。")

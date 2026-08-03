@@ -12,7 +12,13 @@ import tempfile
 import re
 
 from .case import resolve_safe_case_path
-from .case_orchestration import load_case_snapshot
+from .case_orchestration import (
+    HANDOFF_NAME,
+    build_case_customer_handoff,
+    case_status_payload,
+    customer_handoff_payload,
+    load_case_snapshot,
+)
 from .evidence import verify_evidence_file
 from .evidence_bundle import (
     BundleArtifact,
@@ -332,7 +338,34 @@ def _verify_delivery_artifacts(
         except DeliveryError:
             raise
         except (OSError, ValueError):
-            raise DeliveryError("delivery_artifact_invalid") from None
+                raise DeliveryError("delivery_artifact_invalid") from None
+
+
+def verified_delivery_artifacts(case_dir: Path) -> tuple[dict[str, object], ...]:
+    """Return only existing artifacts whose active delivery hashes still match."""
+
+    root = _case_root(case_dir)
+    pointer_path = root / "work" / DELIVERY_POINTER_NAME
+    if not pointer_path.is_file():
+        return ()
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        manifest_path = resolve_safe_source(root / pointer["manifest_path"], root / "work")
+        manifest = _manifest_for_directory(manifest_path.parent)
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        raise DeliveryError("delivery_pointer_invalid") from None
+    _verify_delivery_artifacts(manifest_path.parent, manifest)
+    excluded = {"customer_handoff", "evidence_bundle"}
+    return tuple(
+        {
+            "kind": item["kind"],
+            "path": (Path(pointer["revision_path"]) / item["relative_path"]).as_posix(),
+            "sha256": item["sha256"],
+            "size_bytes": item["size_bytes"],
+        }
+        for item in manifest["artifacts"]
+        if item["kind"] not in excluded
+    )
 
 
 def _delivery_options(*, include_pdf: bool, include_evidence_files: bool) -> dict[str, bool]:
@@ -422,6 +455,7 @@ def build_case_delivery(
     case_audit_digest = _case_audit_digest(case_audit_artifacts)
     existing = _existing_delivery(root, snapshot, options, case_audit_digest)
     if existing is not None:
+        build_case_customer_handoff(root)
         return existing
 
     work_root = _managed_directory(root, ("work",), create=False)
@@ -453,6 +487,7 @@ def build_case_delivery(
             raise DeliveryError("delivery_revision_conflict")
         pointer = _pointer_payload(root, manifest, final_directory)
         _atomic_json(work_root / DELIVERY_POINTER_NAME, pointer)
+        build_case_customer_handoff(root)
         return pointer
 
     temporary_directory = Path(tempfile.mkdtemp(prefix=".otcd-", dir=delivery_root))
@@ -491,6 +526,39 @@ def build_case_delivery(
                 pdf_status = "verified"
             except PdfExportUnavailable as error:
                 pdf_status = str(error)
+        pre_handoff_records = [
+            _artifact_record(kind, path, temporary_directory)
+            for kind, path in (
+                ("markdown_report", report_path),
+                ("docx_report", docx_path),
+                ("workpaper", workpaper_path),
+                ("machine_snapshot", snapshot_path),
+            )
+        ]
+        if include_pdf and pdf_path.is_file():
+            pre_handoff_records.append(
+                _artifact_record("pdf_report", pdf_path, temporary_directory)
+            )
+        revision_prefix = Path("work") / DELIVERY_DIR_NAME / f"revision-{snapshot.revision:04d}"
+        handoff_artifacts = tuple(
+            {
+                "kind": item["kind"],
+                "path": (revision_prefix / item["relative_path"]).as_posix(),
+                "sha256": item["sha256"],
+                "size_bytes": item["size_bytes"],
+            }
+            for item in pre_handoff_records
+        )
+        handoff_path = temporary_directory / HANDOFF_NAME
+        _atomic_json(
+            handoff_path,
+            customer_handoff_payload(
+                snapshot,
+                case_status_payload(root),
+                handoff_artifacts,
+            ),
+        )
+        artifacts.append(BundleArtifact("customer_handoff", handoff_path, HANDOFF_NAME))
         verified = _verified_evidence(root, snapshot, manifest_payload)
         bundle_path = temporary_directory / "evidence-bundle.zip"
         bundle = build_evidence_bundle(
@@ -509,6 +577,7 @@ def build_case_delivery(
                 ("docx_report", docx_path),
                 ("workpaper", workpaper_path),
                 ("machine_snapshot", snapshot_path),
+                ("customer_handoff", handoff_path),
                 ("evidence_bundle", bundle.path),
             )
         ]
@@ -536,6 +605,7 @@ def build_case_delivery(
         temporary_directory = None  # type: ignore[assignment]
         pointer = _pointer_payload(root, manifest, final_directory)
         _atomic_json(work_root / DELIVERY_POINTER_NAME, pointer)
+        build_case_customer_handoff(root)
         return pointer
     except DeliveryError:
         if published_directory and final_directory.exists():

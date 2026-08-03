@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from open_tax_check.host_contract import validate_customer_handoff, validate_host_message
+from open_tax_check.host_contract import (
+    validate_customer_handoff,
+    validate_customer_response,
+    validate_host_message,
+)
 
 
 def load_host_fixture(name: str) -> dict[str, object]:
@@ -124,9 +128,9 @@ def test_unreviewed_candidate_count_rejects_negative_integers():
     assert validate_host_message(payload) == ("invalid_unreviewed_candidate_count",)
 
 
-def test_customer_handoff_allows_only_customer_answers_evidence_and_identity():
+def test_customer_response_allows_only_customer_answers_evidence_and_identity():
     handoff = {
-        "schema_version": "tax-customer-handoff/v1",
+        "schema_version": "tax-customer-response/v1",
         "customer_answers": [
             {
                 "question_id": "question-001",
@@ -138,7 +142,7 @@ def test_customer_handoff_allows_only_customer_answers_evidence_and_identity():
         "customer_identity": {"customer_id": "customer-001"},
     }
 
-    assert validate_customer_handoff(handoff) is None
+    assert validate_customer_response(handoff) is None
     for field in (
         "confirmation_event_count",
         "local_policy_facts",
@@ -147,14 +151,14 @@ def test_customer_handoff_allows_only_customer_answers_evidence_and_identity():
         "case_status",
         "tax_conclusions",
     ):
-        assert validate_customer_handoff(handoff | {field: "host-claim"}) == (
-            "unknown_or_host_owned_handoff_field"
+        assert validate_customer_response(handoff | {field: "host-claim"}) == (
+            "unknown_or_host_owned_response_field"
         )
 
 
-def test_customer_handoff_requires_all_customer_owned_fields():
+def test_customer_response_requires_all_customer_owned_fields():
     handoff = {
-        "schema_version": "tax-customer-handoff/v1",
+        "schema_version": "tax-customer-response/v1",
         "customer_answers": [
             {
                 "question_id": "question-001",
@@ -169,12 +173,12 @@ def test_customer_handoff_requires_all_customer_owned_fields():
     for field in ("customer_answers", "evidence_references", "customer_identity"):
         incomplete = handoff.copy()
         incomplete.pop(field)
-        assert validate_customer_handoff(incomplete) == "invalid_customer_handoff_payload"
+        assert validate_customer_response(incomplete) == "invalid_customer_response_payload"
 
 
-def test_customer_handoff_rejects_nested_host_fields_and_non_scalar_answers():
+def test_customer_response_rejects_nested_host_fields_and_non_scalar_answers():
     handoff = {
-        "schema_version": "tax-customer-handoff/v1",
+        "schema_version": "tax-customer-response/v1",
         "customer_answers": [
             {
                 "question_id": "question-001",
@@ -191,9 +195,9 @@ def test_customer_handoff_rejects_nested_host_fields_and_non_scalar_answers():
     )
 
     for answer in invalid_answers:
-        assert validate_customer_handoff(handoff | {"customer_answers": [answer]}) == (
-            "invalid_customer_handoff_payload"
+        assert validate_customer_response(handoff | {"customer_answers": [answer]}) == (
+            "invalid_customer_response_payload"
         )
-    assert validate_customer_handoff(
+    assert validate_customer_response(
         handoff | {"customer_identity": {"customer_id": "customer-001", "tax_conclusions": []}}
-    ) == "invalid_customer_handoff_payload"
+    ) == "invalid_customer_response_payload"
