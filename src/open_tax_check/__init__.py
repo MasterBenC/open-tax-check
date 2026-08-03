@@ -2,6 +2,14 @@
 
 __version__ = "1.0.0"
 
+from .customer_guide import (
+    CASE_GUIDE_SCHEMA_VERSION,
+    CUSTOMER_PROFILE_SCHEMA_VERSION,
+    CustomerProfile,
+    build_case_guide,
+    start_case_from_profile,
+)
+
 from .document_extraction import (
     DOCUMENT_EXTRACTION_SCHEMA_VERSION,
     LEGACY_DOCUMENT_EXTRACTION_SCHEMA_VERSION,
