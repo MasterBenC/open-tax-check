@@ -1,0 +1,22 @@
+{
+  "schema_version": "host-message-replay/v1",
+  "host": "Hermes",
+  "case_status": "waiting_for_customer_confirmation",
+  "pending_tasks": [
+    "tax-01", "tax-02", "tax-03", "tax-04", "tax-05", "tax-06",
+    "tax-07", "tax-08", "tax-09", "tax-10", "tax-11", "tax-12"
+  ],
+  "unreviewed_candidate_count": 0,
+  "confirmation_event_count": 0,
+  "message_zh": "以下税种不适用。",
+  "declared_artifacts": [],
+  "existing_paths": [],
+  "unresolved_tax_ids": [
+    "tax-01", "tax-02", "tax-03", "tax-04", "tax-05", "tax-06",
+    "tax-07", "tax-08", "tax-09", "tax-10", "tax-11", "tax-12"
+  ],
+  "host_declared_not_applicable_tax_ids": [
+    "tax-01", "tax-02", "tax-03", "tax-04", "tax-05", "tax-06",
+    "tax-07", "tax-08", "tax-09", "tax-10", "tax-11", "tax-12"
+  ]
+}

@@ -1,4 +1,7 @@
-"""Executable, host-neutral installation and contract replay checks."""
+"""Executable, host-neutral installation and contract replay checks.
+
+Host message conclusions are validated separately in :mod:`host_contract`.
+"""
 
 from __future__ import annotations
 

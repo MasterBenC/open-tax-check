@@ -14,6 +14,14 @@ from open_tax_check.host_replays import (
 )
 
 
+def test_unsafe_host_replay_fixtures_use_the_host_message_schema():
+    fixture_root = Path(__file__).parent / "fixtures" / "host-replays"
+
+    for name in ("hermes-overclaim.json", "workbuddy-overclaim.json"):
+        payload = json.loads((fixture_root / name).read_text(encoding="utf-8"))
+        assert payload["schema_version"] == "host-message-replay/v1"
+
+
 def _package_root(tmp_path):
     root = tmp_path / "skill"
     (root / "references").mkdir(parents=True)
