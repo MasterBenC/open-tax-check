@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from open_tax_check.customer_guide import build_case_guide, start_case_from_profile
+from open_tax_check.case import init_case
 
 
 def _profile(**overrides: object) -> dict[str, object]:
@@ -96,3 +97,58 @@ def test_initialized_case_without_a_valid_profile_awaits_business_profile(tmp_pa
     assert guide["schema_version"] == "case-guide/v1"
     assert guide["stage"] == "awaiting_business_profile"
     assert guide["profile_questions"]
+
+
+def test_initialized_case_without_profile_can_be_completed_without_rewriting_scope(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    init_case(case_dir, "示例科技有限公司", "2025-01-01", "2025-12-31")
+    state_before = (case_dir / "state.json").read_bytes()
+
+    result = start_case_from_profile(case_dir, _profile())
+
+    assert result["schema_version"] == "customer-profile/v1"
+    assert (case_dir / "state.json").read_bytes() == state_before
+    assert build_case_guide(case_dir)["stage"] == "ready_for_materials"
+
+
+def test_invalid_stored_profile_can_be_repaired_without_rewriting_scope(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    init_case(case_dir, "示例科技有限公司", "2025-01-01", "2025-12-31")
+    state_before = (case_dir / "state.json").read_bytes()
+    (case_dir / "work" / "customer-profile.json").write_text("{invalid", encoding="utf-8")
+
+    result = start_case_from_profile(case_dir, _profile())
+
+    assert json.loads((case_dir / "work" / "customer-profile.json").read_text(encoding="utf-8")) == result
+    assert (case_dir / "state.json").read_bytes() == state_before
+
+
+def test_existing_case_rejects_profile_with_a_different_review_period(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    init_case(case_dir, "示例科技有限公司", "2025-01-01", "2025-12-31")
+    state_before = (case_dir / "state.json").read_bytes()
+
+    with pytest.raises(ValueError, match="^case_period_mismatch$"):
+        start_case_from_profile(case_dir, _profile(period_start="2026-01-01", period_end="2026-12-31"))
+
+    assert (case_dir / "state.json").read_bytes() == state_before
+    assert not (case_dir / "work" / "customer-profile.json").exists()
+
+
+def test_profile_accepts_both_formal_period_endpoints(tmp_path: Path) -> None:
+    result = start_case_from_profile(
+        tmp_path / "case",
+        _profile(period_start="2023-01-01", period_end="2026-12-31"),
+    )
+
+    assert result["period_start"] == "2023-01-01"
+    assert result["period_end"] == "2026-12-31"
+
+
+def test_empty_case_directory_is_initialized_as_a_new_case(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+
+    start_case_from_profile(case_dir, _profile())
+
+    assert json.loads((case_dir / "state.json").read_text(encoding="utf-8"))["status"] == "ready_for_input"

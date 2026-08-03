@@ -94,18 +94,34 @@ def _guide(stage: str, message_zh: str) -> dict[str, object]:
     }
 
 
+def _ensure_existing_case_period(root: Path, profile: CustomerProfile) -> None:
+    try:
+        state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as error:
+        raise ValueError("invalid_case_state") from error
+    if not isinstance(state, Mapping) or state.get("review_period") != {
+        "start": profile.period_start.isoformat(),
+        "end": profile.period_end.isoformat(),
+    }:
+        raise ValueError("case_period_mismatch")
+
+
 def start_case_from_profile(case_dir: Path, profile: Mapping[str, object]) -> dict[str, object]:
     """Validate an opening profile before creating a resumable case."""
 
     customer_profile = _customer_profile(profile)
-    init_case(
-        case_dir,
-        customer_profile.entity_name,
-        customer_profile.period_start.isoformat(),
-        customer_profile.period_end.isoformat(),
-    )
-    payload = _profile_payload(customer_profile)
     root = resolve_safe_case_path(case_dir)
+    if (root / "state.json").exists():
+        _ensure_existing_case_period(root, customer_profile)
+    else:
+        init_case(
+            case_dir,
+            customer_profile.entity_name,
+            customer_profile.period_start.isoformat(),
+            customer_profile.period_end.isoformat(),
+        )
+        root = resolve_safe_case_path(case_dir)
+    payload = _profile_payload(customer_profile)
     write_json(root / "work" / "customer-profile.json", payload)
     return payload
 
