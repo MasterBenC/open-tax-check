@@ -9,12 +9,12 @@ from pathlib import Path
 from pathlib import PurePosixPath
 import re
 import tempfile
-from typing import BinaryIO
+from typing import BinaryIO, Collection, Literal
 import unicodedata
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .evidence import verify_evidence_file
-from .tax_models import FactState, TaxCheckSnapshot
+from .tax_models import FactState, TaxCheckRequest, TaxCheckSnapshot, TaxFact
 
 
 MANIFEST_SCHEMA_VERSION = "tax-evidence-manifest/v1"
@@ -103,6 +103,43 @@ class _StagedMember:
     path: Path
     sha256: str
     size_bytes: int
+
+
+def fact_evidence_level(
+    fact: TaxFact,
+    verified_source_ids: Collection[str],
+) -> Literal["observed", "inferred", "customer_confirmed", "evidence_verified"]:
+    """Expose customer-facing evidence levels without changing fact serialization."""
+
+    if fact.state is FactState.OBSERVED:
+        return "observed"
+    if fact.state is FactState.INFERRED:
+        return "inferred"
+    verified_ids = frozenset(verified_source_ids)
+    if fact.evidence_refs and set(fact.evidence_refs) <= verified_ids:
+        return "evidence_verified"
+    return "customer_confirmed"
+
+
+def validate_request_confirmation_evidence(
+    request: TaxCheckRequest,
+    verified: VerifiedEvidenceSet | None,
+) -> None:
+    """Reject public requests whose confirmed facts lack verified evidence."""
+
+    confirmed = tuple(fact for fact in request.facts if fact.state is FactState.CONFIRMED)
+    if not confirmed:
+        return
+    verified_ids = (
+        frozenset(item.source_id for item in verified.items)
+        if verified is not None
+        else frozenset()
+    )
+    if any(
+        not fact.evidence_refs or not set(fact.evidence_refs) <= verified_ids
+        for fact in confirmed
+    ):
+        raise ValueError("unverified_confirmation_evidence")
 
 
 def parse_evidence_manifest(payload: object) -> EvidenceManifest:

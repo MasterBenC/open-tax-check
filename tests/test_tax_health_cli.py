@@ -65,6 +65,27 @@ def write_bound_evidence_case(tmp_path):
     return evidence_root, manifest_path, request_path
 
 
+def write_verified_sources(tmp_path, *source_ids):
+    evidence_root = tmp_path / "verified-sources"
+    evidence_root.mkdir()
+    items = []
+    for index, source_id in enumerate(source_ids):
+        source = evidence_root / f"source-{index}.txt"
+        source.write_text(f"fictional evidence for {source_id}\n", encoding="utf-8")
+        items.append({
+            "source_id": source_id,
+            "relative_path": source.name,
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "media_type": "text/plain",
+        })
+    manifest_path = tmp_path / "verified-sources-manifest.json"
+    manifest_path.write_text(json.dumps({
+        "schema_version": "tax-evidence-manifest/v1",
+        "items": items,
+    }), encoding="utf-8")
+    return evidence_root, manifest_path
+
+
 def test_tax_health_check_cli_keeps_null_bundle_fields_when_not_enabled(monkeypatch, tmp_path, capsys):
     request_path = write_request(tmp_path)
     invoke_tax_health_check(monkeypatch, request_path, tmp_path / "output")
@@ -75,6 +96,23 @@ def test_tax_health_check_cli_keeps_null_bundle_fields_when_not_enabled(monkeypa
     assert result["evidence_bundle_path"] is None
     assert result["evidence_bundle_sha256"] is None
     assert result["includes_evidence_files"] is False
+
+
+def test_cli_rejects_confirmed_fact_without_verified_manifest(monkeypatch, tmp_path, capsys):
+    request_path = write_request(tmp_path, facts=({
+        "key": "enterprise_income_tax.taxable_income",
+        "value": "4733877.28",
+        "state": "confirmed",
+        "evidence_refs": ["journal-2025"],
+        "confirmed_by": "customer",
+        "confirmed_at": "2026-08-02T16:50:00+08:00",
+    },))
+    invoke_tax_health_check(monkeypatch, request_path, tmp_path / "output")
+
+    assert cli.main() == 4
+    assert json.loads(capsys.readouterr().out)["error_code"] == (
+        "unverified_confirmation_evidence"
+    )
 
 
 def test_tax_health_check_cli_uses_shared_delivery_payload(monkeypatch, tmp_path, capsys):
@@ -353,8 +391,12 @@ def test_tax_health_check_cli_accepts_explicit_calculation_pack(monkeypatch, tmp
         "applicability_fact_keys": [],
         "calculation": {"formula_id": "generic.base_minus_deductions_times_rate.v1", "tax_base_fact_key": "calc.tax_base", "rate_fact_key": "calc.rate", "deductions_fact_key": None},
     }), encoding="utf-8")
+    evidence_root, manifest_path = write_verified_sources(
+        tmp_path, "vat-return", "vat-rule"
+    )
     monkeypatch.setattr(cli.sys, "argv", [
-        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(tmp_path / "output"), "--pack", str(pack_path)
+        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(tmp_path / "output"), "--pack", str(pack_path),
+        "--evidence-manifest", str(manifest_path), "--evidence-root", str(evidence_root),
     ])
 
     assert cli.main() == 0
@@ -395,9 +437,13 @@ def test_tax_health_check_cli_runs_builtin_stamp_tax_rate_table(monkeypatch, tmp
             },
         ],
     }), encoding="utf-8")
+    evidence_root, manifest_path = write_verified_sources(
+        tmp_path, "contract-register", "sale-contract"
+    )
     monkeypatch.setattr(cli.sys, "argv", [
         "opentaxcheck", "tax-health-check", "--request", str(request_path),
         "--output-dir", str(output_dir),
+        "--evidence-manifest", str(manifest_path), "--evidence-root", str(evidence_root),
     ])
 
     assert cli.main() == 0
@@ -426,9 +472,13 @@ def test_tax_health_check_cli_calculates_deed_tax_only_with_confirmed_local_rate
             {"key": "deed_tax.tax_base", "value": "100000.00", "state": "confirmed", "evidence_refs": ["property-contract"], "confirmed_by": "customer", "confirmed_at": timestamp},
         ],
     }), encoding="utf-8")
+    evidence_root, manifest_path = write_verified_sources(
+        tmp_path, "title-transfer", "provincial-policy", "property-contract"
+    )
     monkeypatch.setattr(cli.sys, "argv", [
         "opentaxcheck", "tax-health-check", "--request", str(request_path),
         "--output-dir", str(output_dir),
+        "--evidence-manifest", str(manifest_path), "--evidence-root", str(evidence_root),
     ])
 
     assert cli.main() == 0
@@ -456,9 +506,13 @@ def test_tax_health_check_cli_calculates_three_vat_consumption_tax_addons(monkey
             {"key": "surcharge.vat_consumption_tax_base", "value": "10000.00", "state": "confirmed", "evidence_refs": ["tax-return"], "confirmed_by": "customer", "confirmed_at": timestamp},
         ],
     }), encoding="utf-8")
+    evidence_root, manifest_path = write_verified_sources(
+        tmp_path, "tax-return", "local-policy", "registration", "qualification"
+    )
     monkeypatch.setattr(cli.sys, "argv", [
         "opentaxcheck", "tax-health-check", "--request", str(request_path),
         "--output-dir", str(output_dir),
+        "--evidence-manifest", str(manifest_path), "--evidence-root", str(evidence_root),
     ])
 
     assert cli.main() == 0

@@ -25,6 +25,7 @@ from .evidence_bundle import (
     EvidenceBundleError,
     build_evidence_bundle,
     parse_evidence_manifest,
+    validate_request_confirmation_evidence,
     verify_evidence_manifest,
 )
 from .local_ocr import LocalOcrProvider
@@ -667,6 +668,7 @@ def main() -> int:
                 }, ensure_ascii=False))
                 return 4
         try:
+            validate_request_confirmation_evidence(request, verified_evidence)
             explicit_packs = None
             if args.pack or args.include_parameterized_packs:
                 if args.pack and any(not _safe_pack_path(path) for path in args.pack):
@@ -732,7 +734,15 @@ def main() -> int:
         except PdfExportUnavailable as error:
             print(json.dumps({"status": "failed", "error_code": str(error)}, ensure_ascii=False))
             return 3
-        except (OSError, UnicodeError, json.JSONDecodeError, TaxPackError, TypeError, ValueError):
+        except ValueError as error:
+            code = (
+                "unverified_confirmation_evidence"
+                if str(error) == "unverified_confirmation_evidence"
+                else "invalid_tax_rule_pack"
+            )
+            print(json.dumps({"status": "failed", "error_code": code}, ensure_ascii=False))
+            return 4
+        except (OSError, UnicodeError, json.JSONDecodeError, TaxPackError, TypeError):
             print(json.dumps({"status": "failed", "error_code": "invalid_tax_rule_pack"}, ensure_ascii=False))
             return 4
         print(json.dumps({

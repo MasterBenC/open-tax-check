@@ -5,6 +5,7 @@ import hashlib
 import json
 import unittest
 
+from open_tax_check.evidence_bundle import fact_evidence_level
 from open_tax_check.schemas import to_dict
 from open_tax_check.tax_models import (
     CalculationSpec,
@@ -212,6 +213,19 @@ def stamp_rate_pack(
 
 
 class TaxScreeningTests(unittest.TestCase):
+    def test_confirmed_fact_is_only_evidence_verified_when_all_refs_are_verified(self) -> None:
+        fact = confirmed_fact("entity.registration", "general", "source-1")
+
+        self.assertEqual(fact_evidence_level(fact, ()), "customer_confirmed")
+        self.assertEqual(fact_evidence_level(fact, ("source-1",)), "evidence_verified")
+
+    def test_observed_and_inferred_fact_evidence_levels_remain_distinct(self) -> None:
+        observed = TaxFact("entity.registration", "general", FactState.OBSERVED)
+        inferred = TaxFact("enterprise_income_tax.taxable_income", "4733877.28", FactState.INFERRED)
+
+        self.assertEqual(fact_evidence_level(observed, ()), "observed")
+        self.assertEqual(fact_evidence_level(inferred, ("journal-2025",)), "inferred")
+
     def test_screening_result_preserves_each_selected_pack_version(self) -> None:
         selected_pack = pack()
 
@@ -487,7 +501,7 @@ class TaxScreeningTests(unittest.TestCase):
         self.assertEqual(result.calculation.rate, "0.0003")
         self.assertEqual(result.calculation.amount, "30.00")
 
-    def test_calculation_pack_requires_confirmation_before_amount_calculation(self) -> None:
+    def test_calculation_pack_rejects_observed_and_reverse_derived_tax_bases(self) -> None:
         calculation_pack = TaxPack(
             pack_id="vat-calculation-v1",
             tax_id="vat",
@@ -505,21 +519,23 @@ class TaxScreeningTests(unittest.TestCase):
                 "generic.base_minus_deductions_times_rate.v1", "calc.tax_base", "calc.rate"
             ),
         )
-        request_value = TaxCheckRequest(
-            PERIOD,
-            "CN",
-            (
-                TaxFact("calc.tax_base", "1000.00", FactState.OBSERVED, ("vat-return-2026",)),
-                TaxFact("calc.rate", "0.13", FactState.CONFIRMED, ("rule-source-2026",), "customer", "2026-01-02T00:00:00+08:00"),
-            ),
-        )
+        for state in (FactState.OBSERVED, FactState.INFERRED):
+            with self.subTest(state=state):
+                request_value = TaxCheckRequest(
+                    PERIOD,
+                    "CN",
+                    (
+                        TaxFact("calc.tax_base", "1000.00", state, ("vat-return-2026",)),
+                        TaxFact("calc.rate", "0.13", FactState.CONFIRMED, ("rule-source-2026",), "customer", "2026-01-02T00:00:00+08:00"),
+                    ),
+                )
 
-        result = screen_tax_items(
-            request_value, (calculation_pack,), builtin_tax_evaluators(), tax_ids=("vat",)
-        )[0]
+                result = screen_tax_items(
+                    request_value, (calculation_pack,), builtin_tax_evaluators(), tax_ids=("vat",)
+                )[0]
 
-        self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
-        self.assertEqual(tuple(gap.fact_key for gap in result.gaps), ("calc.tax_base",))
+                self.assertEqual(result.status, TaxStatus.NEEDS_EVIDENCE)
+                self.assertEqual(tuple(gap.fact_key for gap in result.gaps), ("calc.tax_base",))
 
     def test_calculation_pack_returns_auditable_amount_and_formula(self) -> None:
         calculation_pack = TaxPack(
