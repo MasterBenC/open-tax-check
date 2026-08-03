@@ -280,6 +280,7 @@ def validate_pack_payload(payload: object) -> TaxPack:
                         optional_entry_keys = {
                             "maximum_tax_base",
                             "maximum_deductions",
+                            "source_document_numbers",
                         }
                         if (
                             not isinstance(raw_entry, dict)
@@ -289,7 +290,13 @@ def validate_pack_payload(payload: object) -> TaxPack:
                             - optional_entry_keys
                         ):
                             raise ValueError("invalid_calculation_spec")
-                        entries.append(StatutoryRateEntry(**raw_entry))
+                        entry_values = dict(raw_entry)
+                        if "source_document_numbers" in entry_values:
+                            raw_document_numbers = entry_values["source_document_numbers"]
+                            if not isinstance(raw_document_numbers, list):
+                                raise ValueError("invalid_calculation_spec")
+                            entry_values["source_document_numbers"] = tuple(raw_document_numbers)
+                        entries.append(StatutoryRateEntry(**entry_values))
                     calculation_values["rate_table"] = StatutoryRateTable(
                         raw_rate_table["selector_fact_key"], tuple(entries)
                     )
@@ -373,6 +380,17 @@ def validate_pack_payload(payload: object) -> TaxPack:
                 raise TaxPackError("invalid_calculation_spec")
             if calculation.formula_id == "generic.base_times_rate.v1" and calculation.deductions_fact_key is not None:
                 raise TaxPackError("invalid_calculation_spec")
+            if calculation.rate_table is not None:
+                available_document_numbers = {
+                    source.document_number for source in sources if source.document_number
+                }
+                referenced_document_numbers = {
+                    document_number
+                    for entry in calculation.rate_table.entries
+                    for document_number in entry.source_document_numbers
+                }
+                if not referenced_document_numbers.issubset(available_document_numbers):
+                    raise TaxPackError("invalid_calculation_spec")
             if maturity is not PackMaturity.CALCULATION or evaluator_id != "generic.calculation.base_minus_deductions_times_rate.v1":
                 raise TaxPackError("invalid_calculation_spec")
     try:

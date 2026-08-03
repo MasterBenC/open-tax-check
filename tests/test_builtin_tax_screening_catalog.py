@@ -135,6 +135,107 @@ class BuiltinTaxScreeningCatalogTests(unittest.TestCase):
             },
         )
 
+    def test_stamp_tax_sources_follow_the_selected_tax_item(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        timestamp = "2026-08-03T10:00:00+08:00"
+
+        def calculate(tax_item):
+            return screen_tax_items(
+                TaxCheckRequest(period, "CN", (
+                    TaxFact(
+                        "activity.has_stamp_taxable_instrument_or_securities_transaction",
+                        True,
+                        FactState.CONFIRMED,
+                        ("contract-register",),
+                        "customer",
+                        timestamp,
+                    ),
+                    TaxFact(
+                        "stamp_tax.tax_base", "100000.00", FactState.CONFIRMED,
+                        ("contract-register",), "customer", timestamp,
+                    ),
+                    TaxFact(
+                        "stamp_tax.tax_item", tax_item, FactState.CONFIRMED,
+                        ("contract-register",), "customer", timestamp,
+                    ),
+                )),
+                self.packs,
+                builtin_tax_evaluators(),
+                tax_ids=("stamp_tax",),
+            )[0]
+
+        sale_contract = calculate("sale_contract")
+        securities = calculate("securities_transaction")
+
+        self.assertEqual(sale_contract.status, TaxStatus.CALCULATED)
+        self.assertNotIn(
+            "财政部 税务总局公告2023年第39号",
+            {source.document_number for source in sale_contract.rule_sources},
+        )
+        self.assertIn(
+            "财政部 税务总局公告2023年第39号",
+            {source.document_number for source in securities.rule_sources},
+        )
+
+    def test_workbuddy_reverse_derived_inputs_never_produce_calculation_amounts(self):
+        period = DateRange(date(2026, 1, 1), date(2026, 12, 31))
+        timestamp = "2026-08-03T10:00:00+08:00"
+        cases = (
+            ("vat", "vat.taxable_sales"),
+            ("vat", "vat.input_tax_credits"),
+            ("enterprise_income_tax", "enterprise_income_tax.taxable_income"),
+            ("urban_maintenance_construction_tax", "surcharge.vat_consumption_tax_base"),
+            ("education_surcharge", "surcharge.vat_consumption_tax_base"),
+            ("house_property_tax", "house_property_tax.confirmed_tax_base"),
+            ("stamp_tax", "stamp_tax.tax_base"),
+            ("urban_land_use_tax", "urban_land_use_tax.taxable_area_year_equivalent"),
+            ("urban_land_use_tax", "urban_land_use_tax.applicable_unit_amount"),
+        )
+
+        for tax_id, inferred_key in cases:
+            with self.subTest(tax_id=tax_id, inferred_key=inferred_key):
+                packs = tuple(
+                    pack
+                    for pack in self.packs
+                    if pack.tax_id == tax_id
+                    and pack.maturity is PackMaturity.CALCULATION
+                    and pack.effective_period.start <= period.start
+                    and pack.effective_period.end >= period.end
+                )
+                self.assertTrue(packs)
+                requirements = {
+                    requirement.fact_key: requirement
+                    for pack in packs
+                    for requirement in pack.requirements
+                }
+                selector_values = {
+                    pack.calculation.rate_table.selector_fact_key:
+                    pack.calculation.rate_table.entries[0].selector
+                    for pack in packs
+                    if pack.calculation.rate_table is not None
+                }
+                facts = tuple(
+                    TaxFact(
+                        key,
+                        selector_values.get(key, "1" if requirement.answer_type == "decimal" else "confirmed"),
+                        FactState.INFERRED if key == inferred_key else FactState.CONFIRMED,
+                        ("workbuddy-ledger",),
+                        None if key == inferred_key else "customer",
+                        None if key == inferred_key else timestamp,
+                    )
+                    for key, requirement in requirements.items()
+                )
+
+                result = screen_tax_items(
+                    TaxCheckRequest(period, "CN", facts),
+                    packs,
+                    builtin_tax_evaluators(),
+                    tax_ids=(tax_id,),
+                )[0]
+
+                self.assertIn(result.status, {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY})
+                self.assertIsNone(result.calculation)
+
     def test_vat_calculation_packs_cover_supported_statutory_paths(self):
         packs = tuple(
             pack

@@ -73,7 +73,12 @@
         {"selector": "equity_transfer", "label_zh": "股权转让书据", "rate": "0.0005"},
         {"selector": "intellectual_property_transfer", "label_zh": "知识产权转让书据", "rate": "0.0003"},
         {"selector": "business_books", "label_zh": "营业账簿", "rate": "0.00025"},
-        {"selector": "securities_transaction", "label_zh": "证券交易", "rate": "0.0005"}
+        {
+          "selector": "securities_transaction",
+          "label_zh": "证券交易",
+          "rate": "0.0005",
+          "source_document_numbers": ["财政部 税务总局公告2023年第39号"]
+        }
       ]
     }
   }

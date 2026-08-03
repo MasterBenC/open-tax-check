@@ -185,6 +185,28 @@ class TaxRegistryTests(unittest.TestCase):
         self.assertEqual(pack.calculation.rate_table.selector_fact_key, "stamp_tax.tax_item")
         self.assertEqual(pack.calculation.rate_table.entries[0].rate, "0.0003")
 
+    def test_schema_1_3_parses_selector_specific_rule_sources(self) -> None:
+        value = statutory_calculation_payload()
+        value["sources"].append({
+            "title": "财政部 税务总局关于减半征收证券交易印花税的公告",
+            "url": "https://fgk.chinatax.gov.cn/example",
+            "published_on": "2023-08-27",
+            "issuer": "财政部 税务总局",
+            "document_number": "财政部 税务总局公告2023年第39号",
+            "article_refs": ["全文"],
+            "verified_on": "2026-07-29",
+        })
+        value["calculation"]["rate_table"]["entries"][0]["source_document_numbers"] = [
+            "财政部 税务总局公告2023年第39号"
+        ]
+
+        pack = validate_pack_payload(value)
+
+        self.assertEqual(
+            pack.calculation.rate_table.entries[0].source_document_numbers,
+            ("财政部 税务总局公告2023年第39号",),
+        )
+
     def test_schema_1_4_parses_statutory_bracket_table(self) -> None:
         value = statutory_calculation_payload(schema_version="1.4.0")
         value["requirements"] = value["requirements"][:1]

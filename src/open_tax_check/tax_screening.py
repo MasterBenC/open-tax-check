@@ -589,6 +589,32 @@ def _evaluate_selected_packs(
         return _blocked_result(
             tax_id, "invalid_evaluator_outcome", pack_ids, pack_versions, sources
         )
+    relevant_sources = sources
+    if outcome.calculation is not None and outcome.calculation.rate_selector is not None:
+        rate_entries = tuple(
+            entry
+            for pack in selected_packs
+            if pack.calculation is not None and pack.calculation.rate_table is not None
+            for entry in pack.calculation.rate_table.entries
+        )
+        selector_bound_documents = {
+            document_number
+            for entry in rate_entries
+            for document_number in entry.source_document_numbers
+        }
+        selected_documents = {
+            document_number
+            for entry in rate_entries
+            if entry.selector == outcome.calculation.rate_selector
+            for document_number in entry.source_document_numbers
+        }
+        if selector_bound_documents:
+            relevant_sources = tuple(
+                source
+                for source in sources
+                if source.document_number not in selector_bound_documents
+                or source.document_number in selected_documents
+            )
     return TaxResult(
         tax_id=tax_id,
         status=outcome.status,
@@ -596,7 +622,7 @@ def _evaluate_selected_packs(
         rule_pack_versions=pack_versions,
         diagnostics=outcome.diagnostics,
         evidence_refs=outcome.evidence_refs,
-        rule_sources=sources,
+        rule_sources=relevant_sources,
         calculation=outcome.calculation,
     )
 

@@ -201,6 +201,7 @@ class StatutoryRateEntry:
     rate: str
     maximum_tax_base: str | None = None
     maximum_deductions: str | None = None
+    source_document_numbers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_identifier(self.selector)
@@ -228,6 +229,16 @@ class StatutoryRateEntry:
                 raise ValueError("invalid_statutory_rate_entry") from error
             if not maximum_deductions.is_finite() or maximum_deductions < 0:
                 raise ValueError("invalid_statutory_rate_entry")
+        source_document_numbers = tuple(self.source_document_numbers)
+        if (
+            any(
+                not isinstance(document_number, str) or not document_number.strip()
+                for document_number in source_document_numbers
+            )
+            or len(set(source_document_numbers)) != len(source_document_numbers)
+        ):
+            raise ValueError("invalid_statutory_rate_entry")
+        object.__setattr__(self, "source_document_numbers", source_document_numbers)
 
 
 @dataclass(frozen=True, slots=True)
