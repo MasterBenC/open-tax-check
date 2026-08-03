@@ -8,6 +8,7 @@
   ],
   "unreviewed_candidate_count": 0,
   "confirmation_event_count": 0,
+  "confirmation_events": [],
   "message_zh": "以下税种不适用。",
   "declared_artifacts": [],
   "existing_paths": [],

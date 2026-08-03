@@ -8,6 +8,7 @@
   ],
   "unreviewed_candidate_count": 2,
   "confirmation_event_count": 0,
+  "confirmation_events": [],
   "message_zh": "检查已完成，已确认风险和疑似事实。",
   "declared_artifacts": ["request.json"],
   "existing_paths": [],

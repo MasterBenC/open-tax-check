@@ -26,5 +26,67 @@ def test_hermes_cannot_close_missing_evidence_as_not_applicable():
     assert "unresolved_tax_closed_by_host" in validate_host_message(payload)
 
 
-def test_customer_handoff_requires_the_declared_schema():
-    assert validate_customer_handoff({"schema_version": "tax-customer-handoff/v1"}) is None
+def test_host_cannot_self_declare_completion_with_pending_tasks():
+    payload = load_host_fixture("workbuddy-overclaim.json") | {"case_status": "completed"}
+
+    assert "completion_overclaim" in validate_host_message(payload)
+
+
+def test_missing_confirmation_count_fails_closed():
+    payload = load_host_fixture("workbuddy-overclaim.json")
+    payload.pop("confirmation_event_count")
+
+    assert validate_host_message(payload) == (
+        "invalid_confirmation_event_count",
+    )
+
+
+def test_host_message_rejects_malformed_or_missing_authoritative_lists():
+    payload = load_host_fixture("hermes-overclaim.json")
+
+    assert validate_host_message(payload | {"declared_artifacts": ["request.json", {}]}) == (
+        "invalid_declared_artifacts",
+    )
+    assert validate_host_message(payload | {"existing_paths": {"request.json"}}) == (
+        "invalid_existing_paths",
+    )
+    assert validate_host_message(payload | {"unresolved_tax_ids": [["tax-01"]]}) == (
+        "invalid_unresolved_tax_ids",
+    )
+    assert validate_host_message(payload | {"host_declared_not_applicable_tax_ids": None}) == (
+        "invalid_host_declared_not_applicable_tax_ids",
+    )
+    for field, issue in (
+        ("declared_artifacts", "invalid_declared_artifacts"),
+        ("existing_paths", "invalid_existing_paths"),
+        ("unresolved_tax_ids", "invalid_unresolved_tax_ids"),
+        (
+            "host_declared_not_applicable_tax_ids",
+            "invalid_host_declared_not_applicable_tax_ids",
+        ),
+    ):
+        incomplete = payload.copy()
+        incomplete.pop(field)
+        assert validate_host_message(incomplete) == (issue,)
+
+
+def test_customer_handoff_allows_only_customer_answers_evidence_and_identity():
+    handoff = {
+        "schema_version": "tax-customer-handoff/v1",
+        "customer_answers": {"entity.vat_registration": "general"},
+        "evidence_references": ["evidence/tax-return.pdf"],
+        "customer_identity": {"customer_id": "customer-001"},
+    }
+
+    assert validate_customer_handoff(handoff) is None
+    for field in (
+        "confirmation_event_count",
+        "local_policy_facts",
+        "rates",
+        "mappings",
+        "case_status",
+        "tax_conclusions",
+    ):
+        assert validate_customer_handoff(handoff | {field: "host-claim"}) == (
+            "unknown_or_host_owned_handoff_field"
+        )
