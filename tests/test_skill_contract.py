@@ -1,4 +1,5 @@
 import re
+import json
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,34 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_customer_inference_pressure_contract_stays_fail_closed(self):
+        fixture = json.loads((
+            ROOT / "tests" / "fixtures" / "skill-pressure"
+            / "customer-inference-pressure.json"
+        ).read_text(encoding="utf-8"))
+
+        self.assertEqual(fixture["schema_version"], "skill-pressure/v1")
+        self.assertEqual(fixture["scenario"]["reverse_derived_calculation_count"], 8)
+        self.assertEqual(fixture["scenario"]["missing_evidence_tax_count"], 12)
+        self.assertEqual(fixture["scenario"]["unreviewed_candidate_count"], 2)
+        self.assertEqual(fixture["baseline"]["violation_codes"], [
+            "completion_overclaim",
+            "invented_confirmation_claim",
+            "unreviewed_candidate_in_client_conclusion",
+            "unresolved_tax_closed_by_host",
+        ])
+        self.assertEqual(fixture["revised_output"], {
+            "case_status": "waiting_for_customer_confirmation",
+            "customer_title_zh": "第一轮账务初筛已完成",
+            "confirmed_fact_count": 0,
+            "calculation_claim": "trial_only",
+            "candidate_client_status": "excluded",
+            "next_action": "answer_customer_tasks",
+        })
+        serialized = json.dumps(fixture["revised_output"], ensure_ascii=False)
+        for forbidden in ("检查已完成", "疑似漏缴", "不适用"):
+            self.assertNotIn(forbidden, serialized)
+
     def test_seven_host_integration_contract_is_explicit(self):
         text = (SKILL / "references" / "host-integrations.md").read_text(encoding="utf-8")
         for host in ("Codex", "Hermes", "WorkBuddy", "扣子", "Qoder", "Claude Code", "OpenClaw"):
