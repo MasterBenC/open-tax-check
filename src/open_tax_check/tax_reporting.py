@@ -14,7 +14,8 @@ import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .schemas import to_dict
-from .tax_models import Limitation, Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
+from .report_view import effective_limitations
+from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
 
 
@@ -46,31 +47,6 @@ _FORMULA_LABELS_ZH = {
     "generic.base_times_applicable_parameter.v1": "已确认计税依据乘适用计税参数",
     "generic.base_times_rate_minus_confirmed_deduction.v1": "增值额乘确认税率后减确认速算扣除额",
 }
-
-
-def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
-    """Combine explicit limitations with deterministic gaps visible in the snapshot."""
-
-    reserved_codes = {"pending_customer_evidence", "unresolved_tax_scope"}
-    limitations = [
-        item for item in snapshot.limitations if item.code not in reserved_codes
-    ]
-    if snapshot.questions:
-        limitations.append(Limitation(
-            "pending_customer_evidence",
-            f"当前仍有 {len(snapshot.questions)} 项客户确认或补充资料事项，相关税种尚未形成确定结论。",
-        ))
-    unresolved = tuple(
-        result
-        for result in snapshot.results
-        if result.status in {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY}
-    )
-    if unresolved:
-        limitations.append(Limitation(
-            "unresolved_tax_scope",
-            f"当前有 {len(unresolved)} 个税种仍受资料或当地政策限制，本次未形成最终判断。",
-        ))
-    return tuple(limitations)
 
 
 def tax_snapshot_payload(snapshot: TaxCheckSnapshot) -> dict[str, object]:
