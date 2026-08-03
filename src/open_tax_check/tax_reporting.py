@@ -15,6 +15,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .schemas import to_dict
 from .report_view import ReportView, build_report_view, effective_limitations
+from .docx_report import build_docx_parts
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
 
@@ -422,10 +423,10 @@ def write_tax_health_report_docx(snapshot: TaxCheckSnapshot, path: Path) -> Path
         with tempfile.NamedTemporaryFile("wb", dir=path.parent, suffix=".tmp", delete=False) as handle:
             temporary_path = Path(handle.name)
         with ZipFile(temporary_path, "w", compression=ZIP_DEFLATED) as archive:
-            for name, content in _docx_parts(render_tax_health_report(snapshot)).items():
+            for name, content in build_docx_parts(build_report_view(snapshot)).items():
                 info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = ZIP_DEFLATED
-                archive.writestr(info, content.encode("utf-8"))
+                archive.writestr(info, content)
         os.replace(temporary_path, path)
     finally:
         if temporary_path is not None and temporary_path.exists():
