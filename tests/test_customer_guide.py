@@ -108,7 +108,7 @@ def test_initialized_case_without_profile_can_be_completed_without_rewriting_sco
 
     assert result["schema_version"] == "customer-profile/v1"
     assert (case_dir / "state.json").read_bytes() == state_before
-    assert build_case_guide(case_dir)["stage"] == "ready_for_materials"
+    assert build_case_guide(case_dir)["stage"] == "awaiting_documents"
 
 
 def test_invalid_stored_profile_can_be_repaired_without_rewriting_scope(tmp_path: Path) -> None:
@@ -152,3 +152,33 @@ def test_empty_case_directory_is_initialized_as_a_new_case(tmp_path: Path) -> No
     start_case_from_profile(case_dir, _profile())
 
     assert json.loads((case_dir / "state.json").read_text(encoding="utf-8"))["status"] == "ready_for_input"
+
+
+def test_profile_creates_progressive_material_groups(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    start_case_from_profile(case_dir, _profile())
+
+    guide = build_case_guide(case_dir)
+
+    assert guide["stage"] == "awaiting_documents"
+    assert [item["group_id"] for item in guide["document_groups"]] == [
+        "minimum_to_start",
+        "recommended_if_available",
+        "conditional_business_materials",
+    ]
+    assert "序时账或明细账" in guide["document_groups"][0]["items_zh"]
+    assert "契税" not in guide["document_groups"][0]["items_zh"]
+    assert guide["privacy_zh"]
+    assert guide["disclaimer_zh"]
+    assert len(guide["profile_digest"]) == 64
+
+
+def test_every_guide_stage_contains_privacy_and_disclaimer(tmp_path: Path) -> None:
+    welcome = build_case_guide(tmp_path / "missing")
+    case_dir = tmp_path / "case"
+    init_case(case_dir, "示例科技有限公司", "2025-01-01", "2025-12-31")
+    awaiting_profile = build_case_guide(case_dir)
+
+    for guide in (welcome, awaiting_profile):
+        assert guide["privacy_zh"]
+        assert "不代表" in guide["disclaimer_zh"]

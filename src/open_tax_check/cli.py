@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 from .case import init_case, resolve_safe_case_path, set_case_scope
+from .customer_guide import build_case_guide, start_case_from_profile
 from .case_orchestration import (
     apply_case_confirmations,
     build_case_customer_tasks,
@@ -205,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--entity", required=True)
     init_parser.add_argument("--period-start")
     init_parser.add_argument("--period-end")
+    guide_parser = subparsers.add_parser("case-guide", help="Read the customer-facing case guide")
+    guide_parser.add_argument("--case", required=True, type=Path)
+    start_parser = subparsers.add_parser("case-start", help="Start or resume a case from a customer profile")
+    start_parser.add_argument("--case", required=True, type=Path)
+    start_parser.add_argument("--profile", required=True, type=Path)
     set_scope_parser = subparsers.add_parser("set-scope", help="Set the case review period")
     set_scope_parser.add_argument("--case", required=True, type=Path)
     set_scope_parser.add_argument("--period-start", required=True)
@@ -313,6 +319,35 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
+        return 0
+    if args.command == "case-guide":
+        try:
+            result = build_case_guide(args.case)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {"unsafe_case_path", "invalid_case_state"}
+            error_code = str(error) if str(error) in allowed else "case_guide_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "case-start":
+        try:
+            profile_path = resolve_safe_source(args.profile, args.profile.parent)
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            if not isinstance(profile, dict):
+                raise ValueError("invalid_customer_profile")
+            start_case_from_profile(args.case, profile)
+            result = build_case_guide(args.case)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {
+                "invalid_entity_name", "invalid_province_city", "invalid_primary_business",
+                "invalid_review_period", "review_period_out_of_range", "invalid_vat_taxpayer_type",
+                "invalid_customer_profile", "case_period_mismatch", "invalid_case_state", "unsafe_case_path",
+            }
+            error_code = str(error) if str(error) in allowed else "case_start_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(result, ensure_ascii=False))
         return 0
     if args.command == "set-scope":
         print(json.dumps(set_case_scope(args.case, args.period_start, args.period_end), ensure_ascii=False))
