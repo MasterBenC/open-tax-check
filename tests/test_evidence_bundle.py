@@ -503,6 +503,7 @@ def test_manifest_nested_payloads_are_allowlisted_and_zip_hash_stays_external(tm
         "jurisdiction",
         "snapshot_schema_version",
         "snapshot_revision",
+        "report_schema_version",
         "includes_evidence_files",
         "evidence_items",
         "confirmed_fact_bindings",
@@ -559,9 +560,14 @@ def test_manifest_nested_payloads_are_allowlisted_and_zip_hash_stays_external(tm
         },
     ]
     assert all(
-        set(item) == {"kind", "archive_path", "sha256", "size_bytes"}
+        set(item) == {
+            "kind", "archive_path", "sha256", "size_bytes",
+            "snapshot_revision", "report_schema_version",
+        }
         for item in manifest["artifacts"]
     )
+    assert manifest["report_schema_version"] == "tax-health-report/v2"
+    assert {item["snapshot_revision"] for item in manifest["artifacts"]} == {1}
     assert manifest["audit_events"] == [
         {
             "event_type": "confirmation_applied",

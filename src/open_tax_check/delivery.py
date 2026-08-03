@@ -40,6 +40,7 @@ from .workpaper import WORKPAPER_NAME, write_tax_health_workpaper
 
 
 DELIVERY_SCHEMA_VERSION = "tax-delivery/v1"
+REPORT_SCHEMA_VERSION = "tax-health-report/v2"
 DELIVERY_POINTER_NAME = "delivery.json"
 DELIVERY_DIR_NAME = "deliveries"
 _CASE_AUDIT_JSON_LIMIT = 2 * 1024 * 1024
@@ -203,12 +204,14 @@ def _verified_evidence(root: Path, snapshot: TaxCheckSnapshot, manifest: dict[st
     return VerifiedEvidenceSet(tuple(verified), total)
 
 
-def _artifact_record(kind: str, path: Path, root: Path) -> dict[str, object]:
+def _artifact_record(kind: str, path: Path, root: Path, snapshot_revision: int) -> dict[str, object]:
     return {
         "kind": kind,
         "relative_path": path.relative_to(root).as_posix(),
         "sha256": _sha256(path),
         "size_bytes": path.stat().st_size,
+        "snapshot_revision": snapshot_revision,
+        "report_schema_version": REPORT_SCHEMA_VERSION,
     }
 
 
@@ -297,7 +300,11 @@ def _manifest_for_directory(path: Path) -> dict[str, object]:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         raise DeliveryError("delivery_manifest_invalid") from None
-    if not isinstance(payload, dict) or payload.get("schema_version") != DELIVERY_SCHEMA_VERSION:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != DELIVERY_SCHEMA_VERSION
+        or payload.get("report_schema_version") != REPORT_SCHEMA_VERSION
+    ):
         raise DeliveryError("delivery_manifest_invalid")
     return payload
 
@@ -315,6 +322,7 @@ def _verify_delivery_artifacts(
         relative_path = item.get("relative_path")
         size_bytes = item.get("size_bytes")
         expected_sha256 = item.get("sha256")
+        snapshot_revision = item.get("snapshot_revision")
         if (
             not isinstance(relative_path, str)
             or not relative_path
@@ -325,6 +333,8 @@ def _verify_delivery_artifacts(
             or size_bytes < 0
             or not isinstance(expected_sha256, str)
             or _SHA256_RE.fullmatch(expected_sha256) is None
+            or snapshot_revision != manifest.get("snapshot_revision")
+            or item.get("report_schema_version") != REPORT_SCHEMA_VERSION
         ):
             raise DeliveryError("delivery_artifact_invalid")
         relative = Path(relative_path)
@@ -381,6 +391,7 @@ def _delivery_options(*, include_pdf: bool, include_evidence_files: bool) -> dic
 def _pointer_payload(root: Path, manifest: dict[str, object], revision_path: Path) -> dict[str, object]:
     return {
         "schema_version": DELIVERY_SCHEMA_VERSION,
+        "report_schema_version": REPORT_SCHEMA_VERSION,
         "revision": manifest["revision"],
         "status": manifest["status"],
         "manifest_path": (Path("work") / DELIVERY_DIR_NAME / revision_path.name / "delivery-manifest.json").as_posix(),
@@ -530,7 +541,7 @@ def build_case_delivery(
             except PdfExportUnavailable as error:
                 pdf_status = str(error)
         pre_handoff_records = [
-            _artifact_record(kind, path, temporary_directory)
+            _artifact_record(kind, path, temporary_directory, snapshot.revision)
             for kind, path in (
                 ("markdown_report", report_path),
                 ("docx_report", docx_path),
@@ -540,7 +551,7 @@ def build_case_delivery(
         ]
         if include_pdf and pdf_path.is_file():
             pre_handoff_records.append(
-                _artifact_record("pdf_report", pdf_path, temporary_directory)
+                _artifact_record("pdf_report", pdf_path, temporary_directory, snapshot.revision)
             )
         revision_prefix = Path("work") / DELIVERY_DIR_NAME / f"revision-{snapshot.revision:04d}"
         handoff_artifacts = tuple(
@@ -574,7 +585,7 @@ def build_case_delivery(
 
         snapshot_digest = _snapshot_digest(snapshot)
         artifact_records = [
-            _artifact_record(kind, path, temporary_directory)
+            _artifact_record(kind, path, temporary_directory, snapshot.revision)
             for kind, path in (
                 ("markdown_report", report_path),
                 ("docx_report", docx_path),
@@ -585,9 +596,10 @@ def build_case_delivery(
             )
         ]
         if include_pdf and pdf_path.is_file():
-            artifact_records.append(_artifact_record("pdf_report", pdf_path, temporary_directory))
+            artifact_records.append(_artifact_record("pdf_report", pdf_path, temporary_directory, snapshot.revision))
         manifest = {
             "schema_version": DELIVERY_SCHEMA_VERSION,
+            "report_schema_version": REPORT_SCHEMA_VERSION,
             "revision": snapshot.revision,
             "snapshot_revision": snapshot.revision,
             "snapshot_digest": snapshot_digest,

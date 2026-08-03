@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -52,6 +53,7 @@ def test_case_delivery_publishes_one_revision_for_all_artifacts(tmp_path: Path):
     result = build_case_delivery(case)
 
     assert result["schema_version"] == "tax-delivery/v1"
+    assert result["report_schema_version"] == "tax-health-report/v2"
     assert result["revision"] == 1
     assert result["status"] == "verified"
     manifest_path = case / result["manifest_path"]
@@ -61,10 +63,14 @@ def test_case_delivery_publishes_one_revision_for_all_artifacts(tmp_path: Path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["revision"] == 1
     assert manifest["snapshot_revision"] == 1
+    assert manifest["report_schema_version"] == "tax-health-report/v2"
     assert {item["kind"] for item in manifest["artifacts"]} >= {
         "markdown_report", "docx_report", "workpaper", "machine_snapshot", "evidence_bundle",
     }
     for item in manifest["artifacts"]:
+        assert item["snapshot_revision"] == result["revision"]
+        assert item["report_schema_version"] == "tax-health-report/v2"
+        assert re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
         artifact = case / result["revision_path"] / item["relative_path"]
         assert artifact.is_file()
         assert item["sha256"]

@@ -460,6 +460,7 @@ def _stage_members(
 def _artifact_payloads(
     artifacts: tuple[BundleArtifact, ...],
     staged_members: dict[str, _StagedMember],
+    snapshot_revision: int,
 ) -> list[dict[str, object]]:
     payloads: list[dict[str, object]] = []
     for artifact in sorted(artifacts, key=lambda item: item.archive_path):
@@ -469,6 +470,8 @@ def _artifact_payloads(
             "archive_path": artifact.archive_path,
             "sha256": staged.sha256,
             "size_bytes": staged.size_bytes,
+            "snapshot_revision": snapshot_revision,
+            "report_schema_version": "tax-health-report/v2",
         })
     return payloads
 
@@ -512,7 +515,7 @@ def _manifest_payload(
             or staged.size_bytes != expected_size_bytes
         ):
             raise ValueError("verified_evidence_source_changed")
-    artifact_payloads = _artifact_payloads(artifacts, staged_members)
+    artifact_payloads = _artifact_payloads(artifacts, staged_members, snapshot.revision)
     payload = {
         "schema_version": BUNDLE_SCHEMA_VERSION,
         "generator_version": importlib.metadata.version("open-tax-check"),
@@ -523,6 +526,7 @@ def _manifest_payload(
         "jurisdiction": snapshot.request.jurisdiction,
         "snapshot_schema_version": snapshot.schema_version,
         "snapshot_revision": snapshot.revision,
+        "report_schema_version": "tax-health-report/v2",
         "includes_evidence_files": include_evidence_files,
         "evidence_items": evidence_items,
         "confirmed_fact_bindings": _confirmed_fact_bindings(snapshot),
