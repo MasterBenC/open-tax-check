@@ -1,0 +1,84 @@
+from datetime import date
+from pathlib import Path
+
+import pytest
+from pypdf import PdfReader
+
+from open_tax_check.pdf_report import (
+    PdfExportUnavailable,
+    validate_report_pdf,
+    write_report_pdf,
+)
+from open_tax_check.report_view import build_report_view_v3
+from open_tax_check.tax_models import DateRange, TaxCheckRequest, TaxCheckSnapshot
+
+
+def _view(*, entity_name: str = "虚构科技有限公司"):
+    snapshot = TaxCheckSnapshot(
+        request=TaxCheckRequest(
+            DateRange(date(2026, 1, 1), date(2026, 12, 31)),
+            "CN",
+        ),
+        results=(),
+        questions=(),
+        audit_events=(),
+        revision=3,
+    )
+    return build_report_view_v3(
+        snapshot,
+        entity_name=entity_name,
+        reviewed_findings=({
+            "finding_id": "f-entertainment",
+            "title_zh": "业务招待费扣除核对",
+            "severity": "high",
+            "tax_ids": ("enterprise_income_tax",),
+            "review_state": "approved",
+            "observed_zh": "账载金额需要与销售收入限额重新核对。",
+        },),
+    )
+
+
+def test_renderer_unavailable_leaves_no_customer_file(tmp_path: Path, monkeypatch):
+    output = tmp_path / "税务健康检查报告.pdf"
+    monkeypatch.setattr("open_tax_check.pdf_report.sync_playwright", None)
+
+    with pytest.raises(PdfExportUnavailable, match="^pdf_renderer_unavailable$"):
+        write_report_pdf(_view(), output)
+
+    assert not output.exists()
+    assert not tuple(tmp_path.glob(".*.tmp"))
+
+
+def test_validation_rejects_malformed_pdf(tmp_path: Path):
+    path = tmp_path / "report.pdf"
+    path.write_bytes(b"%PDF-1.7\nnot-a-pdf")
+
+    with pytest.raises(PdfExportUnavailable, match="^pdf_validation_failed$"):
+        validate_report_pdf(path, "THR-20260101-20261231-R0003")
+
+
+def test_real_chromium_pdf_is_valid_and_contains_customer_identity(tmp_path: Path):
+    output = tmp_path / "税务健康检查报告.pdf"
+
+    assert write_report_pdf(_view(), output) == output
+
+    reader = PdfReader(output)
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert len(reader.pages) > 0
+    assert "税务健康检查报告" in text
+    assert "THR-20260101-20261231-R0003" in text
+    assert "虚构科技有限公司" in text
+    assert reader.outline
+
+
+def test_renderer_blocks_external_resource_before_publication(tmp_path: Path, monkeypatch):
+    output = tmp_path / "report.pdf"
+    monkeypatch.setattr(
+        "open_tax_check.pdf_report.render_report_html",
+        lambda _view: '<html><body><img src="https://evil.example/pixel.png"></body></html>',
+    )
+
+    with pytest.raises(PdfExportUnavailable, match="^pdf_external_resource_blocked$"):
+        write_report_pdf(_view(), output)
+
+    assert not output.exists()

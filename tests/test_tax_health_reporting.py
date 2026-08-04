@@ -437,59 +437,44 @@ class TaxHealthReportingTests(unittest.TestCase):
                     )[1].split("</w:style>", 1)[0]
                     self.assertIn("<w:keepNext/>", style)
 
-    def test_pdf_export_reports_missing_renderer_explicitly(self) -> None:
-        from open_tax_check import tax_reporting
-        from unittest.mock import patch
-
-        with patch.object(tax_reporting.shutil, "which", return_value=None):
-            with self.assertRaisesRegex(RuntimeError, "pdf_renderer_unavailable"):
-                write_tax_health_report_pdf(snapshot_with_every_status(), "report.pdf")
-
-    def test_pdf_export_uses_ascii_temporary_names_for_windows_renderers(self) -> None:
-        import subprocess
+    def test_pdf_export_builds_v3_view_and_delegates_to_chromium_renderer(self) -> None:
         import tempfile
         from pathlib import Path
         from unittest.mock import patch
 
         from open_tax_check import tax_reporting
 
-        def render(command, **kwargs):
-            source = Path(command[-1])
-            if source.name.isascii():
-                source.with_suffix(".pdf").write_bytes(b"%PDF-1.7\n")
-            return subprocess.CompletedProcess(command, 0, "", "")
+        captured = {}
+
+        def render(view, path):
+            captured["view"] = view
+            Path(path).write_bytes(b"%PDF-1.7\n")
+            return Path(path)
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "税务健康检查报告.pdf"
-            with (
-                patch.object(tax_reporting.shutil, "which", return_value="soffice"),
-                patch.object(tax_reporting.subprocess, "run", side_effect=render),
-            ):
+            with patch.object(tax_reporting, "write_report_pdf", side_effect=render):
                 self.assertEqual(
-                    write_tax_health_report_pdf(snapshot_with_every_status(), path),
+                    write_tax_health_report_pdf(
+                        snapshot_with_every_status(),
+                        path,
+                        entity_name="虚构科技有限公司",
+                        material_statuses=({
+                            "source_id": "cit-return",
+                            "status": "received_pending",
+                        },),
+                    ),
                     path,
                 )
             self.assertEqual(path.read_bytes(), b"%PDF-1.7\n")
-
-    def test_pdf_export_reports_renderer_timeout_explicitly(self) -> None:
-        import subprocess
-        from unittest.mock import patch
-
-        from open_tax_check import tax_reporting
-
-        with (
-            patch.object(tax_reporting.shutil, "which", return_value="soffice"),
-            patch.object(
-                tax_reporting.subprocess,
-                "run",
-                side_effect=subprocess.TimeoutExpired("soffice", 120),
-            ),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "pdf_render_timeout"):
-                write_tax_health_report_pdf(
-                    snapshot_with_every_status(),
-                    "税务健康检查报告.pdf",
-                )
+            self.assertEqual(
+                captured["view"].executive_summary.entity_name,
+                "虚构科技有限公司",
+            )
+            self.assertEqual(
+                captured["view"].materials[0].status_zh,
+                "已收到待处理",
+            )
 
 
 if __name__ == "__main__":
