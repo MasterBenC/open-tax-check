@@ -137,6 +137,18 @@ def test_existing_case_rejects_profile_with_a_different_review_period(tmp_path: 
     assert not (case_dir / "work" / "customer-profile.json").exists()
 
 
+def test_existing_case_rejects_profile_for_a_different_entity(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    init_case(case_dir, "示例科技有限公司", "2025-01-01", "2025-12-31")
+    state_before = (case_dir / "state.json").read_bytes()
+
+    with pytest.raises(ValueError, match="^case_entity_mismatch$"):
+        start_case_from_profile(case_dir, _profile(entity_name="另一家公司"))
+
+    assert (case_dir / "state.json").read_bytes() == state_before
+    assert not (case_dir / "work" / "customer-profile.json").exists()
+
+
 def test_profile_accepts_both_formal_period_endpoints(tmp_path: Path) -> None:
     result = start_case_from_profile(
         tmp_path / "case",

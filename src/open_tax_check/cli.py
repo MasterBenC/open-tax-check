@@ -342,7 +342,8 @@ def main() -> int:
             allowed = {
                 "invalid_entity_name", "invalid_province_city", "invalid_primary_business",
                 "invalid_review_period", "review_period_out_of_range", "invalid_vat_taxpayer_type",
-                "invalid_customer_profile", "case_period_mismatch", "invalid_case_state", "unsafe_case_path",
+                "invalid_customer_profile", "case_period_mismatch", "case_entity_mismatch",
+                "invalid_case_state", "unsafe_case_path",
             }
             error_code = str(error) if str(error) in allowed else "case_start_failed"
             print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))

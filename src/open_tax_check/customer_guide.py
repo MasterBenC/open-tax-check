@@ -164,6 +164,8 @@ def _ensure_existing_case_period(root: Path, profile: CustomerProfile) -> None:
         "end": profile.period_end.isoformat(),
     }:
         raise ValueError("case_period_mismatch")
+    if state.get("entity_name") != profile.entity_name:
+        raise ValueError("case_entity_mismatch")
 
 
 def start_case_from_profile(case_dir: Path, profile: Mapping[str, object]) -> dict[str, object]:
