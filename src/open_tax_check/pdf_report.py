@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from base64 import b64encode
+from functools import lru_cache
 from html import escape
+from importlib import resources
 import os
 from pathlib import Path
 import tempfile
-
-from pypdf import PdfReader
 
 from .html_report import render_report_html
 from .report_view import ReportViewV3
@@ -59,6 +60,8 @@ def validate_report_pdf(path: Path, expected_report_id: str) -> None:
     """Reject a PDF that lacks the bounded customer-report structure."""
 
     try:
+        from pypdf import PdfReader
+
         reader = PdfReader(Path(path), strict=True)
         if reader.is_encrypted:
             raise ValueError("encrypted_pdf")
@@ -77,12 +80,28 @@ def validate_report_pdf(path: Path, expected_report_id: str) -> None:
         raise PdfExportUnavailable("pdf_validation_failed") from error
 
 
+@lru_cache(maxsize=1)
+def _header_footer_font_style() -> str:
+    font = resources.files("open_tax_check.report_assets").joinpath(
+        "fonts/NotoSansSC-VF.ttf"
+    ).read_bytes()
+    encoded = b64encode(font).decode("ascii")
+    return (
+        '<style>@font-face{font-family:"OpenTaxCheck Sans";'
+        f'src:url("data:font/ttf;base64,{encoded}") format("truetype");'
+        'font-style:normal;font-weight:100 900}'
+        '*{font-family:"OpenTaxCheck Sans"}</style>'
+    )
+
+
 def _header_template(view: ReportViewV3) -> str:
     entity = escape(view.executive_summary.entity_name or "未命名企业", quote=True)
     period = escape(view.meta.period_zh, quote=True)
     return (
+        _header_footer_font_style()
+        +
         '<div style="width:100%;font-size:8px;color:#64727d;padding:0 16mm;'
-        'font-family:sans-serif;display:flex;justify-content:space-between">'
+        'font-family:"OpenTaxCheck Sans";display:flex;justify-content:space-between">'
         f'<span>{entity}</span><span>{period}</span></div>'
     )
 
@@ -90,8 +109,10 @@ def _header_template(view: ReportViewV3) -> str:
 def _footer_template(view: ReportViewV3) -> str:
     report_id = escape(view.meta.report_id, quote=True)
     return (
+        _header_footer_font_style()
+        +
         '<div style="width:100%;font-size:8px;color:#64727d;padding:0 16mm;'
-        'font-family:sans-serif;display:flex;justify-content:space-between">'
+        'font-family:"OpenTaxCheck Sans";display:flex;justify-content:space-between">'
         f'<span>保密文件 · {report_id}</span>'
         '<span><span class="pageNumber"></span> / <span class="totalPages"></span></span>'
         '</div>'
@@ -133,13 +154,15 @@ def write_report_pdf(view: ReportViewV3, path: Path) -> Path:
                     viewport={"width": 1240, "height": 1754},
                 )
 
-                def block_external(route: object) -> None:
+                def enforce_offline(route: object) -> None:
                     request = route.request  # type: ignore[attr-defined]
+                    if request.url.startswith(("about:", "data:", "blob:")):
+                        route.continue_()  # type: ignore[attr-defined]
+                        return
                     external_requests.append(request.url)
                     route.abort()  # type: ignore[attr-defined]
 
-                page.route("http://**/*", block_external)
-                page.route("https://**/*", block_external)
+                page.route("**/*", enforce_offline)
                 page.set_content(html, wait_until="load", timeout=120_000)
                 if external_requests:
                     raise PdfExportUnavailable("pdf_external_resource_blocked")

@@ -6,6 +6,8 @@ from pypdf import PdfReader
 
 from open_tax_check.pdf_report import (
     PdfExportUnavailable,
+    _footer_template,
+    _header_template,
     validate_report_pdf,
     write_report_pdf,
 )
@@ -82,3 +84,23 @@ def test_renderer_blocks_external_resource_before_publication(tmp_path: Path, mo
         write_report_pdf(_view(), output)
 
     assert not output.exists()
+
+
+def test_renderer_blocks_non_http_external_resource_before_publication(tmp_path: Path, monkeypatch):
+    output = tmp_path / "report.pdf"
+    monkeypatch.setattr(
+        "open_tax_check.pdf_report.render_report_html",
+        lambda _view: '<html><body><img src="ftp://evil.example/pixel.png"></body></html>',
+    )
+
+    with pytest.raises(PdfExportUnavailable, match="^pdf_external_resource_blocked$"):
+        write_report_pdf(_view(), output)
+
+    assert not output.exists()
+
+
+def test_header_and_footer_embed_the_controlled_chinese_font():
+    for template in (_header_template(_view()), _footer_template(_view())):
+        assert '@font-face' in template
+        assert 'data:font/ttf;base64,' in template
+        assert 'font-family:"OpenTaxCheck Sans"' in template
