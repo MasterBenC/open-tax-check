@@ -94,6 +94,16 @@ class ReleaseValidationTests(unittest.TestCase):
         sdist_members=(),
         include_self_service_contracts=True,
     ):
+        wheel_members = tuple(wheel_members) + (
+            "open_tax_check/report_assets/report.css",
+            "open_tax_check/report_assets/fonts/NotoSansSC-VF.ttf",
+            "open_tax_check/report_assets/fonts/OFL.txt",
+        )
+        sdist_members = tuple(sdist_members) + (
+            "open_tax_check-1.0.0/src/open_tax_check/report_assets/report.css",
+            "open_tax_check-1.0.0/src/open_tax_check/report_assets/fonts/NotoSansSC-VF.ttf",
+            "open_tax_check-1.0.0/src/open_tax_check/report_assets/fonts/OFL.txt",
+        )
         if include_self_service_contracts:
             wheel_members = tuple(wheel_members) + (
                 "open_tax_check/external_providers.py",
@@ -387,6 +397,23 @@ class ReleaseValidationTests(unittest.TestCase):
             validate_release.DISTRIBUTION_FILE_LIMIT_BYTES,
             1 * 1024 * 1024,
         )
+        self.assertEqual(validate_release.REPORT_FONT_LIMIT_BYTES, 17_775_268)
+        self.assertEqual(
+            validate_release.REPORT_FONT_PATH.as_posix(),
+            "src/open_tax_check/report_assets/fonts/NotoSansSC-VF.ttf",
+        )
+
+    def test_report_assets_are_required_in_wheel_and_sdist(self):
+        self.assertTrue({
+            "open_tax_check/report_assets/report.css",
+            "open_tax_check/report_assets/fonts/NotoSansSC-VF.ttf",
+            "open_tax_check/report_assets/fonts/OFL.txt",
+        }.issubset(validate_release.REQUIRED_WHEEL_MEMBERS))
+        self.assertTrue({
+            "src/open_tax_check/report_assets/report.css",
+            "src/open_tax_check/report_assets/fonts/NotoSansSC-VF.ttf",
+            "src/open_tax_check/report_assets/fonts/OFL.txt",
+        }.issubset(validate_release.REQUIRED_SDIST_MEMBER_SUFFIXES))
 
     def test_ci_builds_before_strict_release_validation(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(
@@ -890,10 +917,7 @@ class ReleaseValidationTests(unittest.TestCase):
                     result, message = self.run_validator(root)
 
                 self.assertEqual(result, 1, message)
-                self.assertIn(
-                    f"构建产物 {name} 超过 1048576 字节",
-                    message,
-                )
+                self.assertIn("invalid distribution artifact", message)
 
     def test_only_exact_fictional_xls_fixture_is_allowed(self):
         fixture = ROOT / "tests/fixtures/fictional-journal.xls"

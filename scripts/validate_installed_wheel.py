@@ -86,7 +86,7 @@ def validate_installed_wheel(distribution: Path, repository: Path = ROOT) -> dic
         )
         python = _python_path(environment)
         subprocess.run(
-            [str(python), "-m", "pip", "install", f"{wheels[0].resolve()}[excel]"],
+            [str(python), "-m", "pip", "install", f"{wheels[0].resolve()}[excel,report]"],
             check=True,
             cwd=root,
             env=_clean_environment(),
@@ -107,6 +107,29 @@ def validate_installed_wheel(distribution: Path, repository: Path = ROOT) -> dic
         origin = Path(json.loads(origin_run.stdout)["origin"])
         if not module_origin_is_isolated(origin, environment, repository):
             raise ValueError("package_not_loaded_from_isolated_site_packages")
+        browser_override = os.environ.get("OPENTAXCHECK_CHROMIUM_EXECUTABLE")
+        if not browser_override:
+            subprocess.run(
+                [str(python), "-m", "playwright", "install", "chromium"],
+                check=True,
+                cwd=root,
+                env=_clean_environment(),
+            )
+        asset_run = subprocess.run(
+            [
+                str(python), "-c",
+                "from importlib import resources; "
+                "r=resources.files('open_tax_check.report_assets'); "
+                "assert r.joinpath('report.css').read_text('utf-8'); "
+                "assert r.joinpath('fonts/OFL.txt').read_text('utf-8'); "
+                "assert r.joinpath('fonts/NotoSansSC-VF.ttf').read_bytes()[:4] in "
+                "(b'\\x00\\x01\\x00\\x00',b'OTTO',b'ttcf',b'true')",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=root,
+            env=_clean_environment(),
+        )
 
         acceptance = root / "acceptance"
         runner = _copy_acceptance_driver(repository, acceptance)
@@ -125,11 +148,18 @@ def validate_installed_wheel(distribution: Path, repository: Path = ROOT) -> dic
         result = json.loads(completed.stdout)
         if result.get("status") != "completed_with_limitations":
             raise ValueError("complete_fixture_did_not_close")
+        pointer = json.loads((case / "work/delivery.json").read_text(encoding="utf-8"))
+        revision = case / pointer["revision_path"]
+        if not (revision / "税务健康检查报告.pdf").is_file():
+            raise ValueError("installed_wheel_pdf_missing")
+        if any(revision.glob("*.docx")):
+            raise ValueError("installed_wheel_docx_present")
         return {
             "status": "verified",
             "python": f"{sys.version_info.major}.{sys.version_info.minor}",
             "module_origin": str(origin),
             "case_status": result["status"],
+            "report_schema_version": pointer["report_schema_version"],
         }
 
 

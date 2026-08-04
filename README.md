@@ -17,7 +17,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目�
 - `--complete` 完整虚构案例覆盖 2023–2026 的序时账、试算平衡表、三张财报、四类申报表、PNG/PDF、客户冲突确认、工作底稿、报告和证据包。
 - Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code、OpenClaw 已提供 host-neutral 离线合同回放，并分别校验不同的目标布局与发现标记；这不运行任何真实宿主，真实宿主运行时验证仍 pending。
 
-Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经结构化导入的资料仍标记为 `present_unparsed`。PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。真实联网 provider 仍需宿主环境单独验证。可验证证据包、中文 DOCX/PDF 正式客户报告、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已经提供；公开路线不代表已经交付的能力，详见 [docs/roadmap.md](docs/roadmap.md)。
+Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经结构化导入的资料仍标记为 `present_unparsed`。AI 智能体优先使用自身 OCR/视觉能力，本地离线 OCR 为可选后备；真实联网 provider 仍需宿主环境单独验证。可验证证据包、中文 PDF 正式客户报告、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已经提供；公开路线不代表已经交付的能力，详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 
@@ -78,7 +78,7 @@ opentaxcheck case-confirm --case .\cases\demo --input .\confirmations.json
 
 私有恢复快照保存在 `work/tax-health-snapshot.private.json`；面向宿主的脱敏快照、中文补件清单和报告分别保存在 `work/tax-health-snapshot.json`、`work/customer-tasks.json` 和 `output/税务健康检查报告.md`。确认回写只接受问题标识、事实键、值、确认人、带时区时间戳和证据引用，不接受宿主提供的案件状态。前置账务或报表勾稽已处于 `blocked_data_quality` 时，命令拒绝生成正常税务报告。
 
-补件完成后，可用 `opentaxcheck case-delivery --case .\\cases\\demo` 发布一个不可变的 `tax-delivery/v1` 修订。交付目录为 `work/deliveries/revision-0001/`（实际编号跟随案件快照），其中的报告、DOCX/PDF、`workpaper.xlsx`、机器快照和证据包都引用同一个快照修订号，并由 `work/delivery.json` 指向。重复调用同一快照和同一 `delivery_options` 幂等；选项变化会显式返回 `delivery_revision_conflict`。`--include-pdf` 没有可用渲染器时交付状态为 `partial`，不会伪造 PDF。
+补件完成后，可用 `opentaxcheck case-delivery --case .\\cases\\demo` 发布一个不可变的 `tax-delivery/v1` 修订。交付目录为 `work/deliveries/revision-0001-report-v3/`（实际编号跟随案件快照），正式客户报告固定为《税务健康检查报告》PDF；HTML、工作底稿、机器快照和证据包仅作内部审计产物。PDF 失败时不会发布修订或更新指针；历史 v2 目录只读保留。
 
 `customer-confirmation:<question_id>` 表示宿主代客户提交的声明引用，只用于记录声明与问题的绑定，不是文件证据、签名或税务事实真实性证明；宿主仍必须向客户展示中文问题并保留限制说明。
 
@@ -125,7 +125,7 @@ python scripts/run_fictional_example.py --output work/fictional-demo
 python scripts/run_fictional_example.py --output work/self-service-v1-demo --complete
 ```
 
-完整模式只生成 `input/journal.xlsx`，不会再复制 `journal.csv`；同时包含试算平衡表、三张结构化财报、增值税/附加税费/企业所得税/个人所得税四类申报、PNG 和 PDF。它会执行客户确认冲突与重新确认，并在 `work/deliveries/revision-*/` 生成 Markdown、DOCX、Excel 工作底稿、机器快照和证据包。请求 PDF 时，如果宿主没有可用的 LibreOffice 渲染器，`delivery-manifest.json` 会如实记录 `status=partial`、`pdf_status=pdf_renderer_unavailable`，不会生成或宣称一个未经验证的 PDF。
+完整模式只生成 `input/journal.xlsx`，不会再复制 `journal.csv`；同时包含试算平衡表、三张结构化财报、增值税/附加税费/企业所得税/个人所得税四类申报、PNG 和 PDF。它会执行客户确认冲突与重新确认，并在 `work/deliveries/revision-*-report-v3/` 生成正式 PDF、内部 HTML、Excel 工作底稿、机器快照和证据包。Chromium 渲染或 PDF 校验失败时不会发布该修订。
 
 完整模式还会把 `welcome → awaiting_documents → check_in_progress → awaiting_customer_input → draft_report_ready` 写入 `work/customer-journey.json`，并验证上传资料后不会重复欢迎开场。报告、客户交付说明、机器快照和交付清单必须使用同一个修订号。
 
@@ -158,7 +158,6 @@ opentaxcheck tax-health-check `
   --output-dir .\output `
   --evidence-manifest .\evidence-manifest.json `
   --evidence-root .\customer-evidence `
-  --include-docx
 ```
 
 `--evidence-manifest` 和 `--evidence-root` 必须同时出现。生成的 `税务健康检查证据包.zip` 默认不复制客户原始证据文件，只保存已验证证据的标识和摘要；只有显式追加 `--include-evidence-files` 时，才会复制经过大小限制、路径安全检查和哈希验证的原件。
@@ -167,7 +166,7 @@ SHA-256 只验证文件身份和完整性，不证明客户陈述属实、纳税
 
 ### 统一税务健康检查交付
 
-`case-delivery` 的活动指针和修订清单只允许指向案件 `work/deliveries/` 下的普通文件。`delivery-manifest.json` 至少包含 `schema_version`、`revision`、`snapshot_revision`、`snapshot_digest`、`delivery_options`、`status`、`pdf_status` 和每个 artifact 的 SHA-256。PDF 渲染未请求时为 `not_requested`；渲染器缺失或失败时为 `partial`，宿主必须如实展示该状态。
+`case-delivery` 的活动指针和修订清单只允许指向案件 `work/deliveries/` 下的普通文件。`delivery-manifest.json` 至少包含 `schema_version`、`revision`、`snapshot_revision`、`snapshot_digest`、`delivery_options`、`status`、`pdf_status` 和每个 artifact 的 SHA-256。v3 的 PDF 必须通过渲染与结构校验后才会得到 `verified` 状态并发布；失败时不留下正式修订或活动指针。
 
 ### 兼容的 CSV `run` 输出
 
@@ -219,9 +218,11 @@ python scripts/replay_host_integrations.py
 
 两个命令只读取 `tests/fixtures/provider-replays/` 和 `tests/fixtures/host-replays/` 中的虚构 JSON，输出机器可读状态；它们不证明真实第三方服务可用，也不上传任何资料。
 
-发行验收在 CI 的 Python 3.11、3.12、3.13 矩阵中运行 `python scripts/validate_installed_wheel.py --dist dist`：脚本创建隔离环境、安装刚构建的 `wheel[excel]`，从不含仓库 `src` 的临时目录运行 `--complete`，并核对 `open_tax_check` 来自该环境的 `site-packages`。完整案例 runner 与虚构 fixture 是仓库验收驱动，按设计不放入 wheel；因此安装 wheel 的普通用户应使用 `opentaxcheck` 入口，只有仓库维护者运行上述验收脚本。
+发行验收在 CI 的 Python 3.11、3.12、3.13 矩阵中运行 `python scripts/validate_installed_wheel.py --dist dist`：脚本创建隔离环境、安装刚构建的 `wheel[excel,report]` 和 Chromium，从不含仓库 `src` 的临时目录运行 `--complete`，并核对 `open_tax_check` 来自该环境的 `site-packages`。完整案例 runner 与虚构 fixture 是仓库验收驱动，按设计不放入 wheel；因此安装 wheel 的普通用户应使用 `opentaxcheck` 入口，只有仓库维护者运行上述验收脚本。
 
-也可以直接使用 CLI 生成首版报告：`opentaxcheck tax-health-check --request request.json --output-dir output/`。请求 JSON 只接受期间、地区、结构化事实和输入哈希；输出为中文 Markdown 报告及机器可读快照。需要 Word 交付物时追加 `--include-docx`；在安装 LibreOffice 的宿主环境中可再追加 `--include-pdf`。DOCX/PDF 与 Markdown 共享同一快照，不会新增税务结论。
+先运行 `pip install "open-tax-check[report]"`，再运行 `python -m playwright install chromium`。随后可用 `opentaxcheck tax-health-check --request request.json --output-dir output/` 生成正式报告。正式客户报告只提供中文 PDF，不提供 Word；HTML、工作底稿、机器快照和证据包属于内部审计产物。
+
+AI 智能体应优先使用自身的云端 OCR/视觉能力读取 PDF、图片和扫描件；本地 OCR 只是没有云端视觉能力时的可选路径。已上传但尚未成功提取的资料必须标记为“已收到待处理”或“提取不完整”，不得写成“未提供”。
 
 通用税额计算内核只接受调用方明确提供、客户确认且带证据引用的计税基础、税目、税率和扣除额。印花税法定税率只按客户确认的精确税目选择；AI 不得自动分类，当前规则包未提供的税率和地方政策不会由程序或 AI 猜测。
 

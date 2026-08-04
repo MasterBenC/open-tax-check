@@ -12,7 +12,7 @@ ROADMAP_MILESTONES = (
     "6. 阶段 5：联网企业数据适配、隐私加固与完整虚构案例 — 安全压缩包、provider 合同离线回放和完整虚构案例已完成；七宿主仅完成 host-neutral 合同回放及宿主专属目标布局/发现标记校验，真实宿主运行时验证仍 pending",
     "7. 阶段 6：公开 v1 发布 — v1.0.0 与 v1.1.0 已发布；当前版本已通过 Windows、macOS、Linux 与 Python 3.11–3.13 的远端 CI",
 )
-LOCAL_OCR_SCOPE_SENTENCE = "PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。"
+LOCAL_OCR_SCOPE_SENTENCE = "AI 智能体优先使用自身 OCR/视觉能力，本地离线 OCR 为可选后备"
 
 
 def current_release_scope(text):
@@ -217,10 +217,9 @@ class PublicRepositoryContractTests(unittest.TestCase):
         for value in (
             "opentaxcheck case-delivery",
             "tax-delivery/v1",
-            "work/deliveries/revision-0001",
-            "workpaper.xlsx",
-            "pdf_status",
-            "partial",
+            "work/deliveries/revision-0001-report-v3",
+            "正式客户报告固定为《税务健康检查报告》PDF",
+            "历史 v2 目录只读保留",
         ):
             with self.subTest(value=value):
                 self.assertIn(value, text)

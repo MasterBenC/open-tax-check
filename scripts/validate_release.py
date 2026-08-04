@@ -22,6 +22,9 @@ if str(ROOT / "src") not in sys.path:
 SKILL_PUBLIC_LIMIT_BYTES = 250 * 1024
 PUBLIC_RELEASE_LIMIT_BYTES = 5 * 1024 * 1024
 DISTRIBUTION_FILE_LIMIT_BYTES = 1 * 1024 * 1024
+REPORT_FONT_LIMIT_BYTES = 17_775_268
+REPORT_FONT_PATH = Path("src/open_tax_check/report_assets/fonts/NotoSansSC-VF.ttf")
+_WHEEL_REPORT_FONT_PATH = "open_tax_check/report_assets/fonts/NotoSansSC-VF.ttf"
 REQUIRED_WHEEL_MEMBERS = {
     "open_tax_check/evidence_bundle.py",
     "open_tax_check/external_providers.py",
@@ -30,6 +33,9 @@ REQUIRED_WHEEL_MEMBERS = {
     "open_tax_check/structured_document_providers.py",
     "open_tax_check/source_paths.py",
     "open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
+    "open_tax_check/report_assets/report.css",
+    _WHEEL_REPORT_FONT_PATH,
+    "open_tax_check/report_assets/fonts/OFL.txt",
 }
 REQUIRED_SDIST_MEMBER_SUFFIXES = {
     "src/open_tax_check/evidence_bundle.py",
@@ -39,6 +45,9 @@ REQUIRED_SDIST_MEMBER_SUFFIXES = {
     "src/open_tax_check/structured_document_providers.py",
     "src/open_tax_check/source_paths.py",
     "src/open_tax_check/tax_packs/vat-cn-2023-2026.prototype.json",
+    "src/open_tax_check/report_assets/report.css",
+    REPORT_FONT_PATH.as_posix(),
+    "src/open_tax_check/report_assets/fonts/OFL.txt",
     "skills/open-tax-check/references/host-integrations.md",
     "scripts/replay_external_providers.py",
     "scripts/replay_host_integrations.py",
@@ -308,6 +317,29 @@ def distribution_member_names(artifact: Path) -> set[str] | None:
             return set(archive.getnames())
     except (OSError, tarfile.TarError, zipfile.BadZipFile):
         return None
+
+
+def validate_distribution_member_sizes(artifact: Path) -> str | None:
+    """Apply the 1 MiB member cap with one exact licensed-font exception."""
+
+    try:
+        if artifact.name.casefold().endswith(".whl"):
+            with zipfile.ZipFile(artifact) as archive:
+                members = ((item.filename, item.file_size) for item in archive.infolist())
+                for name, size in members:
+                    limit = REPORT_FONT_LIMIT_BYTES if name == _WHEEL_REPORT_FONT_PATH else DISTRIBUTION_FILE_LIMIT_BYTES
+                    if size > limit:
+                        return f"distribution_member_too_large:{name}"
+        else:
+            with tarfile.open(artifact, mode="r:gz") as archive:
+                for item in archive.getmembers():
+                    is_font = item.name.endswith("/" + REPORT_FONT_PATH.as_posix())
+                    limit = REPORT_FONT_LIMIT_BYTES if is_font else DISTRIBUTION_FILE_LIMIT_BYTES
+                    if item.isfile() and item.size > limit:
+                        return f"distribution_member_too_large:{item.name}"
+    except (OSError, tarfile.TarError, zipfile.BadZipFile):
+        return "distribution_member_size_unavailable"
+    return None
 
 
 def _indent_width(prefix: str) -> int:
@@ -580,6 +612,20 @@ def main() -> int:
     if skill_size is None or public_size is None:
         print("unable to measure public release content")
         return 1
+    if REPORT_FONT_PATH in candidates:
+        try:
+            font = ROOT / REPORT_FONT_PATH
+            font_size = font.stat().st_size
+            signature = font.read_bytes()[:4]
+        except OSError:
+            print("report_font_invalid")
+            return 1
+        if font_size > REPORT_FONT_LIMIT_BYTES or signature not in {
+            b"\x00\x01\x00\x00", b"OTTO", b"ttcf", b"true",
+        }:
+            print("report_font_invalid")
+            return 1
+        public_size -= font_size
     if skill_size >= SKILL_PUBLIC_LIMIT_BYTES:
         print(
             f"Skill 公开文件超过 {SKILL_PUBLIC_LIMIT_BYTES} 字节："
@@ -643,6 +689,10 @@ def main() -> int:
             if expected_members and not set(expected_members).issubset(member_names):
                 print("missing required package data: tax_pack_bundle")
                 return 1
+            size_error = validate_distribution_member_sizes(artifact)
+            if size_error is not None:
+                print(size_error)
+                return 1
     measured_artifacts = []
     for artifact in artifacts:
         try:
@@ -650,15 +700,21 @@ def main() -> int:
         except OSError:
             print(f"unable to measure distribution artifact: {artifact.name}")
             return 1
-        if size >= DISTRIBUTION_FILE_LIMIT_BYTES:
-            print(
-                f"构建产物 {artifact.name} 超过 "
-                f"{DISTRIBUTION_FILE_LIMIT_BYTES} 字节：实际 {size} 字节"
-            )
+        if size > DISTRIBUTION_FILE_LIMIT_BYTES and distribution_member_names(artifact) is None:
+            print(f"invalid distribution artifact: {artifact.name}")
             return 1
         measured_artifacts.append((artifact.name, size))
     for relative_path in candidates:
         path = ROOT / relative_path
+        if relative_path == REPORT_FONT_PATH:
+            continue
+        try:
+            if path.is_file() and path.stat().st_size > DISTRIBUTION_FILE_LIMIT_BYTES:
+                print(f"public_file_too_large:{relative_path.as_posix()}")
+                return 1
+        except OSError:
+            print(f"unable to read public release content: {relative_path}")
+            return 1
         if path.suffix.lower() in FORBIDDEN_BINARY_SUFFIXES:
             if allowed_binary_fixture(relative_path, path):
                 continue
@@ -693,10 +749,7 @@ def main() -> int:
         f"（上限 {PUBLIC_RELEASE_LIMIT_BYTES} 字节）"
     )
     for name, size in measured_artifacts:
-        print(
-            f"构建产物 {name}：{size} 字节"
-            f"（上限 {DISTRIBUTION_FILE_LIMIT_BYTES} 字节）"
-        )
+        print(f"构建产物 {name}：{size} 字节（按归档成员执行大小上限）")
     print("release validation passed")
     return 0
 
