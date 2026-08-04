@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
+from hashlib import sha256
+import json
 
 from .reporting import select_reportable_findings
 from .tax_models import Limitation, TaxCheckSnapshot, TaxStatus
@@ -11,6 +14,16 @@ from .tax_registry import TAX_DEFINITIONS
 
 
 AMOUNT_DISCLAIMER_ZH = "试算金额不代表应补税额、欠税金额或最终申报金额。"
+REPORT_SCHEMA_VERSION_V3 = "tax-health-report/v3"
+MATERIAL_STATUS_ZH = {
+    "not_provided": "截至报告生成时未收到",
+    "received_pending": "已收到待处理",
+    "extraction_partial": "提取不完整或失败",
+    "contract_invalid": "合同校验失败",
+    "imported_pending_confirmation": "已导入待确认",
+    "imported_reconciled": "已导入并核对",
+}
+RISK_SEVERITY_ORDER = {"high": 0, "medium": 1, "notice": 2}
 _TAX_NAMES = {item.tax_id: item.name_zh for item in TAX_DEFINITIONS}
 
 
@@ -71,6 +84,82 @@ class ReportView:
     limitations_zh: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ReportMeta:
+    schema_version: str
+    report_id: str
+    revision: int
+    period_start: date
+    period_end: date
+    period_zh: str
+
+
+@dataclass(frozen=True, slots=True)
+class RiskOverview:
+    high_count: int
+    medium_count: int
+    notice_count: int
+    material_pending_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class RiskItem:
+    finding_id: str
+    title_zh: str
+    severity: str
+    tax_ids: tuple[str, ...]
+    affected_period_zh: str
+    observed_zh: str
+    why_it_matters_zh: str
+    can_conclude_zh: str
+    cannot_conclude_zh: str
+    required_materials_zh: tuple[str, ...]
+    next_action_zh: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialStatusItem:
+    source_id: str
+    display_name_zh: str
+    status: str
+    status_zh: str
+    tax_ids: tuple[str, ...]
+    impact_zh: str
+
+
+@dataclass(frozen=True, slots=True)
+class PriorityActionItem:
+    priority: int
+    finding_id: str
+    action_zh: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaxCoverageItem:
+    tax_id: str
+    name_zh: str
+    client_state: str
+    executed_checks_zh: tuple[str, ...]
+    triggered_finding_ids: tuple[str, ...]
+    material_limitations_zh: tuple[str, ...]
+    trial_amount: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReportViewV3:
+    meta: ReportMeta
+    report_status_zh: str
+    executive_summary: ExecutiveSummary
+    risk_overview: RiskOverview
+    risks: tuple[RiskItem, ...]
+    materials: tuple[MaterialStatusItem, ...]
+    actions: tuple[PriorityActionItem, ...]
+    tax_coverage: tuple[TaxCoverageItem, ...]
+    appendix_executed_checks: tuple[str, ...]
+    limitations_zh: tuple[str, ...]
+
+
 def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
     """Combine caller limitations with machine-owned current-state limitations."""
 
@@ -123,6 +212,201 @@ def _materials(finding: Mapping[str, object]) -> tuple[str, ...]:
     if not isinstance(value, list | tuple):
         return ()
     return tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
+
+
+def _v3_text(finding: Mapping[str, object], field: str, default: str) -> str:
+    return _text(finding, field, default)
+
+
+def _v3_tax_ids(item: Mapping[str, object]) -> tuple[str, ...]:
+    value = item.get("tax_ids", item.get("tax_id", ()))
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, tuple | list):
+        values = tuple(value)
+    else:
+        return ()
+    return tuple(sorted({tax_id.strip() for tax_id in values if isinstance(tax_id, str) and tax_id.strip()}))
+
+
+def _v3_finding_id(item: Mapping[str, object]) -> str:
+    explicit_id = item.get("finding_id", item.get("id"))
+    if isinstance(explicit_id, str) and explicit_id.strip():
+        return explicit_id.strip()
+    canonical = json.dumps(dict(item), ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+    return f"finding-{sha256(canonical.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _v3_is_approved(item: Mapping[str, object]) -> bool:
+    if item.get("review_state") == "approved":
+        return True
+    return bool(select_reportable_findings([dict(item)]))
+
+
+def _v3_executed_check(result: object) -> str:
+    # TaxResult is deliberately passed as object to keep this formatter private.
+    status = result.status  # type: ignore[attr-defined]
+    if status is TaxStatus.NOT_APPLICABLE:
+        return "已执行适用性判断程序，本次检查范围内未触发异常。"
+    if status is TaxStatus.CALCULATED:
+        return "已执行确定性检查程序并形成试算记录。"
+    if status is TaxStatus.NEEDS_EVIDENCE:
+        return "已执行初步检查程序，因资料不足未形成确定结论。"
+    if status is TaxStatus.NEEDS_LOCAL_POLICY:
+        return "已执行初步检查程序，因当地政策口径待确认未形成确定结论。"
+    return "检查程序被阻断，未形成可执行结论。"
+
+
+def build_report_view_v3(
+    snapshot: TaxCheckSnapshot,
+    *,
+    entity_name: str,
+    reviewed_findings: Sequence[Mapping[str, object]] = (),
+    material_statuses: Sequence[Mapping[str, object]] = (),
+) -> ReportViewV3:
+    """Build the immutable, customer-safe tax-health-report/v3 view."""
+
+    period = snapshot.request.period
+    period_zh = f"{period.start.isoformat()}至{period.end.isoformat()}"
+    risks: list[RiskItem] = []
+    for item in reviewed_findings:
+        if not _v3_is_approved(item):
+            continue
+        severity = item.get("severity", "notice")
+        if severity not in RISK_SEVERITY_ORDER:
+            raise ValueError("unknown_risk_severity")
+        tax_ids = _v3_tax_ids(item)
+        risks.append(RiskItem(
+            finding_id=_v3_finding_id(item),
+            title_zh=_v3_text(item, "title_zh", "待核实事项"),
+            severity=severity,
+            tax_ids=tax_ids,
+            affected_period_zh=_v3_text(item, "affected_period_zh", period_zh),
+            observed_zh=_v3_text(item, "observed_zh", "已记录一项经复核的核对事项。"),
+            why_it_matters_zh=_v3_text(item, "why_it_matters_zh", "该事项可能影响相关税务或账务口径。"),
+            can_conclude_zh=_v3_text(item, "can_conclude_zh", "该事项需要按报告列示的范围和证据继续核实。"),
+            cannot_conclude_zh=_v3_text(item, "cannot_conclude_zh", "现有资料不足以据此认定应补税、欠税或违规。"),
+            required_materials_zh=_materials(item),
+            next_action_zh=_v3_text(item, "next_action_zh", "补充资料后重新核对。"),
+            evidence_refs=_materials({"required_materials_zh": item.get("evidence_refs", ())}),
+        ))
+    ordered_risks = tuple(sorted(
+        risks,
+        key=lambda risk: (
+            RISK_SEVERITY_ORDER[risk.severity], risk.affected_period_zh,
+            risk.tax_ids, risk.finding_id,
+        ),
+    ))
+
+    materials: list[MaterialStatusItem] = []
+    for item in material_statuses:
+        status = item.get("status")
+        if status not in MATERIAL_STATUS_ZH:
+            raise ValueError("unknown_material_status")
+        source_id = _v3_text(item, "source_id", "未命名资料")
+        materials.append(MaterialStatusItem(
+            source_id=source_id,
+            display_name_zh=_v3_text(item, "display_name_zh", source_id),
+            status=status,
+            status_zh=MATERIAL_STATUS_ZH[status],
+            tax_ids=_v3_tax_ids(item),
+            impact_zh=_v3_text(item, "impact_zh", "该资料状态会限制相关检查程序或结论。"),
+        ))
+    ordered_materials = tuple(sorted(materials, key=lambda item: (item.source_id, item.display_name_zh)))
+
+    action_sources = [
+        (risk.finding_id, risk.next_action_zh)
+        for risk in ordered_risks
+    ]
+    action_sources.extend(
+        (f"material:{question.question_id}", f"补充：{question.question_zh or '相关证明资料'}")
+        for question in sorted(
+            snapshot.questions,
+            key=lambda question: (question.priority, question.tax_ids, question.question_id),
+        )
+    )
+    results_by_tax = {result.tax_id: result for result in snapshot.results}
+    material_limitations = {
+        tax_id: tuple(item.status_zh for item in ordered_materials if tax_id in item.tax_ids)
+        for tax_id in _TAX_NAMES
+    }
+    tax_coverage = tuple(
+        TaxCoverageItem(
+            tax_id=definition.tax_id,
+            name_zh=definition.name_zh,
+            client_state=(
+                _client_state(results_by_tax[definition.tax_id].status)
+                if definition.tax_id in results_by_tax else "本次未执行检查"
+            ),
+            executed_checks_zh=(
+                (_v3_executed_check(results_by_tax[definition.tax_id]),)
+                if definition.tax_id in results_by_tax else ("本次未执行检查程序。",)
+            ),
+            triggered_finding_ids=tuple(
+                risk.finding_id for risk in ordered_risks if definition.tax_id in risk.tax_ids
+            ),
+            material_limitations_zh=material_limitations[definition.tax_id],
+            trial_amount=(
+                results_by_tax[definition.tax_id].calculation.amount
+                if definition.tax_id in results_by_tax
+                and results_by_tax[definition.tax_id].calculation is not None else None
+            ),
+        )
+        for definition in TAX_DEFINITIONS
+    )
+    limitations = effective_limitations(snapshot)
+    action_sources.extend(
+        (f"limitation:{limitation.code}", "处理报告列示的范围限制并取得补充证据后，使用同一规则包重新运行检查。")
+        for limitation in sorted(
+            limitations,
+            key=lambda limitation: limitation.code,
+        )
+        if limitation.code not in {"pending_customer_evidence", "unresolved_tax_scope"}
+    )
+    actions = tuple(
+        PriorityActionItem(index, finding_id, action_zh)
+        for index, (finding_id, action_zh) in enumerate(action_sources, start=1)
+    )
+    report_status_zh = (
+        "初版报告已生成" if snapshot.questions or ordered_materials
+        else "本次检查受限完成" if limitations
+        else "本次可执行检查程序已完成"
+    )
+    trial_amount_count = sum(item.trial_amount is not None for item in tax_coverage)
+    return ReportViewV3(
+        meta=ReportMeta(
+            schema_version=REPORT_SCHEMA_VERSION_V3,
+            report_id=f"THR-{period.start:%Y%m%d}-{period.end:%Y%m%d}-R{snapshot.revision:04d}",
+            revision=snapshot.revision,
+            period_start=period.start,
+            period_end=period.end,
+            period_zh=period_zh,
+        ),
+        report_status_zh=report_status_zh,
+        executive_summary=ExecutiveSummary(
+            entity_name=entity_name,
+            status_zh=report_status_zh,
+            issue_count=len(ordered_risks),
+            material_gap_count=len(snapshot.questions),
+            trial_amount_count=trial_amount_count,
+            amount_disclaimer_zh=AMOUNT_DISCLAIMER_ZH,
+        ),
+        risk_overview=RiskOverview(
+            high_count=sum(risk.severity == "high" for risk in ordered_risks),
+            medium_count=sum(risk.severity == "medium" for risk in ordered_risks),
+            notice_count=sum(risk.severity == "notice" for risk in ordered_risks),
+            material_pending_count=len(snapshot.questions) + len(ordered_materials),
+        ),
+        risks=ordered_risks,
+        materials=ordered_materials,
+        actions=actions,
+        tax_coverage=tax_coverage,
+        appendix_executed_checks=tuple(
+            f"{item.name_zh}：{check}"
+            for item in tax_coverage for check in item.executed_checks_zh
+        ),
+        limitations_zh=tuple(item.message_zh for item in limitations),
+    )
 
 
 def build_report_view(

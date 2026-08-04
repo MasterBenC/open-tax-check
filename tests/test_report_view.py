@@ -1,7 +1,16 @@
 from dataclasses import replace
 from datetime import date
 
-from open_tax_check.report_view import build_report_view
+from dataclasses import asdict, is_dataclass
+
+import pytest
+
+from open_tax_check.report_view import (
+    AMOUNT_DISCLAIMER_ZH,
+    MATERIAL_STATUS_ZH,
+    build_report_view,
+    build_report_view_v3,
+)
 from open_tax_check.tax_models import (
     AuditEvent,
     CalculationRecord,
@@ -14,6 +23,7 @@ from open_tax_check.tax_models import (
     TaxResult,
     TaxStatus,
 )
+from open_tax_check.tax_registry import TAX_DEFINITIONS
 
 
 def _snapshot() -> TaxCheckSnapshot:
@@ -45,6 +55,122 @@ def _snapshot() -> TaxCheckSnapshot:
         audit_events=(AuditEvent("check_started", "2026-08-03T10:00:00+08:00"),),
         revision=1,
     )
+
+
+def _snapshot_with_every_status() -> TaxCheckSnapshot:
+    snapshot = _snapshot()
+    return replace(
+        snapshot,
+        results=(
+            TaxResult("vat", TaxStatus.CALCULATED),
+            TaxResult("enterprise_income_tax", TaxStatus.NEEDS_EVIDENCE),
+            TaxResult("individual_income_tax", TaxStatus.NEEDS_LOCAL_POLICY),
+            TaxResult("stamp_tax", TaxStatus.BLOCKED),
+            TaxResult("house_property_tax", TaxStatus.NOT_APPLICABLE, evidence_refs=("property-record",)),
+        ),
+        questions=(),
+    )
+
+
+def _customer_text(value: object) -> str:
+    if is_dataclass(value):
+        return _customer_text(asdict(value))
+    if isinstance(value, dict):
+        return " ".join(_customer_text(item) for item in value.values())
+    if isinstance(value, tuple | list):
+        return " ".join(_customer_text(item) for item in value)
+    return value if isinstance(value, str) else ""
+
+
+def test_v3_separates_risk_severity_from_received_material_state():
+    view = build_report_view_v3(
+        _snapshot_with_every_status(),
+        entity_name="虚构科技有限公司",
+        reviewed_findings=({
+            "finding_id": "f-entertainment",
+            "title_zh": "业务招待费扣除核对",
+            "severity": "high",
+            "review_state": "approved",
+        },),
+        material_statuses=({
+            "source_id": "cit-return",
+            "display_name_zh": "企业所得税申报表",
+            "status": "received_pending",
+        },),
+    )
+
+    assert view.risk_overview.high_count == 1
+    assert view.materials[0].status_zh == "已收到待处理"
+    assert "未提供" not in view.materials[0].status_zh
+
+
+def test_v3_metadata_coverage_and_ordering_are_deterministic():
+    snapshot = _snapshot_with_every_status()
+    findings = (
+        {
+            "finding_id": "notice-z", "title_zh": "一般提示", "severity": "notice",
+            "tax_ids": ("vat",), "affected_period_zh": "2026年3月",
+            "review_state": "approved",
+        },
+        {
+            "finding_id": "medium-a", "title_zh": "中等关注", "severity": "medium",
+            "tax_ids": ("enterprise_income_tax",), "affected_period_zh": "2026年2月",
+            "review_state": "approved",
+        },
+        {
+            "finding_id": "high-b", "title_zh": "重点核实", "severity": "high",
+            "tax_ids": ("vat",), "affected_period_zh": "2026年1月",
+            "review_state": "approved",
+        },
+    )
+
+    view = build_report_view_v3(snapshot, entity_name="甲公司", reviewed_findings=findings)
+
+    assert view.meta.schema_version == "tax-health-report/v3"
+    assert view.meta.revision == snapshot.revision
+    assert view.meta.period_start == snapshot.request.period.start
+    assert view.meta.period_end == snapshot.request.period.end
+    assert [item.severity for item in view.risks] == ["high", "medium", "notice"]
+    assert [item.finding_id for item in view.actions[:3]] == ["high-b", "medium-a", "notice-z"]
+    assert len(view.tax_coverage) == len(TAX_DEFINITIONS)
+    assert {item.tax_id for item in view.tax_coverage} == {item.tax_id for item in TAX_DEFINITIONS}
+    assert all(item.executed_checks_zh for item in view.tax_coverage)
+    assert all(item.can_conclude_zh and item.cannot_conclude_zh for item in view.risks)
+    assert view.executive_summary.amount_disclaimer_zh == AMOUNT_DISCLAIMER_ZH
+    assert "无风险" not in _customer_text(view)
+    assert view == build_report_view_v3(snapshot, entity_name="甲公司", reviewed_findings=findings)
+
+
+def test_v3_allowlists_all_six_material_states_and_rejects_unknown_states():
+    statuses = tuple(
+        {
+            "source_id": f"source-{source_id}",
+            "display_name_zh": f"资料-{source_id}",
+            "status": status,
+        }
+        for source_id, status in enumerate(MATERIAL_STATUS_ZH)
+    )
+
+    view = build_report_view_v3(_snapshot(), entity_name="甲公司", material_statuses=statuses)
+
+    assert [item.status_zh for item in view.materials] == list(MATERIAL_STATUS_ZH.values())
+    with pytest.raises(ValueError, match="unknown_material_status"):
+        build_report_view_v3(
+            _snapshot(), entity_name="甲公司",
+            material_statuses=({"source_id": "unexpected", "display_name_zh": "未知文件", "status": "unknown"},),
+        )
+
+
+def test_v3_actions_preserve_material_and_scope_limitation_follow_up():
+    snapshot = replace(
+        _snapshot(),
+        limitations=(Limitation("separate_scope", "境外交易未纳入本次检查。"),),
+    )
+
+    view = build_report_view_v3(snapshot, entity_name="甲公司")
+
+    assert any(item.finding_id == "material:q-cit" for item in view.actions)
+    assert any(item.finding_id == "limitation:separate_scope" for item in view.actions)
 
 
 def test_report_view_uses_four_approved_chinese_states():
