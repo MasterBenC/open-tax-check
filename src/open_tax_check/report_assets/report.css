@@ -1,0 +1,99 @@
+@page {
+  size: A4;
+  margin: 18mm 16mm 17mm;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: "OpenTaxCheck Sans", sans-serif;
+  color: #202428;
+  font-size: 10.5pt;
+  line-height: 1.65;
+  letter-spacing: 0;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+}
+
+h1, h2, h3, p {
+  margin-top: 0;
+}
+
+h1, h2, h3 {
+  break-after: avoid;
+  color: #17202a;
+}
+
+h1 { font-size: 25pt; }
+h2 { margin-bottom: 6mm; font-size: 17pt; border-bottom: 1px solid #aeb7bf; padding-bottom: 2mm; }
+h3 { margin-bottom: 2mm; font-size: 12.5pt; }
+
+.cover {
+  min-height: 248mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-top: 6mm solid #1f4e5f;
+  padding: 28mm 5mm 12mm;
+  break-after: page;
+}
+
+.cover-kicker, .muted { color: #64727d; }
+.cover-meta { border-top: 1px solid #aeb7bf; padding-top: 7mm; }
+.report-status { color: #1f4e5f; font-weight: 700; }
+.page-break { break-before: page; }
+
+.toc ol { padding-left: 6mm; }
+.toc li { margin: 2mm 0; }
+.toc a { color: #202428; text-decoration: none; }
+
+.summary-grid, .overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3mm;
+  margin: 5mm 0;
+}
+
+.metric {
+  border-top: 2px solid #64727d;
+  padding: 3mm 1mm;
+}
+
+.metric strong { display: block; font-size: 18pt; }
+.severity-high { border-color: #a33a32; }
+.severity-medium { border-color: #b87820; }
+.severity-notice { border-color: #39718c; }
+.severity-material { border-color: #68737d; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 3mm 0 7mm;
+}
+
+thead { display: table-header-group; }
+th, td { border: 1px solid #c7cdd2; padding: 2.2mm; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #edf1f2; text-align: left; font-weight: 700; }
+tr, .risk-heading, .summary-block { break-inside: avoid; }
+
+.risk-item { margin: 0 0 10mm; }
+.risk-heading { border-left: 3px solid #64727d; padding-left: 3mm; }
+.risk-item[data-severity="high"] .risk-heading { border-color: #a33a32; }
+.risk-item[data-severity="medium"] .risk-heading { border-color: #b87820; }
+.risk-item[data-severity="notice"] .risk-heading { border-color: #39718c; }
+.risk-field { margin-bottom: 3mm; }
+.risk-field dt { font-weight: 700; }
+.risk-field dd { margin-left: 0; }
+
+.disclaimer { border-top: 1px solid #aeb7bf; padding-top: 3mm; color: #4d5962; }
+.empty { color: #64727d; font-style: normal; }
+
+@media screen {
+  body { width: 210mm; margin: 0 auto; padding: 12mm 16mm; }
+}

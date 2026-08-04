@@ -21,6 +21,10 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+report = [
+  "playwright>=1.54,<2",
+  "pypdf>=6.14.2,<7",
+]
 excel = [
   "openpyxl>=3.1.5,<4",
   "xlrd>=2.0.2,<3",
@@ -46,6 +50,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "open_tax_check.tax_packs" = ["*.json"]
+"open_tax_check.report_assets" = ["report.css", "fonts/*.ttf", "fonts/OFL.txt"]
 
 [tool.setuptools.dynamic]
 version = {attr = "open_tax_check.__version__"}
