@@ -9,6 +9,18 @@ from .report_view import ReportView
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+OWNER_ISSUE_LIMIT = 2
+OWNER_GAP_LIMIT = 4
+OWNER_ACTION_LIMIT = 4
+OWNER_LIMITATION_LIMIT = 4
+
+
+def _owner_text(text: str, limit: int) -> str:
+    """Bound owner-facing prose while keeping the full value in the appendix."""
+
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "……（完整内容见专业附录）"
 
 
 def _p(text: str, style: str = "BodyText", *, page_break: bool = False) -> str:
@@ -51,6 +63,10 @@ def _table(headers: tuple[str, ...], rows: tuple[tuple[str, ...], ...], widths: 
 
 def document_xml(view: ReportView) -> str:
     summary = view.executive_summary
+    state_counts = {
+        state: sum(item.client_state == state for item in view.tax_items)
+        for state in ("重点核实", "待补资料", "账务勾稽提示", "本次范围内未见异常")
+    }
     parts = [
         _p("税务健康检查报告", "Title"),
         _p(summary.entity_name or "企业税务健康自查", "Subtitle"),
@@ -64,34 +80,93 @@ def document_xml(view: ReportView) -> str:
         _p("管理层摘要", "Heading1"),
         _table(("项目", "当前情况"), (
             ("报告状态", summary.status_zh),
-            ("重点核实事项", f"{summary.issue_count} 项"),
+            ("经复核重点事项", f"{summary.issue_count} 项"),
             ("待补资料事项", f"{summary.material_gap_count} 项"),
             ("待核对试算", f"{summary.trial_amount_count} 项"),
         ), (2400, 6960)),
         _p(summary.amount_disclaimer_zh, "Disclaimer"),
+        _p("本次检查覆盖概览", "Heading2"),
+        _table(("客户可读状态", "税费项目数", "应当如何处理"), tuple(
+            (state, f"{count} 项", {
+                "重点核实": "存在试算或核对结果，需结合申报资料复核；不等于发现问题。",
+                "待补资料": "补齐资料后再形成判断。",
+                "账务勾稽提示": "核对账簿、申报和试算口径。",
+                "本次范围内未见异常": "仅表示已执行程序未见异常，不代表无风险。",
+            }[state])
+            for state, count in state_counts.items()
+        ), (2600, 1600, 5160)),
+        _p("这些结果怎么理解", "Heading2"),
+        _p("报告只陈述已执行程序和已取得证据支持的结果。缺少资料、当地政策或客户确认时，相关税种保持待补状态，不会被写成不适用或无风险。"),
+        _p("试算用于帮助定位需要核对的口径。正式申报仍应以申报表、完税凭证、合同和适用政策为准。", "Disclaimer"),
+        _p("", page_break=True),
         _p("老板先看这些事", "Heading1"),
     ]
     if view.issues:
-        for issue in view.issues:
+        for issue in view.issues[:OWNER_ISSUE_LIMIT]:
             parts.extend((
-                _p(issue.title_zh, "Heading2"), _p(issue.client_state, "IssueState"),
-                _p(f"发现了什么：{issue.observed_zh}"),
-                _p(f"为什么需要关注：{issue.why_it_matters_zh}"),
-                _p(f"目前不能下什么结论：{issue.cannot_conclude_zh}"),
-                _p("需要补什么资料：" + "、".join(issue.required_materials_zh)),
-                _p(f"建议下一步：{issue.next_action_zh}"),
+                _p(_owner_text(issue.title_zh, 48), "Heading2"),
+                _p(issue.client_state, "IssueState"),
+                _p(f"发现了什么：{_owner_text(issue.observed_zh, 100)}"),
+                _p(f"为什么需要关注：{_owner_text(issue.why_it_matters_zh, 100)}"),
+                _p(f"目前不能下什么结论：{_owner_text(issue.cannot_conclude_zh, 100)}"),
+                _p("需要补什么资料：" + _owner_text((
+                    "、".join(issue.required_materials_zh)
+                    if issue.required_materials_zh else "按核对事项补充可验证资料"
+                ), 100)),
+                _p(f"建议下一步：{_owner_text(issue.next_action_zh, 100)}"),
+            ))
+        if len(view.issues) > OWNER_ISSUE_LIMIT:
+            parts.append(_p(
+                f"其余 {len(view.issues) - OWNER_ISSUE_LIMIT} 项重点事项详见专业附录。",
+                "Disclaimer",
             ))
     else:
         parts.append(_p("当前没有经复核批准后进入客户报告的重点事项。"))
     parts.extend((_p("待补资料及影响", "Heading1"), _table(
         ("待补资料", "影响", "补充方式"),
-        tuple((item.material_zh, item.impact_zh, item.next_action_zh) for item in view.material_gaps)
+        tuple((
+            _owner_text(item.material_zh, 70),
+            _owner_text(item.impact_zh, 80),
+            _owner_text(item.next_action_zh, 80),
+        ) for item in view.material_gaps[:OWNER_GAP_LIMIT])
         or (("当前无待补资料", "-", "-"),),
         (2800, 3280, 3280),
     ), _p("建议行动顺序", "Heading1")))
-    parts.extend(_p(f"{item.priority}. {item.action_zh}") for item in view.actions)
-    parts.extend((_p("检查范围和限制", "Heading1"),))
-    parts.extend(_p(item, "Disclaimer") for item in view.limitations_zh)
+    if len(view.material_gaps) > OWNER_GAP_LIMIT:
+        parts.append(_p(
+            f"其余 {len(view.material_gaps) - OWNER_GAP_LIMIT} 项资料缺口详见专业附录。",
+            "Disclaimer",
+        ))
+    parts.extend(
+        _p(f"{item.priority}. {_owner_text(item.action_zh, 120)}")
+        for item in view.actions[:OWNER_ACTION_LIMIT]
+    )
+    if len(view.actions) > OWNER_ACTION_LIMIT:
+        parts.append(_p(
+            f"其余 {len(view.actions) - OWNER_ACTION_LIMIT} 项行动详见专业附录。",
+            "Disclaimer",
+        ))
+    parts.extend((_p("", page_break=True), _p("检查范围和限制", "Heading1"),))
+    parts.extend(
+        _p(_owner_text(item, 140), "Disclaimer")
+        for item in view.limitations_zh[:OWNER_LIMITATION_LIMIT]
+    )
+    if len(view.limitations_zh) > OWNER_LIMITATION_LIMIT:
+        parts.append(_p(
+            f"其余 {len(view.limitations_zh) - OWNER_LIMITATION_LIMIT} 项限制详见专业附录。",
+            "Disclaimer",
+        ))
+    if not view.limitations_zh:
+        parts.append(_p("本报告仅覆盖已提供资料和已执行程序，不构成鉴证、税务意见、申报结论或税务机关认定。", "Disclaimer"))
+    parts.extend((
+        _p("什么情况下需要重新检查", "Heading2"),
+        _p("发生重大资产交易、股权变化、跨地区经营、新增不动产或重要合同后。"),
+        _p("取得补充申报表、完税凭证、合同、发票或其他能够改变现有判断的资料后。"),
+        _p("适用政策、地方执行口径、计税基础或税率发生变化后。"),
+        _p("进入新的申报年度，或企业希望按相同口径进行下一轮持续复查时。"),
+        _p("重要边界", "Heading2"),
+        _p("本报告用于企业内部税务健康自查。它不替代纳税申报、专项鉴证、法律或税务意见，也不代表税务机关对任何事项的认定。", "Disclaimer"),
+    ))
     parts.extend((_p("", page_break=True), _p("专业附录", "Heading1"), _table(
         ("税费项目", "客户状态", "试算/资料缺口"),
         tuple((
@@ -100,6 +175,33 @@ def document_xml(view: ReportView) -> str:
         ) for item in view.tax_items) or (("当前无税费结果", "待补资料", "-"),),
         (2800, 2800, 3760),
     )))
+    if view.issues:
+        parts.append(_p("全部经复核重点事项", "Heading2"))
+        for issue in view.issues:
+            parts.extend((
+                _p(issue.title_zh, "Heading3"),
+                _p(f"状态：{issue.client_state}"),
+                _p(f"发现了什么：{issue.observed_zh}"),
+                _p(f"为什么需要关注：{issue.why_it_matters_zh}"),
+                _p(f"目前不能下什么结论：{issue.cannot_conclude_zh}"),
+                _p("需要补什么资料：" + (
+                    "、".join(issue.required_materials_zh)
+                    if issue.required_materials_zh else "按核对事项补充可验证资料"
+                )),
+                _p(f"建议下一步：{issue.next_action_zh}"),
+            ))
+    if view.material_gaps:
+        parts.extend((_p("全部资料缺口", "Heading2"), _table(
+            ("待补资料", "影响", "补充方式"),
+            tuple((item.material_zh, item.impact_zh, item.next_action_zh) for item in view.material_gaps),
+            (2800, 3280, 3280),
+        )))
+    if view.actions:
+        parts.append(_p("全部行动清单", "Heading2"))
+        parts.extend(_p(f"{item.priority}. {item.action_zh}") for item in view.actions)
+    if view.limitations_zh:
+        parts.append(_p("全部检查限制", "Heading2"))
+        parts.extend(_p(item, "Disclaimer") for item in view.limitations_zh)
     body = "".join(parts)
     sect = (
         '<w:sectPr><w:headerReference w:type="default" r:id="rId3"/>'

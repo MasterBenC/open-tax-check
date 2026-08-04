@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 
 from open_tax_check.report_view import build_report_view
@@ -6,6 +7,7 @@ from open_tax_check.tax_models import (
     CalculationRecord,
     DateRange,
     FactGap,
+    Limitation,
     Question,
     TaxCheckRequest,
     TaxCheckSnapshot,
@@ -94,3 +96,78 @@ def test_missing_evidence_becomes_material_gap_not_client_issue():
     assert len(view.material_gaps) == 1
     assert view.material_gaps[0].tax_ids == ("enterprise_income_tax",)
     assert "企业所得税申报表" in view.material_gaps[0].material_zh
+
+
+def test_complete_report_still_has_useful_owner_actions():
+    snapshot = _snapshot()
+    complete = replace(
+        snapshot,
+        results=tuple(
+            result for result in snapshot.results
+            if result.tax_id != "enterprise_income_tax"
+        ),
+        questions=(),
+    )
+
+    view = build_report_view(complete)
+
+    assert view.material_gaps == ()
+    assert [item.priority for item in view.actions] == [1, 2, 3]
+    assert any("留存" in item.action_zh for item in view.actions)
+    assert any("试算" in item.action_zh for item in view.actions)
+    assert any("重新运行" in item.action_zh for item in view.actions)
+
+
+def test_report_with_scope_limitations_is_not_labeled_fully_complete():
+    limited = replace(
+        _snapshot(),
+        questions=(),
+        limitations=(Limitation("scope_limit", "部分特殊交易未纳入确定性计算。"),),
+    )
+
+    view = build_report_view(limited)
+
+    assert view.report_status_zh == "本次检查受限完成"
+    assert "已完成" not in view.report_status_zh
+    assert any("范围限制" in item.action_zh for item in view.actions)
+
+
+def test_blocked_tax_result_adds_machine_limitation_and_prevents_complete_label():
+    blocked = replace(
+        _snapshot(),
+        results=(TaxResult("vat", TaxStatus.BLOCKED),),
+        questions=(),
+        limitations=(),
+    )
+
+    view = build_report_view(blocked)
+
+    assert view.report_status_zh == "本次检查受限完成"
+    assert any("阻断" in item for item in view.limitations_zh)
+    assert any("范围限制" in item.action_zh for item in view.actions)
+
+
+def test_complete_report_without_trial_amount_does_not_request_trial_comparison():
+    complete = replace(
+        _snapshot(),
+        results=(TaxResult("stamp_tax", TaxStatus.NOT_APPLICABLE, evidence_refs=("source-1",)),),
+        questions=(),
+        limitations=(),
+    )
+
+    view = build_report_view(complete)
+
+    assert view.report_status_zh == "本次可执行检查程序已完成"
+    assert all("试算" not in item.action_zh for item in view.actions)
+
+
+def test_material_gap_actions_also_address_independent_scope_limitations():
+    limited = replace(
+        _snapshot(),
+        limitations=(Limitation("separate_scope", "境外交易未纳入本次检查。"),),
+    )
+
+    view = build_report_view(limited)
+
+    assert any(item.action_zh.startswith("补充：") for item in view.actions)
+    assert any("范围限制" in item.action_zh for item in view.actions)

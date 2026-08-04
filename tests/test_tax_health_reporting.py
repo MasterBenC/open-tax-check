@@ -404,7 +404,11 @@ class TaxHealthReportingTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item["code"] for item in payload["limitations"]},
-                {"pending_customer_evidence", "unresolved_tax_scope"},
+                {
+                    "pending_customer_evidence",
+                    "unresolved_tax_scope",
+                    "interrupted_tax_scope",
+                },
             )
             calculation = next(
                 item["calculation"] for item in payload["results"] if item["calculation"] is not None

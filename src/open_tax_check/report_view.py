@@ -74,7 +74,9 @@ class ReportView:
 def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
     """Combine caller limitations with machine-owned current-state limitations."""
 
-    reserved_codes = {"pending_customer_evidence", "unresolved_tax_scope"}
+    reserved_codes = {
+        "pending_customer_evidence", "unresolved_tax_scope", "interrupted_tax_scope",
+    }
     limitations = [
         item for item in snapshot.limitations if item.code not in reserved_codes
     ]
@@ -91,6 +93,14 @@ def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
         limitations.append(Limitation(
             "unresolved_tax_scope",
             f"当前有 {len(unresolved)} 个税种仍受资料或当地政策限制，本次未形成最终判断。",
+        ))
+    blocked = tuple(
+        result for result in snapshot.results if result.status is TaxStatus.BLOCKED
+    )
+    if blocked:
+        limitations.append(Limitation(
+            "interrupted_tax_scope",
+            f"当前有 {len(blocked)} 个税种的检查程序被阻断，本次未形成可执行结论。",
         ))
     return tuple(limitations)
 
@@ -161,12 +171,47 @@ def build_report_view(
         )
         for result in snapshot.results
     )
-    actions = tuple(
+    limitations = effective_limitations(snapshot)
+    trial_amount_count = sum(item.trial_amount is not None for item in tax_items)
+    gap_actions = tuple(
         ActionItem(index, f"补充：{gap.material_zh}")
         for index, gap in enumerate(material_gaps, start=1)
     )
-    limitations = effective_limitations(snapshot)
-    status_zh = "初版报告已生成" if material_gaps else "本次可执行检查程序已完成"
+    if gap_actions:
+        actionable_limitations = tuple(
+            item for item in limitations
+            if item.code not in {"pending_customer_evidence", "unresolved_tax_scope"}
+        )
+        actions = gap_actions + (
+            (ActionItem(
+                len(gap_actions) + 1,
+                "处理报告列示的独立范围限制并取得补充证据后，使用同一规则包重新运行检查。",
+            ),)
+            if actionable_limitations else ()
+        )
+    else:
+        action_texts = ["留存本次报告、原始资料和交付清单，确保后续复查可以追溯。"]
+        if trial_amount_count:
+            action_texts.append(
+                "将报告中的试算项目与当期申报表、完税凭证逐项核对，不把试算金额直接作为申报金额。"
+            )
+        if limitations:
+            action_texts.append(
+                "处理报告列示的范围限制并取得补充证据后，使用同一规则包重新运行检查。"
+            )
+        else:
+            action_texts.append(
+                "发生重大交易、政策口径变化或新增资料时，使用同一规则包重新运行检查。"
+            )
+        actions = tuple(
+            ActionItem(index, text) for index, text in enumerate(action_texts, start=1)
+        )
+    if material_gaps:
+        status_zh = "初版报告已生成"
+    elif limitations:
+        status_zh = "本次检查受限完成"
+    else:
+        status_zh = "本次可执行检查程序已完成"
     return ReportView(
         report_status_zh=status_zh,
         executive_summary=ExecutiveSummary(
@@ -174,7 +219,7 @@ def build_report_view(
             status_zh=status_zh,
             issue_count=len(issues),
             material_gap_count=len(material_gaps),
-            trial_amount_count=sum(item.trial_amount is not None for item in tax_items),
+            trial_amount_count=trial_amount_count,
             amount_disclaimer_zh=AMOUNT_DISCLAIMER_ZH,
         ),
         issues=issues,

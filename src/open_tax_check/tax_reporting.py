@@ -178,7 +178,7 @@ def render_report_view(view: ReportView) -> str:
         "",
         "## 管理层摘要",
         f"- 当前状态：{summary.status_zh}",
-        f"- 重点核实事项：{summary.issue_count} 项",
+        f"- 经复核重点事项：{summary.issue_count} 项",
         f"- 待补资料事项：{summary.material_gap_count} 项",
         f"- 待核对试算：{summary.trial_amount_count} 项",
         f"- {summary.amount_disclaimer_zh}",
