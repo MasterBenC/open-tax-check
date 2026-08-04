@@ -161,6 +161,30 @@ def test_v3_allowlists_all_six_material_states_and_rejects_unknown_states():
         )
 
 
+def test_v3_reconciled_material_is_not_pending_or_a_limitation():
+    snapshot = replace(_snapshot(), questions=(), limitations=())
+    baseline = build_report_view_v3(snapshot, entity_name="甲公司")
+    view = build_report_view_v3(
+        snapshot,
+        entity_name="甲公司",
+        material_statuses=({
+            "source_id": "cit-return",
+            "display_name_zh": "企业所得税申报表",
+            "status": "imported_reconciled",
+            "tax_ids": ("enterprise_income_tax",),
+        },),
+    )
+
+    assert view.materials[0].status_zh == "已导入并核对"
+    assert view.risk_overview.material_pending_count == 0
+    assert view.report_status_zh == baseline.report_status_zh
+    coverage = next(
+        item for item in view.tax_coverage
+        if item.tax_id == "enterprise_income_tax"
+    )
+    assert coverage.material_limitations_zh == ()
+
+
 def test_v3_actions_preserve_material_and_scope_limitation_follow_up():
     snapshot = replace(
         _snapshot(),

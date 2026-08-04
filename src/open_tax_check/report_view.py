@@ -313,6 +313,9 @@ def build_report_view_v3(
             impact_zh=_v3_text(item, "impact_zh", "该资料状态会限制相关检查程序或结论。"),
         ))
     ordered_materials = tuple(sorted(materials, key=lambda item: (item.source_id, item.display_name_zh)))
+    pending_materials = tuple(
+        item for item in ordered_materials if item.status != "imported_reconciled"
+    )
 
     action_sources = [
         (risk.finding_id, risk.next_action_zh)
@@ -327,7 +330,7 @@ def build_report_view_v3(
     )
     results_by_tax = {result.tax_id: result for result in snapshot.results}
     material_limitations = {
-        tax_id: tuple(item.status_zh for item in ordered_materials if tax_id in item.tax_ids)
+        tax_id: tuple(item.status_zh for item in pending_materials if tax_id in item.tax_ids)
         for tax_id in _TAX_NAMES
     }
     tax_coverage = tuple(
@@ -368,7 +371,7 @@ def build_report_view_v3(
         for index, (finding_id, action_zh) in enumerate(action_sources, start=1)
     )
     report_status_zh = (
-        "初版报告已生成" if snapshot.questions or ordered_materials
+        "初版报告已生成" if snapshot.questions or pending_materials
         else "本次检查受限完成" if limitations
         else "本次可执行检查程序已完成"
     )
@@ -395,7 +398,7 @@ def build_report_view_v3(
             high_count=sum(risk.severity == "high" for risk in ordered_risks),
             medium_count=sum(risk.severity == "medium" for risk in ordered_risks),
             notice_count=sum(risk.severity == "notice" for risk in ordered_risks),
-            material_pending_count=len(snapshot.questions) + len(ordered_materials),
+            material_pending_count=len(snapshot.questions) + len(pending_materials),
         ),
         risks=ordered_risks,
         materials=ordered_materials,
