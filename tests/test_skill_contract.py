@@ -9,6 +9,32 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_skill_contains_opening_model_and_handoff_contracts(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        models = (SKILL / "references" / "model-recommendations.md").read_text(encoding="utf-8")
+        integrations = (SKILL / "references" / "host-integrations.md").read_text(encoding="utf-8")
+        methodology = (SKILL / "references" / "methodology.md").read_text(encoding="utf-8")
+
+        self.assertIn("税务健康检查 AI 智能体", skill)
+        self.assertIn("资料不需要一次准备齐", skill)
+        self.assertIn("case-guide", skill)
+        self.assertIn("case-start", skill)
+        for name in (
+            "DeepSeek V4",
+            "腾讯混元 3",
+            "GLM-5.2",
+            "GPT-5.6",
+            "Claude 4.8+",
+            "Qwen 3.7 Max",
+            "Doubao Seed 2.0 Pro",
+        ):
+            self.assertIn(name, models)
+        self.assertIn("qwen3.7-plus", models)
+        self.assertNotIn("qwen3.8-max-preview", models)
+        self.assertIn("tax-customer-handoff/v1", integrations)
+        self.assertIn("不得自行改写", integrations)
+        self.assertIn("模型选择不得改变", methodology)
+
     def test_customer_inference_pressure_contract_stays_fail_closed(self):
         fixture = json.loads((
             ROOT / "tests" / "fixtures" / "skill-pressure"
@@ -359,6 +385,7 @@ class SkillContractTests(unittest.TestCase):
             "references/methodology.md",
             "references/rule-catalog.md",
             "references/host-integrations.md",
+            "references/model-recommendations.md",
             "scripts/opentaxcheck.py",
         }
         actual = {

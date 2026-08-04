@@ -7,6 +7,19 @@ description: Use when checking Chinese enterprise tax materials from CSV or Exce
 
 把本 Skill 当作 Python 引擎的薄控制器。严格按 `state.json` 推进；代码负责盘点、映射、计算、血缘和状态，AI 只协助解释、整理证据和草拟文字。
 
+## 先和客户这样开始
+
+首次对话先展示：`欢迎使用税务健康检查 AI 智能体。请先告诉我企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。`
+
+把五项信息写入 `customer-profile/v1` JSON，再运行：
+
+```text
+opentaxcheck case-start --case <case-dir> --profile <profile.json>
+opentaxcheck case-guide --case <case-dir>
+```
+
+逐项原样展示 `case-guide/v1` 的中文字段和三组资料清单，不另写开场或自行判断税种适用性。客户回答待确认问题时只用 `case-confirm`；完成后原样展示 `tax-customer-handoff/v1`，不得把机器限制、待补资料或试算金额改写成更强结论。模型选择规则见 [references/model-recommendations.md](references/model-recommendations.md)。
+
 ## 先守住范围
 
 - Phase 2A 支持 `.xlsx`、`.xlsm`、`.xls` 的安全盘点、候选识别、人工选表和资料覆盖矩阵。
@@ -128,7 +141,6 @@ opentaxcheck tax-health-check --request request.json --output-dir output
 ## 参考资料
 
 - 调用宿主 Agent 时，读取 [references/host-integrations.md](references/host-integrations.md)；只展示 `question_zh`，不得编造确认或把未解决状态说成“无风险”。
-
 - 调整阶段门槛、覆盖矩阵或报告措辞前，读取 [references/methodology.md](references/methodology.md)。
 - 调整输入格式、字段别名、日期或金额口径前，读取 [references/canonical-schema.md](references/canonical-schema.md)。
 - 调整税务逻辑、阈值、法规或版本前，读取 [references/rule-catalog.md](references/rule-catalog.md)。

@@ -11,19 +11,22 @@
 ## 固定顺序
 
 1. 验证 Python 3.11–3.13；需要工作簿时安装带 Excel extra 的 OpenTaxCheck。
-2. 为一个法律实体、一个地区和 2023–2026 检查期间构造 `TaxCheckRequest`。
-3. 不提供模型服务，调用 `case-self-check` 生成可恢复案件快照。
-4. 读取 `case-status` 和 `case-tasks`，只向客户展示 `question_zh`、`help_zh`、`evidence_help_zh`。
-5. 用带确认人、带时区时间戳和证据引用的结构化确认调用 `case-confirm`；不得传入或覆盖案件状态。
-6. Python 只重跑受影响税种，并重新生成同一修订版的任务、脱敏快照和中文报告。
-7. 输出中文报告，并保留机器 payload 用于审计。
-8. 升级 OpenTaxCheck 包以接收新版官方规则包。
+2. 首次对话调用 `case-guide`，原样展示 `case-guide/v1`；收齐五项企业信息后调用 `case-start`。宿主不得自行改写开场、资料组或阶段状态。
+3. 为一个法律实体、一个地区和 2023–2026 检查期间构造 `TaxCheckRequest`。
+4. 不提供模型服务，调用 `case-self-check` 生成可恢复案件快照。
+5. 读取 `case-status` 和 `case-tasks`，只向客户展示 `question_zh`、`help_zh`、`evidence_help_zh`。
+6. 用带确认人、带时区时间戳和证据引用的结构化确认调用 `case-confirm`；不得传入或覆盖案件状态。
+7. Python 只重跑受影响税种，并重新生成同一修订版的任务、脱敏快照和中文报告。
+8. 输出中文报告，并保留机器 payload 用于审计。
+9. 升级 OpenTaxCheck 包以接收新版官方规则包。
 
 CLI 可恢复案件运行 `opentaxcheck case-self-check --case CASE --request request.json`，随后使用 `case-status`、`case-tasks` 和 `case-confirm` 完成补件闭环。无案件目录的单次报告仍可运行 `opentaxcheck tax-health-check --request request.json --output-dir output`；需要显式加入全部参数化计算模板时可追加 `--include-parameterized-packs`。所有计算事实必须经客户确认并绑定证据。
 
 ## 统一案件交付
 
 补件完成后，宿主调用 `opentaxcheck case-delivery --case CASE`。命令发布一个 `tax-delivery/v1` 修订目录，例如 `work/deliveries/revision-0001/`，并通过 `work/delivery.json` 指向活动清单。清单中的报告、DOCX/PDF、`workpaper.xlsx`、机器快照和证据包必须来自同一个 `snapshot_revision`，每个文件都带 SHA-256；`delivery_options` 记录是否请求 PDF 和是否复制原始证据文件。
+
+交付时必须读取并原样展示机器生成的 `tax-customer-handoff/v1`。宿主不得自行改写标题、限制、待补资料、试算金额免责声明或完成状态，也不得用自己的总结替代该交付说明。
 
 `--include-pdf` 没有渲染器时返回 `pdf_status=pdf_renderer_unavailable` 和整体 `status=partial`，不得伪造 PDF。相同快照和相同 `delivery_options` 可重复调用；选项变化返回 `delivery_revision_conflict`。宿主应把 `partial` 当作未完成交付状态展示。
 
