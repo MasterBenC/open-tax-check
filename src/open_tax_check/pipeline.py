@@ -77,6 +77,7 @@ _STAGING_PREFIX = ".otcs-"
 _BACKUP_PREFIX = ".otcb-"
 _STATE_BACKUP_PREFIX = ".otcx-"
 _EXCEL_EXTENSIONS = frozenset({".xlsx", ".xlsm", ".xls"})
+_CUSTOMER_PROFILE_MAX_BYTES = 64 * 1024
 _INSPECTION_ROLES = ("journal", "trial_balance")
 STATUS_PRIORITY = (
     "needs_intake_review",
@@ -298,6 +299,17 @@ def _start_run(case_dir: Path) -> tuple[str, Path, str]:
     run_dir.mkdir()
     (run_dir / "work").mkdir()
     (run_dir / "output").mkdir()
+    profile_path = case_dir / "work" / "customer-profile.json"
+    try:
+        profile_path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        safe_profile = resolve_safe_source(profile_path, case_dir / "work")
+        _atomic_write_bytes(
+            run_dir / "work" / "customer-profile.json",
+            _read_bounded_file(safe_profile, _CUSTOMER_PROFILE_MAX_BYTES),
+        )
     return run_id, run_dir, _utc_now()
 
 

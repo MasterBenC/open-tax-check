@@ -126,6 +126,13 @@ class FictionalExampleTests(unittest.TestCase):
         self.assertEqual(result.rule_amounts, {"CIT-BE-001": "15000.00"})
         self.assertTrue(result.trial_balance_passed)
         self.assertTrue(result.journal_to_trial_balance_passed)
+        self.assertEqual(result.journey_stages, (
+            "welcome",
+            "awaiting_documents",
+            "check_in_progress",
+            "awaiting_customer_input",
+            "draft_report_ready",
+        ))
 
     def test_complete_cli_builds_the_documented_case_and_delivery(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -215,6 +222,19 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertEqual(tasks["status"], "completed_with_limitations")
             self.assertEqual(tasks["tasks"], [])
             self.assertFalse((case_dir / "work/limitations.json").exists())
+            journey = json.loads(
+                (case_dir / "work/customer-journey.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(journey["schema_version"], "customer-journey/v1")
+            self.assertEqual(journey["stages"], [
+                "welcome",
+                "awaiting_documents",
+                "check_in_progress",
+                "awaiting_customer_input",
+                "draft_report_ready",
+            ])
+            self.assertNotIn("welcome", journey["stages"][1:])
+            self.assertEqual(len(journey["profile_digest"]), 64)
 
             pointer = json.loads(
                 (case_dir / "work/delivery.json").read_text(encoding="utf-8")
@@ -266,6 +286,18 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertEqual(payload["delivery_status"], manifest["status"])
             self.assertEqual(payload["delivery_revision"], manifest["revision"])
             self.assertEqual(payload["status"], "completed_with_limitations")
+            handoff = json.loads(
+                (revision_dir / "税务健康检查交付说明.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                {
+                    manifest["revision"],
+                    machine_snapshot["revision"],
+                    handoff["revision"],
+                    payload["delivery_revision"],
+                },
+                {manifest["revision"]},
+            )
 
     def test_example_generates_and_runs_fictional_xlsx_with_confirmed_mapping(self):
         with tempfile.TemporaryDirectory() as temp_dir:

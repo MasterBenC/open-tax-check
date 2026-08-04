@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from open_tax_check.case import init_case
+from open_tax_check.case import init_case, write_json
 from open_tax_check.case_orchestration import (
     apply_case_confirmations,
     build_case_customer_tasks,
@@ -22,6 +22,7 @@ from open_tax_check.case_orchestration import (
     run_case_self_check,
 )
 from open_tax_check.delivery import build_case_delivery
+from open_tax_check.customer_guide import build_case_guide, start_case_from_profile
 from open_tax_check.pipeline import inspect_case, run_case
 from open_tax_check.reviews import confirm_mapping
 from open_tax_check.structured_document_providers import (
@@ -98,6 +99,7 @@ class FictionalCaseResult:
     journal_to_trial_balance_passed: bool
     delivery_status: str | None = None
     delivery_revision: int | None = None
+    journey_stages: tuple[str, ...] = ()
 
 
 def _configure_utf8_output() -> None:
@@ -476,7 +478,19 @@ def _confirm_task(case_dir: Path, task, value, occurred_at: datetime) -> None:
 
 
 def _run_complete_fictional_case(case_dir: Path) -> FictionalCaseResult:
-    init_case(case_dir, "虚构科技有限公司", COMPLETE_PERIOD_START, COMPLETE_PERIOD_END)
+    journey = [build_case_guide(case_dir)]
+    start_case_from_profile(
+        case_dir,
+        {
+            "entity_name": "虚构科技有限公司",
+            "province_city": "广东省深圳市",
+            "primary_business": "软件开发与技术服务",
+            "period_start": COMPLETE_PERIOD_START,
+            "period_end": COMPLETE_PERIOD_END,
+            "vat_taxpayer_type": "general",
+        },
+    )
+    journey.append(build_case_guide(case_dir))
     create_fictional_workbook(case_dir / "input" / "journal.xlsx")
     create_fictional_trial_balance(case_dir / "input" / "trial-balance.xlsx")
     fixture_root = ROOT / "tests" / "fixtures" / "ocr"
@@ -497,6 +511,7 @@ def _run_complete_fictional_case(case_dir: Path) -> FictionalCaseResult:
     code, response = run_case(case_dir, "off")
     if code != 0 or response["status"] != "needs_professional_review":
         raise RuntimeError("complete fictional case did not pass deterministic checks")
+    journey.append(build_case_guide(case_dir))
 
     manifest = json.loads((case_dir / "work" / "input_manifest.json").read_text(encoding="utf-8"))
     hashes = tuple(item["sha256"] for item in manifest["sources"] if item.get("sha256"))
@@ -516,6 +531,7 @@ def _run_complete_fictional_case(case_dir: Path) -> FictionalCaseResult:
         occurred_at="2027-02-15T10:00:00+08:00",
         limitations=(limitation,),
     )
+    journey.append(build_case_guide(case_dir))
     occurred_at = datetime.fromisoformat("2027-02-15T10:01:00+08:00")
     conflict_task = next(
         item
@@ -538,10 +554,35 @@ def _run_complete_fictional_case(case_dir: Path) -> FictionalCaseResult:
     final_status = case_status_payload(case_dir)
     if final_status["status"] != "completed_with_limitations":
         raise RuntimeError("complete fictional case did not close with limitations")
+    journey.append(build_case_guide(case_dir))
+    stages = tuple(item["stage"] for item in journey)
+    expected_stages = (
+        "welcome",
+        "awaiting_documents",
+        "check_in_progress",
+        "awaiting_customer_input",
+        "draft_report_ready",
+    )
+    if stages != expected_stages or "welcome" in stages[1:]:
+        raise RuntimeError(f"complete fictional customer journey changed: {stages!r}")
+    write_json(
+        case_dir / "work" / "customer-journey.json",
+        {
+            "schema_version": "customer-journey/v1",
+            "stages": list(stages),
+            "profile_digest": journey[1]["profile_digest"],
+            "document_groups": journey[1]["document_groups"],
+        },
+    )
     delivery = build_case_delivery(case_dir, include_pdf=True)
     result = _result(case_dir, final_status["status"])
     return FictionalCaseResult(
-        **{**result.__dict__, "delivery_status": delivery["status"], "delivery_revision": delivery["revision"]}
+        **{
+            **result.__dict__,
+            "delivery_status": delivery["status"],
+            "delivery_revision": delivery["revision"],
+            "journey_stages": stages,
+        }
     )
 
 

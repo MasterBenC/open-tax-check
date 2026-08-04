@@ -31,6 +31,15 @@ Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经�
 
 需要 Python 3.11、3.12 或 3.13。
 
+面向客户时，由 AI 智能体先说：“欢迎使用税务健康检查 AI 智能体。请先告诉我企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。”智能体把这五项写入 `customer-profile/v1`，然后调用：
+
+```powershell
+opentaxcheck case-start --case .\cases\demo --profile .\customer-profile.json
+opentaxcheck case-guide --case .\cases\demo
+```
+
+`case-guide` 会返回基础资料、建议资料和发生相关业务时再补充的资料三组清单；条件清单只是询问资料，不代表已经认定契税、印花税或其他税种适用。推荐模型为 DeepSeek V4、腾讯混元 3、GLM-5.2、GPT-5.6、Claude 4.8+、Qwen 3.7 Max 和 Doubao Seed 2.0 Pro，`qwen3.7-plus` 可作为成本均衡方案。模型只影响资料理解和对话辅助，不能改变税额计算、案件状态、证据要求或报告结论；缺少结构化 JSON 或工具能力时使用 `off`。
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -117,6 +126,8 @@ python scripts/run_fictional_example.py --output work/self-service-v1-demo --com
 ```
 
 完整模式只生成 `input/journal.xlsx`，不会再复制 `journal.csv`；同时包含试算平衡表、三张结构化财报、增值税/附加税费/企业所得税/个人所得税四类申报、PNG 和 PDF。它会执行客户确认冲突与重新确认，并在 `work/deliveries/revision-*/` 生成 Markdown、DOCX、Excel 工作底稿、机器快照和证据包。请求 PDF 时，如果宿主没有可用的 LibreOffice 渲染器，`delivery-manifest.json` 会如实记录 `status=partial`、`pdf_status=pdf_renderer_unavailable`，不会生成或宣称一个未经验证的 PDF。
+
+完整模式还会把 `welcome → awaiting_documents → check_in_progress → awaiting_customer_input → draft_report_ready` 写入 `work/customer-journey.json`，并验证上传资料后不会重复欢迎开场。报告、客户交付说明、机器快照和交付清单必须使用同一个修订号。
 
 `--output` 必须指向不存在或空目录；runner 会拒绝非空目录，避免覆盖已有数据或混杂旧产物。Excel 和 CSV 示例的业务招待费发现及金额一致；Excel 的序时账与试算平衡表勾稽通过，状态为 `needs_professional_review`。主要中间产物包括 `work/normalized_journal.jsonl`、`work/normalized_trial_balance.jsonl`、`work/reconciliation.json` 和 `work/coverage_matrix.json`。默认模式的财务报表和纳税申报表相关程序仍是 `present_unparsed`，只有 `--complete` 构成完整虚构验收基线。公司、交易、凭证、金额、人物和结论均为完全虚构。
 

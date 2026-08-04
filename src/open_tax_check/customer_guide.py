@@ -20,6 +20,7 @@ CASE_TO_GUIDE_STAGE = {
     "waiting_for_materials": "awaiting_documents",
     "waiting_for_extraction": "inventory_in_progress",
     "ready_for_self_check": "check_in_progress",
+    "needs_professional_review": "check_in_progress",
     "waiting_for_customer_confirmation": "awaiting_customer_input",
     "completed_with_limitations": "draft_report_ready",
     "completed": "completed",
@@ -189,7 +190,7 @@ def build_case_guide(case_dir: Path) -> dict[str, object]:
     """Return the customer-facing opening prompt for a case directory."""
 
     root = resolve_safe_case_path(case_dir)
-    if not root.exists():
+    if not root.exists() or not any(root.iterdir()):
         return _guide(
             "welcome",
             "欢迎使用税务健康检查 AI 智能体，资料不需要一次准备齐，可以按引导逐步补充。",
