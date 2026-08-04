@@ -4,7 +4,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目�
 
 ## 当前版本范围
 
-当前仓库处于未发布的 **self-service v1** 收尾状态；Python 包版本为 `1.0.0`，GitHub tag/Release 尚未创建：
+当前稳定版本为 **OpenTaxCheck v1.1.0**；此前的 `v1.0.0` 和当前版本均已通过 GitHub Tag/Release 公开发布。当前版本的远端 CI 已在 Windows、macOS、Linux 与 Python 3.11–3.13 组合上通过：
 
 - `.xlsx`、`.xlsm`、`.xls` 可进入安全盘点层，程序会记录文件哈希、工作表结构、有限表头信号、候选角色、公式/合并/隐藏信息和资料覆盖矩阵；
 - 唯一、可见、高置信且不含隐藏数据的工作表才可自动选择；其他情况进入 `needs_sheet_selection`，由复核人运行 `select-sheet`；

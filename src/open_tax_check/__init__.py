@@ -1,6 +1,6 @@
 """OpenTaxCheck deterministic accounting and tax-health-check core."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from .customer_guide import (
     CASE_GUIDE_SCHEMA_VERSION,

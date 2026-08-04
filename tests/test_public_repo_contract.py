@@ -1,4 +1,3 @@
-import re
 import unittest
 from pathlib import Path
 
@@ -11,7 +10,7 @@ ROADMAP_MILESTONES = (
     "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 本地 OCR、20 项全国筛查及每项至少一条受控正式计算路径已完成，优惠、复合计税、预征清算及其他特殊路径仍在进行",
     "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 财务报表/纳税申报表合同、常见模板解析、跨文档勾稽、可恢复案件状态、宿主 Agent 中文补件、《税务健康检查报告》基础交付、DOCX/PDF 页面级版式验收、可验证证据包、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已完成",
     "6. 阶段 5：联网企业数据适配、隐私加固与完整虚构案例 — 安全压缩包、provider 合同离线回放和完整虚构案例已完成；七宿主仅完成 host-neutral 合同回放及宿主专属目标布局/发现标记校验，真实宿主运行时验证仍 pending",
-    "7. 阶段 6：公开 v1 发布 — 隔离 wheel 验收门禁及 CI 3.11–3.13 矩阵合同已加入；真实跨平台 CI 证据、GitHub tag/Release 仍待验证和授权",
+    "7. 阶段 6：公开 v1 发布 — v1.0.0 与 v1.1.0 已发布；当前版本已通过 Windows、macOS、Linux 与 Python 3.11–3.13 的远端 CI",
 )
 LOCAL_OCR_SCOPE_SENTENCE = "PDF、图片已提供可选的本地离线 OCR；联网企业数据和复杂版式理解尚未实现。"
 
@@ -42,24 +41,18 @@ def assert_roadmap_milestones(test_case, text):
     test_case.assertEqual(tuple(lines[1:]), ROADMAP_MILESTONES)
 
 
-def assert_changelog_is_unreleased(test_case, text):
+def assert_changelog_tracks_current_release(test_case, text):
     test_case.assertIn("https://keepachangelog.com/en/1.1.0/", text)
     test_case.assertIn("## [未发布]", text)
-    test_case.assertIn("1.0.0", text)
-    test_case.assertIn("未发布", text)
-    test_case.assertIn(
-        "remains unpublished until creation of a GitHub tag is explicitly authorized.",
-        text,
-    )
-    test_case.assertIsNone(
-        re.search(r"(?m)^## \[\d+\.\d+\.\d+\](?:\s+-.*)?\s*$", text),
-        "unreleased changelog must not contain a published version heading",
-    )
+    test_case.assertIn("## [1.1.0] - 2026-08-04", text)
+    test_case.assertIn("## [1.0.0] - 2026-08-02", text)
 
 
 def assert_readme_phase_scope(test_case, text):
     scope = current_release_scope(text)
-    test_case.assertIn("当前仓库处于未发布的 **self-service v1**", scope)
+    test_case.assertIn("当前稳定版本为 **OpenTaxCheck v1.1.0**", scope)
+    test_case.assertIn("v1.0.0", scope)
+    test_case.assertIn("Windows、macOS、Linux", scope)
     test_case.assertIn("`.xlsx`、`.xlsm`、`.xls`", scope)
     test_case.assertIn("CSV 和已确认映射的 Excel", scope)
     test_case.assertIn("confirm-mapping", scope)
@@ -128,7 +121,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("微信：PosterNote；添加时请备注 GitHub。", text)
         self.assertIn("请勿通过 GitHub Issue、Discussion 或微信发送未经脱敏的客户资料。", text)
         current_scope = current_release_scope(text)
-        self.assertIn("self-service v1", current_scope)
+        self.assertIn("OpenTaxCheck v1.1.0", current_scope)
         self.assertIn("CSV 和已确认映射的 Excel", current_scope)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", current_scope)
         self.assertIn(LOCAL_OCR_SCOPE_SENTENCE, current_scope)
@@ -325,10 +318,10 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertTrue(path.is_file())
         assert_roadmap_milestones(self, path.read_text(encoding="utf-8"))
 
-    def test_changelog_keeps_version_unreleased_until_tag_authorization(self):
+    def test_changelog_tracks_current_release(self):
         path = ROOT / "CHANGELOG.md"
         self.assertTrue(path.is_file())
-        assert_changelog_is_unreleased(self, path.read_text(encoding="utf-8"))
+        assert_changelog_tracks_current_release(self, path.read_text(encoding="utf-8"))
 
     def test_rule_form_requires_authority_test_case_and_data_confirmation(self):
         text = (ROOT / ".github/ISSUE_TEMPLATE/rule-proposal.yml").read_text(encoding="utf-8")
