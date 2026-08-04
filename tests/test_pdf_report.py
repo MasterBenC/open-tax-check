@@ -104,3 +104,20 @@ def test_header_and_footer_embed_the_controlled_chinese_font():
         assert '@font-face' in template
         assert 'data:font/ttf;base64,' in template
         assert 'font-family:"OpenTaxCheck Sans"' in template
+
+
+def test_renderer_rejects_an_unloadable_embedded_font(tmp_path: Path, monkeypatch):
+    from open_tax_check.html_report import render_report_html as render_real_html
+
+    output = tmp_path / "report.pdf"
+    html = render_real_html(_view())
+    marker = "data:font/ttf;base64,"
+    start = html.index(marker) + len(marker)
+    end = html.index('"', start)
+    broken = html[:start] + "bm90LWEtZm9udA==" + html[end:]
+    monkeypatch.setattr("open_tax_check.pdf_report.render_report_html", lambda _view: broken)
+
+    with pytest.raises(PdfExportUnavailable, match="^pdf_font_unavailable$"):
+        write_report_pdf(_view(), output)
+
+    assert not output.exists()

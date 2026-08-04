@@ -144,6 +144,24 @@ def test_handoff_lists_only_existing_hashed_artifacts(tmp_path: Path):
     assert all(item["sha256"] for item in payload["artifacts"])
 
 
+def test_customer_handoff_does_not_expose_historical_v2_artifacts(tmp_path: Path):
+    case = _case(tmp_path)
+    result = build_case_delivery(case)
+    manifest_path = case / result["manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["report_schema_version"] = "tax-health-report/v2"
+    for item in manifest["artifacts"]:
+        item["report_schema_version"] = "tax-health-report/v2"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    pointer_path = case / "work/delivery.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["report_schema_version"] = "tax-health-report/v2"
+    pointer["artifacts"] = manifest["artifacts"]
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    assert verified_delivery_artifacts(case) == ()
+
+
 def test_handoff_rejects_tampered_delivery_revision_path(tmp_path: Path):
     case = _case(tmp_path)
     build_case_delivery(case)
@@ -417,7 +435,7 @@ def test_case_delivery_rolls_back_new_revision_when_pointer_write_fails(tmp_path
             build_case_delivery(case)
 
     assert not (case / "work" / "delivery.json").exists()
-    assert not (case / "work" / "deliveries" / "revision-0001").exists()
+    assert not (case / "work" / "deliveries" / "revision-0001-report-v3").exists()
 
     retry = build_case_delivery(case)
     assert retry["revision"] == 1

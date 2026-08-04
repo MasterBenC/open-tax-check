@@ -443,6 +443,8 @@ def verified_delivery_artifacts(case_dir: Path) -> tuple[dict[str, object], ...]
         raise DeliveryError("delivery_pointer_invalid")
     revision_path = manifest_path.parent.relative_to(root)
     report_schema = manifest["report_schema_version"]
+    if report_schema == _HISTORICAL_REPORT_SCHEMA_VERSION:
+        return ()
     excluded = {"customer_handoff", "evidence_bundle"}
     return tuple(
         {
@@ -453,7 +455,7 @@ def verified_delivery_artifacts(case_dir: Path) -> tuple[dict[str, object], ...]
         }
         for item in manifest["artifacts"]
         if item["kind"] not in excluded
-        and (report_schema == _HISTORICAL_REPORT_SCHEMA_VERSION or item["kind"] == "pdf_report")
+        and item["kind"] == "pdf_report"
     )
 
 

@@ -171,6 +171,10 @@ def write_report_pdf(view: ReportViewV3, path: Path) -> Path:
                         "document.fonts.status === 'loaded'",
                         timeout=120_000,
                     )
+                    if not page.evaluate(
+                        'document.fonts.check(\'12px "OpenTaxCheck Sans"\')'
+                    ):
+                        raise PdfExportUnavailable("pdf_font_unavailable")
                 except PlaywrightTimeoutError as error:
                     raise PdfExportUnavailable("pdf_font_unavailable") from error
                 page.emulate_media(media="print")
