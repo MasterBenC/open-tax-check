@@ -80,7 +80,6 @@ from .tax_reporting import (
     render_tax_health_report,
     tax_snapshot_payload,
     write_tax_health_report,
-    write_tax_health_report_docx,
     write_tax_health_report_pdf,
     write_tax_health_snapshot,
 )

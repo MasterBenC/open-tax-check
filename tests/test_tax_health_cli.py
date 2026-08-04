@@ -10,6 +10,16 @@ from open_tax_check import cli
 from open_tax_check.evidence_bundle import EvidenceBundleError
 
 
+@pytest.fixture(autouse=True)
+def _fast_pdf_renderer(monkeypatch):
+    def write_pdf(_snapshot, path, **_context):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF-1.7\n% fictional CLI test\n")
+        return path
+
+    monkeypatch.setattr(cli, "write_tax_health_report_pdf", write_pdf)
+
+
 def request_payload():
     return {
         "period": {"start": "2026-01-01", "end": "2026-12-31"},
@@ -156,7 +166,6 @@ def test_tax_health_check_cli_builds_verified_bundle_without_originals_by_defaul
         output_dir,
         "--evidence-manifest", str(manifest_path),
         "--evidence-root", str(evidence_root),
-        "--include-docx",
     )
 
     assert cli.main() == 0
@@ -166,8 +175,7 @@ def test_tax_health_check_cli_builds_verified_bundle_without_originals_by_defaul
     assert result["includes_evidence_files"] is False
     assert hashlib.sha256(bundle_path.read_bytes()).hexdigest() == result["evidence_bundle_sha256"]
     with ZipFile(bundle_path) as archive:
-        assert "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md" in archive.namelist()
-        assert "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.docx" in archive.namelist()
+        assert "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.pdf" in archive.namelist()
         assert "tax-health-snapshot.json" in archive.namelist()
         assert not any(name.startswith("evidence/") for name in archive.namelist())
 
@@ -211,7 +219,6 @@ def test_real_fictional_case_builds_a_reopenable_bundle_with_verified_original(
         "--evidence-manifest", str(manifest_path),
         "--evidence-root", str(evidence_root),
         "--include-evidence-files",
-        "--include-docx",
     )
 
     assert cli.main() == 0
@@ -231,14 +238,8 @@ def test_real_fictional_case_builds_a_reopenable_bundle_with_verified_original(
             hashlib.sha256(archive.read(evidence_item["bundle_path"])).hexdigest()
             == digest
         )
-        assert any(
-            item["kind"] == "markdown_report"
-            for item in manifest["artifacts"]
-        )
-        assert any(
-            item["kind"] == "docx_report"
-            for item in manifest["artifacts"]
-        )
+        assert any(item["kind"] == "pdf_report" for item in manifest["artifacts"])
+        assert not any(item["kind"] == "docx_report" for item in manifest["artifacts"])
 
 
 @pytest.mark.parametrize("expected_code", [
@@ -334,20 +335,32 @@ def test_tax_health_check_cli_writes_customer_report_and_machine_snapshot(monkey
     output_dir = tmp_path / "output"
     request_path.write_text(json.dumps(request_payload()), encoding="utf-8")
     monkeypatch.setattr(cli.sys, "argv", [
-        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(output_dir), "--include-docx"
+        "opentaxcheck", "tax-health-check", "--request", str(request_path), "--output-dir", str(output_dir)
     ])
 
     assert cli.main() == 0
     result = json.loads(capsys.readouterr().out)
-    report_path = output_dir / "税务健康检查报告.md"
     snapshot_path = output_dir / "tax-health-snapshot.json"
-    docx_path = output_dir / "税务健康检查报告.docx"
+    pdf_path = output_dir / "税务健康检查报告.pdf"
     assert result["status"] == "completed"
-    assert report_path.is_file()
+    assert result["report_schema_version"] == "tax-health-report/v3"
+    assert Path(result["pdf_path"]) == pdf_path
+    assert "docx_path" not in result
     assert snapshot_path.is_file()
-    assert docx_path.is_file()
-    assert report_path.read_text(encoding="utf-8").startswith("# ")
+    assert pdf_path.is_file()
+    assert not (output_dir / "税务健康检查报告.docx").exists()
     assert json.loads(snapshot_path.read_text(encoding="utf-8"))["revision"] == 1
+
+
+@pytest.mark.parametrize("legacy_flag", ["--include-docx", "--include-pdf"])
+def test_tax_health_check_cli_rejects_legacy_report_flags(monkeypatch, tmp_path, legacy_flag):
+    request_path = write_request(tmp_path)
+    invoke_tax_health_check(monkeypatch, request_path, tmp_path / "output", legacy_flag)
+
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+
+    assert error.value.code == 2
 
 
 def test_tax_health_check_cli_rejects_unknown_request_fields(monkeypatch, tmp_path, capsys):
@@ -453,10 +466,7 @@ def test_tax_health_check_cli_runs_builtin_stamp_tax_rate_table(monkeypatch, tmp
     assert stamp_tax["calculation"]["amount"] == "0.30"
     assert stamp_tax["calculation"]["rate"] == "0.0003"
     assert stamp_tax["calculation"]["rate_selector_label_zh"] == "\u4e70\u5356\u5408\u540c"
-    report = (output_dir / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md").read_text(encoding="utf-8")
-    assert "\u9002\u7528\u7a0e\u76ee: \u4e70\u5356\u5408\u540c" in report
-    assert "\u9002\u7528\u7a0e\u7387: 0.03%" in report
-    assert "sale_contract" not in report
+    assert (output_dir / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.pdf").is_file()
 
 
 def test_tax_health_check_cli_calculates_deed_tax_only_with_confirmed_local_rate(monkeypatch, tmp_path, capsys):
@@ -487,8 +497,7 @@ def test_tax_health_check_cli_calculates_deed_tax_only_with_confirmed_local_rate
     deed_tax = next(item for item in snapshot["results"] if item["tax_id"] == "deed_tax")
     assert deed_tax["calculation"]["amount"] == "3000.00"
     assert deed_tax["calculation"]["rate"] == "0.03"
-    report = (output_dir / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md").read_text(encoding="utf-8")
-    assert "\u9002\u7528\u7a0e\u7387: 3%" in report
+    assert (output_dir / "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.pdf").is_file()
 
 
 def test_tax_health_check_cli_calculates_three_vat_consumption_tax_addons(monkeypatch, tmp_path, capsys):

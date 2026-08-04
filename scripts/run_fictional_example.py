@@ -574,7 +574,10 @@ def _run_complete_fictional_case(case_dir: Path) -> FictionalCaseResult:
             "document_groups": journey[1]["document_groups"],
         },
     )
-    delivery = build_case_delivery(case_dir, include_pdf=True)
+    delivery = build_case_delivery(case_dir)
+    pdf_path = case_dir / delivery["revision_path"] / "税务健康检查报告.pdf"
+    if not pdf_path.is_file():
+        raise RuntimeError("official fictional PDF was not published")
     result = _result(case_dir, final_status["status"])
     return FictionalCaseResult(
         **{

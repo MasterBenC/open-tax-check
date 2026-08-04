@@ -37,11 +37,10 @@ from .tax_io import tax_request_from_dict
 from .tax_models import Confirmation
 from .tax_reporting import (
     PdfExportUnavailable,
-    write_tax_health_report,
-    write_tax_health_report_docx,
     write_tax_health_report_pdf,
     write_tax_health_snapshot,
 )
+from .report_view import REPORT_SCHEMA_VERSION_V3
 from .tax_registry import (
     TaxPackError,
     load_builtin_parameterized_calculation_packs,
@@ -276,8 +275,6 @@ def build_parser() -> argparse.ArgumentParser:
     health_parser = subparsers.add_parser("tax-health-check", help="Run the Chinese tax health self-check")
     health_parser.add_argument("--request", required=True, type=Path)
     health_parser.add_argument("--output-dir", required=True, type=Path)
-    health_parser.add_argument("--include-docx", action="store_true")
-    health_parser.add_argument("--include-pdf", action="store_true")
     health_parser.add_argument("--evidence-manifest", type=Path)
     health_parser.add_argument("--evidence-root", type=Path)
     health_parser.add_argument("--include-evidence-files", action="store_true")
@@ -304,7 +301,6 @@ def build_parser() -> argparse.ArgumentParser:
         "case-delivery", help="Publish one revision-consistent customer delivery"
     )
     delivery_parser.add_argument("--case", required=True, type=Path)
-    delivery_parser.add_argument("--include-pdf", action="store_true")
     delivery_parser.add_argument("--include-evidence-files", action="store_true")
     return parser
 
@@ -721,17 +717,18 @@ def main() -> int:
                 packs=explicit_packs,
                 evaluators=builtin_tax_evaluators() if explicit_packs is not None else None,
             )
-            report_path = write_tax_health_report(snapshot, args.output_dir / "税务健康检查报告.md")
             snapshot_path = write_tax_health_snapshot(snapshot, args.output_dir / "tax-health-snapshot.json")
-            docx_path = write_tax_health_report_docx(snapshot, args.output_dir / "税务健康检查报告.docx") if args.include_docx else None
-            pdf_path = write_tax_health_report_pdf(snapshot, args.output_dir / "税务健康检查报告.pdf") if args.include_pdf else None
+            pdf_path = write_tax_health_report_pdf(
+                snapshot,
+                args.output_dir / "税务健康检查报告.pdf",
+            )
             bundle = None
             if verified_evidence is not None:
                 artifacts = [
                     BundleArtifact(
-                        "markdown_report",
-                        report_path,
-                        "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.md",
+                        "pdf_report",
+                        pdf_path,
+                        "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.pdf",
                     ),
                     BundleArtifact(
                         "machine_snapshot",
@@ -739,18 +736,6 @@ def main() -> int:
                         "tax-health-snapshot.json",
                     ),
                 ]
-                if docx_path is not None:
-                    artifacts.append(BundleArtifact(
-                        "docx_report",
-                        docx_path,
-                        "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.docx",
-                    ))
-                if pdf_path is not None:
-                    artifacts.append(BundleArtifact(
-                        "pdf_report",
-                        pdf_path,
-                        "\u7a0e\u52a1\u5065\u5eb7\u68c0\u67e5\u62a5\u544a.pdf",
-                    ))
                 bundle = build_evidence_bundle(
                     snapshot,
                     verified_evidence,
@@ -783,10 +768,9 @@ def main() -> int:
         print(json.dumps({
             "status": "completed",
             "revision": snapshot.revision,
-            "report_path": str(report_path),
+            "report_schema_version": REPORT_SCHEMA_VERSION_V3,
             "snapshot_path": str(snapshot_path),
-            "docx_path": str(docx_path) if docx_path is not None else None,
-            "pdf_path": str(pdf_path) if pdf_path is not None else None,
+            "pdf_path": str(pdf_path),
             **evidence_bundle_delivery_payload(bundle),
         }, ensure_ascii=False))
         return 0

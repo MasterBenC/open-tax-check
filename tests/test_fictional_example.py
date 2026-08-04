@@ -244,8 +244,8 @@ class FictionalExampleTests(unittest.TestCase):
             artifact_kinds = {item["kind"] for item in manifest["artifacts"]}
             self.assertTrue(
                 {
-                    "markdown_report",
-                    "docx_report",
+                    "html_report",
+                    "pdf_report",
                     "workpaper",
                     "machine_snapshot",
                     "evidence_bundle",
@@ -268,8 +268,9 @@ class FictionalExampleTests(unittest.TestCase):
                 (revision_dir / "tax-health-snapshot.json").read_text(encoding="utf-8")
             )
             self.assertEqual(machine_snapshot["limitations"], private_snapshot["limitations"])
-            report = (revision_dir / "report.md").read_text(encoding="utf-8")
+            report = (revision_dir / "report.html").read_text(encoding="utf-8")
             self.assertIn(private_snapshot["limitations"][0]["message_zh"], report)
+            self.assertTrue((revision_dir / "税务健康检查报告.pdf").is_file())
             from openpyxl import load_workbook
             workbook = load_workbook(revision_dir / "税务健康检查工作底稿.xlsx", read_only=True)
             try:
