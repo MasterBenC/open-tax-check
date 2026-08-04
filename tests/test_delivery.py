@@ -24,6 +24,26 @@ from open_tax_check.tax_models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _fast_report_renderers(monkeypatch):
+    from open_tax_check import delivery
+
+    def write_html(view, path):
+        risks = "".join(item.title_zh for item in view.risks)
+        path.write_text(
+            f"<!doctype html><title>税务健康检查报告</title>{view.executive_summary.entity_name}{risks}",
+            encoding="utf-8",
+        )
+        return path
+
+    def write_pdf(_view, path):
+        path.write_bytes(b"%PDF-1.7\n% fictional delivery test\n")
+        return path
+
+    monkeypatch.setattr(delivery, "write_report_html", write_html, raising=False)
+    monkeypatch.setattr(delivery, "write_report_pdf", write_pdf, raising=False)
+
+
 def _request():
     from datetime import date
 
@@ -53,7 +73,7 @@ def test_case_delivery_publishes_one_revision_for_all_artifacts(tmp_path: Path):
     result = build_case_delivery(case)
 
     assert result["schema_version"] == "tax-delivery/v1"
-    assert result["report_schema_version"] == "tax-health-report/v2"
+    assert result["report_schema_version"] == "tax-health-report/v3"
     assert result["revision"] == 1
     assert result["status"] == "verified"
     manifest_path = case / result["manifest_path"]
@@ -63,13 +83,15 @@ def test_case_delivery_publishes_one_revision_for_all_artifacts(tmp_path: Path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["revision"] == 1
     assert manifest["snapshot_revision"] == 1
-    assert manifest["report_schema_version"] == "tax-health-report/v2"
+    assert manifest["report_schema_version"] == "tax-health-report/v3"
     assert {item["kind"] for item in manifest["artifacts"]} >= {
-        "markdown_report", "docx_report", "workpaper", "machine_snapshot", "evidence_bundle",
+        "html_report", "pdf_report", "workpaper", "machine_snapshot", "evidence_bundle",
     }
+    assert "docx_report" not in {item["kind"] for item in manifest["artifacts"]}
+    assert "markdown_report" not in {item["kind"] for item in manifest["artifacts"]}
     for item in manifest["artifacts"]:
         assert item["snapshot_revision"] == result["revision"]
-        assert item["report_schema_version"] == "tax-health-report/v2"
+        assert item["report_schema_version"] == "tax-health-report/v3"
         assert re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
         artifact = case / result["revision_path"] / item["relative_path"]
         assert artifact.is_file()
@@ -103,13 +125,10 @@ def test_case_delivery_renders_bound_entity_and_approved_findings(tmp_path: Path
 
     result = build_case_delivery(case)
     revision_dir = case / result["revision_path"]
-    markdown = (revision_dir / "report.md").read_text(encoding="utf-8")
-    with ZipFile(revision_dir / "report.docx") as archive:
-        document_xml = archive.read("word/document.xml").decode("utf-8")
-
-    for rendered in (markdown, document_xml):
-        assert "虚构科技有限公司" in rendered
-        assert finding_title in rendered
+    html = (revision_dir / "report.html").read_text(encoding="utf-8")
+    assert "虚构科技有限公司" in html
+    assert finding_title in html
+    assert (revision_dir / "税务健康检查报告.pdf").is_file()
 
 
 def test_handoff_lists_only_existing_hashed_artifacts(tmp_path: Path):
@@ -242,21 +261,31 @@ def test_case_delivery_cli_returns_revision_payload(tmp_path: Path, monkeypatch,
     assert payload["revision"] == 1
 
 
-def test_case_delivery_includes_pdf_in_bundle_when_renderer_succeeds(tmp_path: Path):
+def test_case_delivery_requires_pdf_and_includes_it_in_bundle(tmp_path: Path):
     case = _case(tmp_path)
-
-    def fake_pdf(snapshot, path, **_context):
-        path.write_bytes(b"%PDF-1.7\n")
-        return path
-
-    with patch("open_tax_check.delivery.write_tax_health_report_pdf", side_effect=fake_pdf):
-        result = build_case_delivery(case, include_pdf=True)
+    result = build_case_delivery(case)
 
     assert result["pdf_status"] == "verified"
     manifest = json.loads((case / result["manifest_path"]).read_text(encoding="utf-8"))
     assert any(item["kind"] == "pdf_report" for item in manifest["artifacts"])
     with ZipFile(case / result["revision_path"] / "evidence-bundle.zip") as archive:
-        assert "report.pdf" in archive.namelist()
+        assert "税务健康检查报告.pdf" in archive.namelist()
+
+
+def test_case_delivery_pdf_failure_does_not_publish_revision(tmp_path: Path, monkeypatch):
+    case = _case(tmp_path)
+
+    def fail_pdf(_view, _path):
+        from open_tax_check.pdf_report import PdfExportUnavailable
+        raise PdfExportUnavailable("pdf_renderer_unavailable")
+
+    monkeypatch.setattr("open_tax_check.delivery.write_report_pdf", fail_pdf)
+
+    with pytest.raises(ValueError, match="^pdf_renderer_unavailable$"):
+        build_case_delivery(case)
+
+    assert not (case / "work" / "delivery.json").exists()
+    assert list((case / "work" / "deliveries").glob("revision-*")) == []
 
 
 def test_case_delivery_rejects_pointer_manifest_path_escape(tmp_path: Path):
@@ -357,7 +386,7 @@ def test_case_delivery_publishes_new_revision_after_customer_confirmation(tmp_pa
         ("revision_path", "../../outside"),
         ("status", "forged"),
         ("artifacts", []),
-        ("delivery_options", {"include_pdf": True, "include_evidence_files": True}),
+        ("delivery_options", {"include_evidence_files": True}),
     ],
 )
 def test_case_delivery_rejects_tampered_pointer_fields(tmp_path: Path, field: str, value):

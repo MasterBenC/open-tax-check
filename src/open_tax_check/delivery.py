@@ -27,20 +27,17 @@ from .evidence_bundle import (
     build_evidence_bundle,
 )
 from .source_paths import resolve_safe_source
-from .tax_reporting import (
-    PdfExportUnavailable,
-    tax_snapshot_payload,
-    write_tax_health_report,
-    write_tax_health_report_docx,
-    write_tax_health_report_pdf,
-    write_tax_health_snapshot,
-)
+from .html_report import write_report_html
+from .pdf_report import PdfExportUnavailable, write_report_pdf
+from .report_view import REPORT_SCHEMA_VERSION_V3, build_report_view_v3
+from .tax_reporting import tax_snapshot_payload, write_tax_health_snapshot
 from .tax_models import TaxCheckSnapshot, TaxStatus
 from .workpaper import WORKPAPER_NAME, write_tax_health_workpaper
 
 
 DELIVERY_SCHEMA_VERSION = "tax-delivery/v1"
-REPORT_SCHEMA_VERSION = "tax-health-report/v2"
+REPORT_SCHEMA_VERSION = REPORT_SCHEMA_VERSION_V3
+_HISTORICAL_REPORT_SCHEMA_VERSION = "tax-health-report/v2"
 DELIVERY_POINTER_NAME = "delivery.json"
 DELIVERY_DIR_NAME = "deliveries"
 _CASE_AUDIT_JSON_LIMIT = 2 * 1024 * 1024
@@ -313,6 +310,61 @@ def _report_context(
     return entity_name.strip(), tuple(findings)
 
 
+def _material_statuses(
+    manifest: dict[str, object] | None,
+    case_audit_payloads: dict[str, object],
+) -> tuple[dict[str, object], ...]:
+    """Translate intake state into the report's separate material-status axis."""
+
+    if manifest is None:
+        return ()
+    structured_index = case_audit_payloads.get("structured_document_index", {})
+    documents = (
+        structured_index.get("documents", [])
+        if isinstance(structured_index, dict)
+        else []
+    )
+    structured_source_ids = {
+        item.get("source_id")
+        for item in documents
+        if isinstance(item, dict) and isinstance(item.get("source_id"), str)
+    }
+    reconciliation = case_audit_payloads.get("structured_reconciliation", {})
+    reconciliation_passed = (
+        isinstance(reconciliation, dict) and reconciliation.get("passed") is True
+    )
+    status_map = {
+        "present_unparsed": "received_pending",
+        "accepted": "imported_pending_confirmation",
+        "processing_error": "extraction_partial",
+        "rejected": "contract_invalid",
+    }
+    statuses: list[dict[str, object]] = []
+    for source in manifest.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        source_id = source.get("source_id")
+        if not isinstance(source_id, str) or not source_id.strip():
+            continue
+        status = status_map.get(source.get("status"), "received_pending")
+        if source_id in structured_source_ids:
+            status = (
+                "imported_reconciled"
+                if reconciliation_passed
+                else "imported_pending_confirmation"
+            )
+        display_name = source.get("filename")
+        statuses.append({
+            "source_id": source_id,
+            "display_name_zh": (
+                display_name if isinstance(display_name, str) and display_name else source_id
+            ),
+            "status": status,
+            "tax_ids": (),
+        })
+    return tuple(statuses)
+
+
 def _manifest_for_directory(path: Path) -> dict[str, object]:
     try:
         manifest_path = resolve_safe_source(path / "delivery-manifest.json", path)
@@ -322,7 +374,10 @@ def _manifest_for_directory(path: Path) -> dict[str, object]:
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != DELIVERY_SCHEMA_VERSION
-        or payload.get("report_schema_version") != REPORT_SCHEMA_VERSION
+        or payload.get("report_schema_version") not in {
+            _HISTORICAL_REPORT_SCHEMA_VERSION,
+            REPORT_SCHEMA_VERSION,
+        }
     ):
         raise DeliveryError("delivery_manifest_invalid")
     return payload
@@ -353,7 +408,7 @@ def _verify_delivery_artifacts(
             or not isinstance(expected_sha256, str)
             or _SHA256_RE.fullmatch(expected_sha256) is None
             or snapshot_revision != manifest.get("snapshot_revision")
-            or item.get("report_schema_version") != REPORT_SCHEMA_VERSION
+            or item.get("report_schema_version") != manifest.get("report_schema_version")
         ):
             raise DeliveryError("delivery_artifact_invalid")
         relative = Path(relative_path)
@@ -387,6 +442,7 @@ def verified_delivery_artifacts(case_dir: Path) -> tuple[dict[str, object], ...]
     if pointer != _pointer_payload(root, manifest, manifest_path.parent):
         raise DeliveryError("delivery_pointer_invalid")
     revision_path = manifest_path.parent.relative_to(root)
+    report_schema = manifest["report_schema_version"]
     excluded = {"customer_handoff", "evidence_bundle"}
     return tuple(
         {
@@ -397,20 +453,18 @@ def verified_delivery_artifacts(case_dir: Path) -> tuple[dict[str, object], ...]
         }
         for item in manifest["artifacts"]
         if item["kind"] not in excluded
+        and (report_schema == _HISTORICAL_REPORT_SCHEMA_VERSION or item["kind"] == "pdf_report")
     )
 
 
-def _delivery_options(*, include_pdf: bool, include_evidence_files: bool) -> dict[str, bool]:
-    return {
-        "include_pdf": bool(include_pdf),
-        "include_evidence_files": bool(include_evidence_files),
-    }
+def _delivery_options(*, include_evidence_files: bool) -> dict[str, bool]:
+    return {"include_evidence_files": bool(include_evidence_files)}
 
 
 def _pointer_payload(root: Path, manifest: dict[str, object], revision_path: Path) -> dict[str, object]:
     return {
         "schema_version": DELIVERY_SCHEMA_VERSION,
-        "report_schema_version": REPORT_SCHEMA_VERSION,
+        "report_schema_version": manifest["report_schema_version"],
         "revision": manifest["revision"],
         "status": manifest["status"],
         "manifest_path": (Path("work") / DELIVERY_DIR_NAME / revision_path.name / "delivery-manifest.json").as_posix(),
@@ -453,6 +507,8 @@ def _existing_delivery(
     expected_pointer = _pointer_payload(root, manifest, manifest_path.parent)
     if pointer != expected_pointer:
         raise DeliveryError("delivery_pointer_invalid")
+    if manifest.get("report_schema_version") == _HISTORICAL_REPORT_SCHEMA_VERSION:
+        return None
     manifest_revision = manifest.get("revision")
     if not isinstance(manifest_revision, int) or isinstance(manifest_revision, bool):
         raise DeliveryError("delivery_pointer_invalid")
@@ -472,7 +528,6 @@ def _existing_delivery(
 def build_case_delivery(
     case_dir: Path,
     *,
-    include_pdf: bool = False,
     include_evidence_files: bool = False,
 ) -> dict[str, object]:
     """Publish all delivery artifacts from one immutable case snapshot."""
@@ -480,10 +535,7 @@ def build_case_delivery(
     snapshot = load_case_snapshot(root)
     if any(result.status is TaxStatus.BLOCKED for result in snapshot.results):
         raise DeliveryError("delivery_blocked_data_quality")
-    options = _delivery_options(
-        include_pdf=include_pdf,
-        include_evidence_files=include_evidence_files,
-    )
+    options = _delivery_options(include_evidence_files=include_evidence_files)
     case_audit_artifacts, case_audit_payloads = _case_audit_artifacts(root)
     case_audit_digest = _case_audit_digest(case_audit_artifacts)
     entity_name, reviewed_findings = _report_context(root, case_audit_payloads)
@@ -498,7 +550,7 @@ def build_case_delivery(
         ("work", DELIVERY_DIR_NAME),
         create=True,
     )
-    final_directory = delivery_root / f"revision-{snapshot.revision:04d}"
+    final_directory = delivery_root / f"revision-{snapshot.revision:04d}-report-v3"
     if os.path.lexists(final_directory):
         try:
             metadata = os.lstat(final_directory)
@@ -529,22 +581,19 @@ def build_case_delivery(
     published_directory = False
     try:
         manifest_payload = _read_manifest(root)
-        report_path = temporary_directory / "report.md"
-        docx_path = temporary_directory / "report.docx"
+        html_path = temporary_directory / "report.html"
+        pdf_path = temporary_directory / "税务健康检查报告.pdf"
         workpaper_path = temporary_directory / WORKPAPER_NAME
         snapshot_path = temporary_directory / "tax-health-snapshot.json"
-        write_tax_health_report(
+        material_statuses = _material_statuses(manifest_payload, case_audit_payloads)
+        report_view = build_report_view_v3(
             snapshot,
-            report_path,
             entity_name=entity_name,
             reviewed_findings=reviewed_findings,
+            material_statuses=material_statuses,
         )
-        write_tax_health_report_docx(
-            snapshot,
-            docx_path,
-            entity_name=entity_name,
-            reviewed_findings=reviewed_findings,
-        )
+        write_report_html(report_view, html_path)
+        write_report_pdf(report_view, pdf_path)
         write_tax_health_workpaper(
             snapshot,
             workpaper_path,
@@ -555,40 +604,17 @@ def build_case_delivery(
         write_tax_health_snapshot(snapshot, snapshot_path)
 
         artifacts = [
-            BundleArtifact("markdown_report", report_path, "report.md"),
-            BundleArtifact("docx_report", docx_path, "report.docx"),
+            BundleArtifact("html_report", html_path, "report.html"),
+            BundleArtifact("pdf_report", pdf_path, "税务健康检查报告.pdf"),
             BundleArtifact("workpaper", workpaper_path, "workpaper.xlsx"),
             BundleArtifact("machine_snapshot", snapshot_path, "tax-health-snapshot.json"),
             *case_audit_artifacts,
         ]
-        pdf_status = "not_requested"
-        pdf_path = temporary_directory / "report.pdf"
-        if include_pdf:
-            try:
-                write_tax_health_report_pdf(
-                    snapshot,
-                    pdf_path,
-                    entity_name=entity_name,
-                    reviewed_findings=reviewed_findings,
-                )
-                artifacts.append(BundleArtifact("pdf_report", pdf_path, "report.pdf"))
-                pdf_status = "verified"
-            except PdfExportUnavailable as error:
-                pdf_status = str(error)
         pre_handoff_records = [
             _artifact_record(kind, path, temporary_directory, snapshot.revision)
-            for kind, path in (
-                ("markdown_report", report_path),
-                ("docx_report", docx_path),
-                ("workpaper", workpaper_path),
-                ("machine_snapshot", snapshot_path),
-            )
+            for kind, path in (("pdf_report", pdf_path),)
         ]
-        if include_pdf and pdf_path.is_file():
-            pre_handoff_records.append(
-                _artifact_record("pdf_report", pdf_path, temporary_directory, snapshot.revision)
-            )
-        revision_prefix = Path("work") / DELIVERY_DIR_NAME / f"revision-{snapshot.revision:04d}"
+        revision_prefix = Path("work") / DELIVERY_DIR_NAME / final_directory.name
         handoff_artifacts = tuple(
             {
                 "kind": item["kind"],
@@ -622,16 +648,14 @@ def build_case_delivery(
         artifact_records = [
             _artifact_record(kind, path, temporary_directory, snapshot.revision)
             for kind, path in (
-                ("markdown_report", report_path),
-                ("docx_report", docx_path),
+                ("html_report", html_path),
+                ("pdf_report", pdf_path),
                 ("workpaper", workpaper_path),
                 ("machine_snapshot", snapshot_path),
                 ("customer_handoff", handoff_path),
                 ("evidence_bundle", bundle.path),
             )
         ]
-        if include_pdf and pdf_path.is_file():
-            artifact_records.append(_artifact_record("pdf_report", pdf_path, temporary_directory, snapshot.revision))
         manifest = {
             "schema_version": DELIVERY_SCHEMA_VERSION,
             "report_schema_version": REPORT_SCHEMA_VERSION,
@@ -640,8 +664,8 @@ def build_case_delivery(
             "snapshot_digest": snapshot_digest,
             "case_audit_digest": case_audit_digest,
             "delivery_options": options,
-            "status": "verified" if pdf_status in {"not_requested", "verified"} else "partial",
-            "pdf_status": pdf_status,
+            "status": "verified",
+            "pdf_status": "verified",
             "artifacts": artifact_records,
             "evidence_bundle": {
                 "relative_path": bundle.path.relative_to(temporary_directory).as_posix(),
@@ -657,6 +681,8 @@ def build_case_delivery(
         _atomic_json(work_root / DELIVERY_POINTER_NAME, pointer)
         build_case_customer_handoff(root)
         return pointer
+    except PdfExportUnavailable as error:
+        raise DeliveryError(str(error)) from None
     except DeliveryError:
         if published_directory and final_directory.exists():
             try:

@@ -527,7 +527,6 @@ def main() -> int:
         try:
             result = build_case_delivery(
                 args.case,
-                include_pdf=args.include_pdf,
                 include_evidence_files=args.include_evidence_files,
             )
         except (OSError, UnicodeError, TypeError, ValueError) as error:

@@ -566,7 +566,7 @@ def test_manifest_nested_payloads_are_allowlisted_and_zip_hash_stays_external(tm
         }
         for item in manifest["artifacts"]
     )
-    assert manifest["report_schema_version"] == "tax-health-report/v2"
+    assert manifest["report_schema_version"] == "tax-health-report/v3"
     assert {item["snapshot_revision"] for item in manifest["artifacts"]} == {1}
     assert manifest["audit_events"] == [
         {

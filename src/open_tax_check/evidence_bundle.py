@@ -14,6 +14,7 @@ import unicodedata
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .evidence import verify_evidence_file
+from .report_view import REPORT_SCHEMA_VERSION_V3
 from .tax_models import FactState, TaxCheckRequest, TaxCheckSnapshot, TaxFact
 
 
@@ -471,7 +472,7 @@ def _artifact_payloads(
             "sha256": staged.sha256,
             "size_bytes": staged.size_bytes,
             "snapshot_revision": snapshot_revision,
-            "report_schema_version": "tax-health-report/v2",
+            "report_schema_version": REPORT_SCHEMA_VERSION_V3,
         })
     return payloads
 
@@ -526,7 +527,7 @@ def _manifest_payload(
         "jurisdiction": snapshot.request.jurisdiction,
         "snapshot_schema_version": snapshot.schema_version,
         "snapshot_revision": snapshot.revision,
-        "report_schema_version": "tax-health-report/v2",
+        "report_schema_version": REPORT_SCHEMA_VERSION_V3,
         "includes_evidence_files": include_evidence_files,
         "evidence_items": evidence_items,
         "confirmed_fact_bindings": _confirmed_fact_bindings(snapshot),
