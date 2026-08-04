@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -152,6 +154,47 @@ def test_empty_case_directory_is_initialized_as_a_new_case(tmp_path: Path) -> No
     start_case_from_profile(case_dir, _profile())
 
     assert json.loads((case_dir / "state.json").read_text(encoding="utf-8"))["status"] == "ready_for_input"
+
+
+def test_existing_case_rejects_linked_work_directory_without_writing_target(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    init_case(case_dir, "示例科技有限公司", "2025-01-01", "2025-12-31")
+    target = tmp_path / "outside"
+    target.mkdir()
+    (case_dir / "work").rmdir()
+    try:
+        (case_dir / "work").symlink_to(target, target_is_directory=True)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"directory links are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="^unsafe_case_path$"):
+        start_case_from_profile(case_dir, _profile())
+
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junctions only")
+def test_existing_case_rejects_work_junction_without_writing_target(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    init_case(case_dir, "示例科技有限公司", "2025-01-01", "2025-12-31")
+    target = tmp_path / "outside"
+    target.mkdir()
+    (case_dir / "work").rmdir()
+    junction = case_dir / "work"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if result.returncode != 0:
+        pytest.skip(f"junctions are unavailable: {result.stderr.strip()}")
+    try:
+        with pytest.raises(ValueError, match="^unsafe_case_path$"):
+            start_case_from_profile(case_dir, _profile())
+        assert list(target.iterdir()) == []
+    finally:
+        junction.rmdir()
 
 
 def test_profile_creates_progressive_material_groups(tmp_path: Path) -> None:

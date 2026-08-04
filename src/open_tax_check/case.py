@@ -76,6 +76,11 @@ def resolve_safe_case_path(case_dir: Path) -> Path:
 
     state_path = canonical_case_dir / "state.json"
     _reject_unsafe_node(_direct_stat(state_path), directory=False)
+    for name in ("input", "work", "output", "runs", "reviews"):
+        _reject_unsafe_node(
+            _direct_stat(canonical_case_dir / name),
+            directory=True,
+        )
     return canonical_case_dir
 
 
