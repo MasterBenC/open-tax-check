@@ -80,6 +80,38 @@ def test_case_delivery_publishes_one_revision_for_all_artifacts(tmp_path: Path):
         assert json.loads(archive.read("bundle-manifest.json"))["snapshot_revision"] == 1
 
 
+def test_case_delivery_renders_bound_entity_and_approved_findings(tmp_path: Path):
+    case = _case(tmp_path)
+    finding_title = "收入勾稽差异"
+    (case / "output" / "findings.json").write_text(
+        json.dumps([
+            {
+                "title_zh": finding_title,
+                "status": "suspected",
+                "review_status": "reviewed",
+                "report_status": "approved",
+                "source_kind": "deterministic_discrepancy",
+                "observed_zh": "账簿收入与申报口径存在差异。",
+                "why_it_matters_zh": "可能影响相关申报口径。",
+                "cannot_conclude_zh": "尚不能据此认定少缴税款。",
+                "required_materials_zh": ["收入明细", "申报表"],
+                "next_action_zh": "逐月核对差异来源。",
+            }
+        ], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = build_case_delivery(case)
+    revision_dir = case / result["revision_path"]
+    markdown = (revision_dir / "report.md").read_text(encoding="utf-8")
+    with ZipFile(revision_dir / "report.docx") as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    for rendered in (markdown, document_xml):
+        assert "虚构科技有限公司" in rendered
+        assert finding_title in rendered
+
+
 def test_handoff_lists_only_existing_hashed_artifacts(tmp_path: Path):
     case = _case(tmp_path)
     build_case_delivery(case)
@@ -213,7 +245,7 @@ def test_case_delivery_cli_returns_revision_payload(tmp_path: Path, monkeypatch,
 def test_case_delivery_includes_pdf_in_bundle_when_renderer_succeeds(tmp_path: Path):
     case = _case(tmp_path)
 
-    def fake_pdf(snapshot, path):
+    def fake_pdf(snapshot, path, **_context):
         path.write_bytes(b"%PDF-1.7\n")
         return path
 

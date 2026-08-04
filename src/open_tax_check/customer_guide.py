@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, Mapping
 
 from .case import init_case, resolve_safe_case_path, write_json
+from . import source_paths
 
 
 CUSTOMER_PROFILE_SCHEMA_VERSION = "customer-profile/v1"
@@ -199,10 +200,12 @@ def build_case_guide(case_dir: Path) -> dict[str, object]:
         )
     profile_path = root / "work" / "customer-profile.json"
     try:
-        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        safe_profile_path = source_paths.resolve_safe_source(profile_path, root / "work")
+        payload = json.loads(safe_profile_path.read_text(encoding="utf-8"))
         if not isinstance(payload, Mapping) or payload.get("schema_version") != CUSTOMER_PROFILE_SCHEMA_VERSION:
             raise ValueError("invalid_customer_profile")
-        _customer_profile(payload)
+        customer_profile = _customer_profile(payload)
+        _ensure_existing_case_period(root, customer_profile)
     except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
         return _guide(
             "awaiting_business_profile",

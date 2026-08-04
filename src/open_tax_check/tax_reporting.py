@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 import json
 import os
@@ -185,6 +185,8 @@ def render_report_view(view: ReportView) -> str:
         "",
         "## 老板先看这些事",
     ]
+    if summary.entity_name:
+        lines.insert(5, f"- 检查企业：{summary.entity_name}")
     if view.issues:
         for issue in view.issues:
             lines.extend((
@@ -299,10 +301,19 @@ def _render_technical_report(snapshot: TaxCheckSnapshot) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_tax_health_report(snapshot: TaxCheckSnapshot) -> str:
+def render_tax_health_report(
+    snapshot: TaxCheckSnapshot,
+    *,
+    entity_name: str | None = None,
+    reviewed_findings: Sequence[Mapping[str, object]] = (),
+) -> str:
     """Render the owner report first and retain the full technical appendix."""
 
-    owner = render_report_view(build_report_view(snapshot))
+    owner = render_report_view(build_report_view(
+        snapshot,
+        entity_name=entity_name,
+        reviewed_findings=reviewed_findings,
+    ))
     owner_prefix = owner.split("## 专业附录", 1)[0]
     technical = _render_technical_report(snapshot)
     technical_lines = technical.splitlines()
@@ -330,9 +341,19 @@ def _write_text_atomic(path: Path, content: str) -> Path:
     return path
 
 
-def write_tax_health_report(snapshot: TaxCheckSnapshot, path: Path) -> Path:
+def write_tax_health_report(
+    snapshot: TaxCheckSnapshot,
+    path: Path,
+    *,
+    entity_name: str | None = None,
+    reviewed_findings: Sequence[Mapping[str, object]] = (),
+) -> Path:
     """Atomically write the Chinese customer self-check Markdown report."""
-    return _write_text_atomic(Path(path), render_tax_health_report(snapshot))
+    return _write_text_atomic(Path(path), render_tax_health_report(
+        snapshot,
+        entity_name=entity_name,
+        reviewed_findings=reviewed_findings,
+    ))
 
 
 def write_tax_health_snapshot(snapshot: TaxCheckSnapshot, path: Path) -> Path:
@@ -414,7 +435,13 @@ def _docx_parts(markdown: str) -> dict[str, str]:
     return {"[Content_Types].xml": content_types, "_rels/.rels": root_rels, "word/_rels/document.xml.rels": document_rels, "word/styles.xml": styles, "word/numbering.xml": numbering, "word/document.xml": document}
 
 
-def write_tax_health_report_docx(snapshot: TaxCheckSnapshot, path: Path) -> Path:
+def write_tax_health_report_docx(
+    snapshot: TaxCheckSnapshot,
+    path: Path,
+    *,
+    entity_name: str | None = None,
+    reviewed_findings: Sequence[Mapping[str, object]] = (),
+) -> Path:
     """Write a deterministic, styled DOCX rendition of the customer report."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -423,7 +450,11 @@ def write_tax_health_report_docx(snapshot: TaxCheckSnapshot, path: Path) -> Path
         with tempfile.NamedTemporaryFile("wb", dir=path.parent, suffix=".tmp", delete=False) as handle:
             temporary_path = Path(handle.name)
         with ZipFile(temporary_path, "w", compression=ZIP_DEFLATED) as archive:
-            for name, content in build_docx_parts(build_report_view(snapshot)).items():
+            for name, content in build_docx_parts(build_report_view(
+                snapshot,
+                entity_name=entity_name,
+                reviewed_findings=reviewed_findings,
+            )).items():
                 info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = ZIP_DEFLATED
                 archive.writestr(info, content)
@@ -434,7 +465,13 @@ def write_tax_health_report_docx(snapshot: TaxCheckSnapshot, path: Path) -> Path
     return path
 
 
-def write_tax_health_report_pdf(snapshot: TaxCheckSnapshot, path: Path) -> Path:
+def write_tax_health_report_pdf(
+    snapshot: TaxCheckSnapshot,
+    path: Path,
+    *,
+    entity_name: str | None = None,
+    reviewed_findings: Sequence[Mapping[str, object]] = (),
+) -> Path:
     """Convert the deterministic DOCX report to PDF using an explicit host renderer."""
     renderer = shutil.which("soffice") or shutil.which("libreoffice")
     if renderer is None:
@@ -444,7 +481,12 @@ def write_tax_health_report_pdf(snapshot: TaxCheckSnapshot, path: Path) -> Path:
     with tempfile.TemporaryDirectory(prefix="open-tax-check-pdf-") as directory:
         temporary_dir = Path(directory)
         docx_path = temporary_dir / "tax-health-report.docx"
-        write_tax_health_report_docx(snapshot, docx_path)
+        write_tax_health_report_docx(
+            snapshot,
+            docx_path,
+            entity_name=entity_name,
+            reviewed_findings=reviewed_findings,
+        )
         try:
             completed = subprocess.run(
                 [renderer, "--headless", "--convert-to", "pdf", "--outdir", str(temporary_dir), str(docx_path)],

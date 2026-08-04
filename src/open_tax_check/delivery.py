@@ -251,6 +251,7 @@ def _case_audit_artifacts(
             root / "work/structured-document-index.json",
             "case-audit/structured-document-index.json",
         ),
+        ("findings", root / "output/findings.json", "case-audit/findings.json"),
     )
     for key, path, archive_path in known:
         loaded = _case_audit_json(root, path)
@@ -292,6 +293,24 @@ def _case_audit_digest(artifacts: tuple[BundleArtifact, ...]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _report_context(
+    root: Path,
+    case_audit_payloads: dict[str, object],
+) -> tuple[str, tuple[dict[str, object], ...]]:
+    try:
+        state_path = resolve_safe_source(root / "state.json", root)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        entity_name = state.get("entity_name") if isinstance(state, dict) else None
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        raise DeliveryError("case_state_invalid") from None
+    if not isinstance(entity_name, str) or not entity_name.strip():
+        raise DeliveryError("case_state_invalid")
+    findings = case_audit_payloads.get("findings", [])
+    if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
+        raise DeliveryError("delivery_case_audit_invalid")
+    return entity_name.strip(), tuple(findings)
 
 
 def _manifest_for_directory(path: Path) -> dict[str, object]:
@@ -467,6 +486,7 @@ def build_case_delivery(
     )
     case_audit_artifacts, case_audit_payloads = _case_audit_artifacts(root)
     case_audit_digest = _case_audit_digest(case_audit_artifacts)
+    entity_name, reviewed_findings = _report_context(root, case_audit_payloads)
     existing = _existing_delivery(root, snapshot, options, case_audit_digest)
     if existing is not None:
         build_case_customer_handoff(root)
@@ -513,8 +533,18 @@ def build_case_delivery(
         docx_path = temporary_directory / "report.docx"
         workpaper_path = temporary_directory / WORKPAPER_NAME
         snapshot_path = temporary_directory / "tax-health-snapshot.json"
-        write_tax_health_report(snapshot, report_path)
-        write_tax_health_report_docx(snapshot, docx_path)
+        write_tax_health_report(
+            snapshot,
+            report_path,
+            entity_name=entity_name,
+            reviewed_findings=reviewed_findings,
+        )
+        write_tax_health_report_docx(
+            snapshot,
+            docx_path,
+            entity_name=entity_name,
+            reviewed_findings=reviewed_findings,
+        )
         write_tax_health_workpaper(
             snapshot,
             workpaper_path,
@@ -535,7 +565,12 @@ def build_case_delivery(
         pdf_path = temporary_directory / "report.pdf"
         if include_pdf:
             try:
-                write_tax_health_report_pdf(snapshot, pdf_path)
+                write_tax_health_report_pdf(
+                    snapshot,
+                    pdf_path,
+                    entity_name=entity_name,
+                    reviewed_findings=reviewed_findings,
+                )
                 artifacts.append(BundleArtifact("pdf_report", pdf_path, "report.pdf"))
                 pdf_status = "verified"
             except PdfExportUnavailable as error:

@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 
 import pytest
+from unittest.mock import patch
 
 from open_tax_check.customer_guide import build_case_guide, start_case_from_profile
 from open_tax_check.case import init_case
@@ -226,6 +227,48 @@ def test_profile_creates_progressive_material_groups(tmp_path: Path) -> None:
     assert guide["privacy_zh"]
     assert guide["disclaimer_zh"]
     assert len(guide["profile_digest"]) == 64
+
+
+def test_guide_reads_profile_through_safe_source_validation(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    start_case_from_profile(case_dir, _profile())
+
+    with patch(
+        "open_tax_check.source_paths.resolve_safe_source",
+        side_effect=ValueError("unsafe_source_path"),
+    ) as safe_source:
+        guide = build_case_guide(case_dir)
+
+    safe_source.assert_called_once_with(
+        case_dir / "work" / "customer-profile.json",
+        case_dir / "work",
+    )
+    assert guide["stage"] == "awaiting_business_profile"
+    assert guide["profile_digest"] is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"entity_name": "另一家公司"},
+        {"period_start": "2026-01-01", "period_end": "2026-12-31"},
+    ],
+)
+def test_guide_rejects_stored_profile_that_no_longer_matches_case(
+    tmp_path: Path,
+    changes: dict[str, str],
+) -> None:
+    case_dir = tmp_path / "case"
+    start_case_from_profile(case_dir, _profile())
+    profile_path = case_dir / "work" / "customer-profile.json"
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    payload.update(changes)
+    profile_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    guide = build_case_guide(case_dir)
+
+    assert guide["stage"] == "awaiting_business_profile"
+    assert guide["profile_digest"] is None
 
 
 def test_every_guide_stage_contains_privacy_and_disclaimer(tmp_path: Path) -> None:
