@@ -14,6 +14,7 @@ from open_tax_check.reviews import (
     confirm_sheet_selection,
     load_valid_sheet_selections,
 )
+from open_tax_check.account_classification import confirm_account_classifications
 from open_tax_check.pipeline import inspect_case
 from open_tax_check.schemas import SCHEMA_VERSION
 
@@ -202,6 +203,22 @@ class SheetSelectionReviewTests(unittest.TestCase):
             self.assertTrue(
                 (case / "reviews" / "sheet_selection.json").is_file()
             )
+
+    def test_account_classification_rejects_a_reparse_review_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            case = self.make_case(root)
+            (case / "reviews").mkdir()
+            target = root / "outside.json"
+            target.write_text("{}", encoding="utf-8")
+            review_path = case / "reviews" / "account_classification.json"
+            try:
+                review_path.symlink_to(target)
+            except (NotImplementedError, OSError) as error:
+                self.skipTest(f"file symlinks are unavailable: {error}")
+
+            with self.assertRaisesRegex(ReviewError, "unsafe_review_path"):
+                confirm_account_classifications(case, {})
 
     @unittest.skipUnless(os.name == "nt", "junctions are Windows-only")
     def test_confirmation_allows_case_parent_junction(self):

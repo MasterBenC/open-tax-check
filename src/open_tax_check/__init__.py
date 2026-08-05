@@ -2,6 +2,17 @@
 
 __version__ = "1.1.0"
 
+from .account_classification import (
+    ALLOWED_ACCOUNT_CATEGORIES,
+    AccountClassification,
+    AccountClassificationReview,
+    AccountSourceRef,
+    aggregate_classified_amount,
+    confirm_account_classifications,
+    load_active_account_classifications,
+    parse_account_classification_review,
+)
+
 from .customer_guide import (
     CASE_GUIDE_SCHEMA_VERSION,
     CUSTOMER_PROFILE_SCHEMA_VERSION,

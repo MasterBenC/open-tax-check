@@ -53,6 +53,7 @@ from .reviews import (
     confirm_mapping,
     confirm_sheet_selection,
 )
+from .account_classification import confirm_account_classifications
 from .source_paths import resolve_safe_source
 from .structured_document_providers import (
     StructuredDocumentImportError,
@@ -241,6 +242,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mapping_parser.add_argument("--case", required=True, type=Path)
     mapping_parser.add_argument("--mapping", required=True, type=Path)
+    classification_parser = subparsers.add_parser(
+        "confirm-account-classification",
+        help="Confirm source-bound account classifications",
+    )
+    classification_parser.add_argument("--case", required=True, type=Path)
+    classification_parser.add_argument("--input", required=True, type=Path)
     run_parser = subparsers.add_parser(
         "run",
         help="Normalize selected CSV/Excel accounting sources and run screening",
@@ -435,6 +442,56 @@ def main() -> int:
             )
             return 3
         print(json.dumps({"status": "mapping_confirmed"}, ensure_ascii=False))
+        return 0
+    if args.command == "confirm-account-classification":
+        try:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_account_classification_review",
+                        "error_type": "invalid_account_classification_file",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 3
+        try:
+            confirm_account_classifications(args.case, payload)
+        except (ReviewError, ValueError) as error:
+            allowed = {
+                "invalid_account_classification",
+                "account_classification_binding_mismatch",
+                "unsafe_review_path",
+            }
+            error_type = (
+                str(error)
+                if str(error) in allowed
+                else "confirm_account_classification_failed"
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_account_classification_review",
+                        "error_type": error_type,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 3
+        except Exception:
+            print(
+                json.dumps(
+                    {
+                        "status": "needs_account_classification_review",
+                        "error_type": "confirm_account_classification_failed",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 3
+        print(json.dumps({"status": "account_classification_confirmed"}, ensure_ascii=False))
         return 0
     if args.command == "run":
         code, result = run_case(args.case, args.ai_mode)

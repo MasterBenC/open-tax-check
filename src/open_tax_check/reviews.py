@@ -100,6 +100,10 @@ def _validate_review_paths(
         case_dir / "reviews" / "mapping_proposals.json",
         missing_ok=True,
     )
+    _require_safe_file(
+        case_dir / "reviews" / "account_classification.json",
+        missing_ok=True,
+    )
     return case_dir
 
 
@@ -1136,3 +1140,93 @@ def load_active_mappings(case_dir: Path) -> dict[str, list[dict]]:
                 continue
             active.setdefault(decision["role"], []).append(decision)
     return active
+
+
+def current_source_manifest_sha256(case_dir: Path) -> str | None:
+    """Return the digest of the current frozen source manifest bytes."""
+
+    case_dir = _validate_review_paths(case_dir, require_inventory=False)
+    work_dir = case_dir / "work"
+    if _safe_path_stat(work_dir) is None:
+        return None
+    _require_safe_directory(work_dir)
+    manifest_path = work_dir / "input_manifest.json"
+    if _safe_path_stat(manifest_path) is None:
+        return None
+    _require_safe_file(manifest_path)
+    try:
+        return sha256_file(manifest_path)
+    except OSError:
+        return None
+
+
+def effective_journal_mapping_fingerprint(case_dir: Path) -> str | None:
+    """Return a fail-closed fingerprint for the active journal mapping."""
+
+    case_dir = _validate_review_paths(case_dir, require_inventory=False)
+    work_dir = case_dir / "work"
+    if _safe_path_stat(work_dir) is None:
+        return None
+    _require_safe_directory(work_dir)
+    inventory_path = work_dir / "workbook_inventory.json"
+    if _safe_path_stat(inventory_path) is not None:
+        _require_safe_file(inventory_path)
+        try:
+            active = load_active_mappings(case_dir)
+        except ReviewError:
+            return None
+        fingerprints = sorted(
+            decision["binding"]["fingerprint"]
+            for decision in active.get("journal", ())
+            if isinstance(decision.get("binding"), dict)
+            and isinstance(decision["binding"].get("fingerprint"), str)
+        )
+        if fingerprints:
+            return _fingerprint(
+                {"journal_mapping_binding_fingerprints": fingerprints}
+            )
+
+    legacy_path = work_dir / "mapping_review.json"
+    if _safe_path_stat(legacy_path) is None:
+        return None
+    _require_safe_file(legacy_path)
+    try:
+        payload = _read_json(legacy_path, "invalid_mapping_review")
+    except ReviewError:
+        return None
+    if (
+        payload.get("ready_for_calculation") is not True
+        or not isinstance(payload.get("mapping_version"), str)
+        or not payload["mapping_version"]
+        or not isinstance(payload.get("mapping"), dict)
+        or not payload["mapping"]
+        or any(
+            not isinstance(header, str)
+            or not header
+            or not isinstance(target, str)
+            or not target
+            for header, target in payload["mapping"].items()
+        )
+        or not isinstance(payload.get("composites", {}), dict)
+        or payload.get("unresolved", []) != []
+        or payload.get("missing_required", []) != []
+        or payload.get("conflicts", {}) != {}
+        or (
+            "source_binding" in payload
+            and not isinstance(payload["source_binding"], dict)
+        )
+        or ("binding" in payload and not isinstance(payload["binding"], dict))
+    ):
+        return None
+    basis = {
+        key: payload[key]
+        for key in (
+            "mapping_version",
+            "mapping",
+            "composites",
+            "source_binding",
+            "binding",
+        )
+        if key in payload
+    }
+    return _fingerprint(basis)
