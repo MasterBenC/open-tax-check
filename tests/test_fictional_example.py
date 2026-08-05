@@ -270,6 +270,17 @@ class FictionalExampleTests(unittest.TestCase):
             cross_checks = json.loads(
                 (case_dir / "work" / "tax-cross-checks.json").read_text(encoding="utf-8")
             )
+            self.assertEqual(
+                [item["check_id"] for item in cross_checks["results"]],
+                [
+                    "BOOK-FS-REV-001",
+                    "FS-VAT-SALES-001",
+                    "BOOK-VAT-OUTPUT-001",
+                    "FS-CIT-REV-PROFIT-001",
+                    "BOOK-CIT-BE-001",
+                ],
+            )
+            self.assertEqual(len(cross_checks["results"]), 5)
             self.assertTrue(all(item["status"] == "matched" for item in cross_checks["results"]))
             classification = json.loads(
                 (case_dir / "reviews" / "account_classification.json").read_text(encoding="utf-8")
@@ -366,6 +377,8 @@ class FictionalExampleTests(unittest.TestCase):
             pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(pdf_path).pages)
             self.assertIn("税务健康检查报告", pdf_text)
             self.assertIn("虚构科技有限公司", pdf_text)
+            for item in cross_checks["results"]:
+                self.assertIn(item["title_zh"], pdf_text)
             from openpyxl import load_workbook
             workbook = load_workbook(revision_dir / "税务健康检查工作底稿.xlsx", read_only=True)
             try:

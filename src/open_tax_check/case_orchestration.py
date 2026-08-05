@@ -496,7 +496,7 @@ def build_case_customer_tasks(
     )
     combined: list[AgentQuestionTask | dict[str, object]] = []
     seen: set[str] = set()
-    for item in (*health_tasks, *cross_check_tasks):
+    for item in (*cross_check_tasks, *health_tasks):
         task_id = item.task_id if isinstance(item, AgentQuestionTask) else str(item["task_id"])
         if task_id in seen:
             continue
@@ -587,6 +587,13 @@ def _cross_check_rerun_inputs(
     if journal_path.is_file():
         raw = resolve_safe_source(journal_path, root / "work").read_bytes()
         if len(raw) > _CROSS_CHECK_LIMIT:
+            raise ValueError("cross_check_rerun_inputs_invalid")
+        digest_path = root / "work" / "normalized_journal.sha256"
+        try:
+            expected_digest = digest_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            raise ValueError("cross_check_rerun_inputs_invalid") from None
+        if expected_digest != hashlib.sha256(raw).hexdigest():
             raise ValueError("cross_check_rerun_inputs_invalid")
         parsed_rows = tuple(
             json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()
@@ -928,7 +935,7 @@ def customer_handoff_payload(
         if case_status == CaseStatus.COMPLETED.value
         else "第一轮账务初筛已完成"
     )
-    pending_count = len(snapshot.questions)
+    pending_count = int(status["pending_task_count"])
     unresolved_count = sum(
         result.status in {TaxStatus.NEEDS_EVIDENCE, TaxStatus.NEEDS_LOCAL_POLICY}
         for result in snapshot.results

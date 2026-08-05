@@ -428,7 +428,7 @@ class CaseOrchestrationTests(unittest.TestCase):
       payload = build_case_customer_handoff(case_dir)
 
       self.assertEqual(payload["title_zh"], "第一轮账务初筛已完成")
-      self.assertEqual(payload["pending_task_count"], len(load_case_snapshot(case_dir).questions))
+      self.assertEqual(payload["pending_task_count"], len(build_case_customer_tasks(case_dir)))
       self.assertIn("不代表应补税额、欠税金额或最终申报金额", payload["amount_disclaimer_zh"])
       self.assertIsNone(validate_customer_handoff(payload))
       self.assertTrue((case_dir / "output" / "税务健康检查交付说明.json").is_file())

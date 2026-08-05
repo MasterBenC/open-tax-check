@@ -940,10 +940,14 @@ def _execute_cross_check(
 
     def tax_amount(tax_id: str, key: str) -> SourcedAmount | None:
         identifiers = (tax_id, "enterprise_income_tax") if tax_id == "cit" else (tax_id,)
+        keys = (key,)
+        if key.startswith("cit."):
+            keys = (key, "enterprise_income_tax." + key[4:])
         for identifier in identifiers:
-            value = tax_fact_total(tax_returns, identifier, key, period)
-            if value is not None:
-                return value
+            for fact_key in keys:
+                value = tax_fact_total(tax_returns, identifier, fact_key, period)
+                if value is not None:
+                    return value
         return None
 
     def ledger_amount(category: str) -> SourcedAmount | None:
@@ -1086,7 +1090,11 @@ def rerun_tax_cross_check(
         (item for item in run.results if item.check_id == check_id),
         None,
     )
+    history_event = None
     if previous is not None and (previous.audit_refs or previous.explanations):
+        history_event = "cross-check-rerun-before:" + json.dumps(
+            _json_value(previous), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         if replacement.status is CrossCheckStatus.DIFFERENCE_FOUND and previous.explanations:
             # Preserve prior human evidence, but re-evaluate closure against the
             # newly calculated amounts before exposing the result as closed.
@@ -1111,7 +1119,15 @@ def rerun_tax_cross_check(
         replacement if item.check_id == check_id else item for item in run.results
     )
     final_results, questions = _attach_questions(results)
-    return replace(run, results=final_results, questions=questions)
+    audit_events = run.audit_events
+    if history_event is not None:
+        audit_events = audit_events + (history_event,)
+    return replace(
+        run,
+        results=final_results,
+        questions=questions,
+        audit_events=audit_events,
+    )
 
 
 def apply_cross_check_explanation(

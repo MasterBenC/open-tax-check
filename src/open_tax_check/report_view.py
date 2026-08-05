@@ -26,6 +26,7 @@ MATERIAL_STATUS_ZH = {
 }
 RISK_SEVERITY_ORDER = {"high": 0, "medium": 1, "notice": 2}
 _TAX_NAMES = {item.tax_id: item.name_zh for item in TAX_DEFINITIONS}
+_TAX_NAMES.setdefault("cit", _TAX_NAMES.get("enterprise_income_tax", "企业所得税"))
 _CROSS_CHECK_COMPONENT_ZH = {
     "revenue": "\u6536\u5165",
     "total_profit": "\u5229\u6da6\u603b\u989d",

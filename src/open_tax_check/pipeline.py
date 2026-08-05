@@ -1903,6 +1903,11 @@ def _complete_normalized_run(
     else:
         _write_json(context.work_dir / "data_quality.json", [])
     _write_jsonl(context.work_dir / "normalized_journal.jsonl", journal)
+    journal_path = context.work_dir / "normalized_journal.jsonl"
+    _atomic_write_text(
+        context.work_dir / "normalized_journal.sha256",
+        hashlib.sha256(journal_path.read_bytes()).hexdigest() + "\n",
+    )
     _write_jsonl(
         context.work_dir / "normalized_trial_balance.jsonl",
         trial_balance,
