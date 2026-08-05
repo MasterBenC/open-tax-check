@@ -35,6 +35,21 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_TYPES = frozenset(
     {"ledger_account", "financial_statement_line", "tax_return_line"}
 )
+EXPLANATION_CATEGORIES = (
+        "unbilled_revenue",
+        "deemed_sale",
+        "non_taxable_or_exempt_revenue",
+        "tax_inclusive_conversion",
+        "timing_difference",
+        "amended_return",
+        "book_adjustment",
+        "other",
+)
+_EXPLANATION_CATEGORIES = frozenset(EXPLANATION_CATEGORIES)
+_RESOLUTION_STATUSES = frozenset(
+    {"unresolved", "explained_pending_verification", "closed"}
+)
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
 class CrossCheckStatus(StrEnum):
@@ -223,6 +238,51 @@ class CrossCheckQuestion:
 
 
 @dataclass(frozen=True, slots=True)
+class AmountBridgeItem:
+    amount: Decimal
+    label_zh: str
+    evidence_refs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _finite_decimal(self.amount)
+        if (
+            not _CJK_RE.search(_text(self.label_zh))
+            or not self.evidence_refs
+            or any(not isinstance(item, str) or not item.strip() for item in self.evidence_refs)
+        ):
+            raise _invalid()
+
+
+@dataclass(frozen=True, slots=True)
+class CrossCheckExplanation:
+    check_id: str
+    category: str
+    explanation_zh: str
+    confirmed_by: str
+    confirmed_at: str
+    evidence_refs: tuple[str, ...]
+    bridge_items: tuple[AmountBridgeItem, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.check_id not in CHECK_ORDER or self.category not in _EXPLANATION_CATEGORIES:
+            raise _invalid()
+        if (
+            not _CJK_RE.search(_text(self.explanation_zh))
+            or not _text(self.confirmed_by)
+            or not self.evidence_refs
+            or any(not isinstance(item, str) or not item.strip() for item in self.evidence_refs)
+            or any(not isinstance(item, AmountBridgeItem) for item in self.bridge_items)
+        ):
+            raise _invalid()
+        try:
+            confirmed_at = datetime.fromisoformat(_text(self.confirmed_at))
+        except ValueError:
+            raise _invalid() from None
+        if confirmed_at.tzinfo is None or confirmed_at.utcoffset() is None:
+            raise _invalid()
+
+
+@dataclass(frozen=True, slots=True)
 class CrossCheckResult:
     check_id: str
     tax_ids: tuple[str, ...]
@@ -241,6 +301,8 @@ class CrossCheckResult:
     question: CrossCheckQuestion | None
     components: tuple[CrossCheckComponent, ...]
     audit_refs: tuple[str, ...]
+    resolution_status: str = "unresolved"
+    explanations: tuple[CrossCheckExplanation, ...] = ()
 
     def __post_init__(self) -> None:
         if self.check_id not in CHECK_ORDER or not isinstance(
@@ -262,6 +324,13 @@ class CrossCheckResult:
             or any(not isinstance(item, CrossCheckComponent) for item in self.components)
             or any(not isinstance(item, str) or not item.strip() for item in self.reason_codes)
             or any(not isinstance(item, str) or not item.strip() for item in self.audit_refs)
+            or self.resolution_status not in _RESOLUTION_STATUSES
+            or any(not isinstance(item, CrossCheckExplanation) for item in self.explanations)
+            or any(item.check_id != self.check_id for item in self.explanations)
+        ):
+            raise _invalid()
+        if self.resolution_status != "unresolved" and (
+            self.status is not CrossCheckStatus.DIFFERENCE_FOUND or not self.explanations
         ):
             raise _invalid()
         _finite_decimal(self.absolute_tolerance)
@@ -848,6 +917,74 @@ def run_tax_cross_checks(
     )
 
 
+def apply_cross_check_explanation(
+    run: TaxCrossCheckRun,
+    explanation: CrossCheckExplanation,
+    *,
+    bridge: Sequence[AmountBridgeItem] = (),
+    verified_evidence_refs: Sequence[str],
+) -> TaxCrossCheckRun:
+    """Attach a verified explanation without changing the original finding."""
+
+    if not isinstance(run, TaxCrossCheckRun) or not isinstance(
+        explanation, CrossCheckExplanation
+    ):
+        raise _invalid()
+    bridge_items = tuple(bridge)
+    if any(not isinstance(item, AmountBridgeItem) for item in bridge_items):
+        raise _invalid()
+    verified = frozenset(verified_evidence_refs)
+    required = set(explanation.evidence_refs)
+    required.update(ref for item in bridge_items for ref in item.evidence_refs)
+    if not required or not required.issubset(verified):
+        raise ValueError("unverified_cross_check_evidence")
+    matches = [
+        (index, item)
+        for index, item in enumerate(run.results)
+        if item.check_id == explanation.check_id
+    ]
+    if len(matches) != 1:
+        raise _invalid()
+    index, original = matches[0]
+    if original.status is not CrossCheckStatus.DIFFERENCE_FOUND:
+        raise ValueError("cross_check_explanation_not_applicable")
+    assert original.ledger_amount is not None and original.comparison_amount is not None
+    signed_difference = original.comparison_amount - original.ledger_amount
+    bridge_total = sum((item.amount for item in bridge_items), Decimal("0"))
+    resolution = (
+        "closed"
+        if bridge_items and bridge_total == signed_difference
+        else "explained_pending_verification"
+    )
+    recorded = replace(explanation, bridge_items=bridge_items)
+    event_payload = json.dumps(
+        _json_value(recorded), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    audit_ref = "cross-check-explanation:" + hashlib.sha256(
+        event_payload.encode("utf-8")
+    ).hexdigest()
+    updated_result = replace(
+        original,
+        question=None if resolution == "closed" else original.question,
+        audit_refs=original.audit_refs + (audit_ref,),
+        resolution_status=resolution,
+        explanations=original.explanations + (recorded,),
+    )
+    results = list(run.results)
+    results[index] = updated_result
+    questions = tuple(
+        item for item in run.questions if not (
+            resolution == "closed" and item.check_id == explanation.check_id
+        )
+    )
+    return replace(
+        run,
+        results=tuple(results),
+        questions=questions,
+        audit_events=run.audit_events + (audit_ref,),
+    )
+
+
 def _decimal_text(value: Decimal) -> str:
     return format(value, "f")
 
@@ -874,23 +1011,209 @@ def tax_cross_check_payload(run: TaxCrossCheckRun) -> dict[str, Any]:
     return _json_value(run)
 
 
+def _payload_decimal(value: object, *, optional: bool = False) -> Decimal | None:
+    if value is None and optional:
+        return None
+    if not isinstance(value, str):
+        raise _invalid()
+    try:
+        parsed = Decimal(value)
+    except Exception:
+        raise _invalid() from None
+    if not parsed.is_finite():
+        raise _invalid()
+    return parsed
+
+
+def _source_ref_from_payload(value: object) -> CrossCheckSourceRef:
+    if not isinstance(value, Mapping) or set(value) != {
+        "source_id", "source_type", "locator", "account_category", "form_code", "line_number"
+    }:
+        raise _invalid()
+    return CrossCheckSourceRef(
+        source_id=value.get("source_id"),
+        source_type=value.get("source_type"),
+        locator=value.get("locator"),
+        account_category=value.get("account_category"),
+        form_code=value.get("form_code"),
+        line_number=value.get("line_number"),
+    )
+
+
+def _bridge_from_payload(value: object) -> AmountBridgeItem:
+    if not isinstance(value, Mapping) or set(value) != {
+        "amount", "label_zh", "evidence_refs"
+    }:
+        raise _invalid()
+    refs = value.get("evidence_refs")
+    if not isinstance(refs, list):
+        raise _invalid()
+    return AmountBridgeItem(
+        amount=_payload_decimal(value.get("amount")),
+        label_zh=value.get("label_zh"),
+        evidence_refs=tuple(refs),
+    )
+
+
+def _explanation_from_payload(value: object) -> CrossCheckExplanation:
+    if not isinstance(value, Mapping) or set(value) != {
+        "check_id", "category", "explanation_zh", "confirmed_by", "confirmed_at",
+        "evidence_refs", "bridge_items"
+    }:
+        raise _invalid()
+    refs = value.get("evidence_refs")
+    bridges = value.get("bridge_items", [])
+    if not isinstance(refs, list) or not isinstance(bridges, list):
+        raise _invalid()
+    return CrossCheckExplanation(
+        check_id=value.get("check_id"),
+        category=value.get("category"),
+        explanation_zh=value.get("explanation_zh"),
+        confirmed_by=value.get("confirmed_by"),
+        confirmed_at=value.get("confirmed_at"),
+        evidence_refs=tuple(refs),
+        bridge_items=tuple(_bridge_from_payload(item) for item in bridges),
+    )
+
+
+def _question_from_payload(value: object) -> CrossCheckQuestion:
+    if not isinstance(value, Mapping) or set(value) != {
+        "question_id", "check_id", "period_start", "period_end", "source_refs",
+        "question_zh", "help_zh", "evidence_types", "priority"
+    }:
+        raise _invalid()
+    refs = value.get("source_refs")
+    evidence_types = value.get("evidence_types")
+    if not isinstance(refs, list) or not isinstance(evidence_types, list):
+        raise _invalid()
+    return CrossCheckQuestion(
+        question_id=value.get("question_id"),
+        check_id=value.get("check_id"),
+        period_start=value.get("period_start"),
+        period_end=value.get("period_end"),
+        source_refs=tuple(_source_ref_from_payload(item) for item in refs),
+        question_zh=value.get("question_zh"),
+        help_zh=value.get("help_zh"),
+        evidence_types=tuple(evidence_types),
+        priority=value.get("priority"),
+    )
+
+
+def _component_from_payload(value: object) -> CrossCheckComponent:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {
+            "component_id", "ledger_amount", "comparison_amount", "difference_amount",
+            "difference_ratio", "source_refs"
+        }
+        or not isinstance(value.get("source_refs"), list)
+    ):
+        raise _invalid()
+    return CrossCheckComponent(
+        component_id=value.get("component_id"),
+        ledger_amount=_payload_decimal(value.get("ledger_amount")),
+        comparison_amount=_payload_decimal(value.get("comparison_amount")),
+        difference_amount=_payload_decimal(value.get("difference_amount")),
+        difference_ratio=_payload_decimal(value.get("difference_ratio")),
+        source_refs=tuple(_source_ref_from_payload(item) for item in value["source_refs"]),
+    )
+
+
+def _result_from_payload(value: object) -> CrossCheckResult:
+    if not isinstance(value, Mapping):
+        raise _invalid()
+    base_fields = {
+        "check_id", "tax_ids", "status", "ledger_amount", "comparison_amount",
+        "difference_amount", "difference_ratio", "absolute_tolerance", "relative_tolerance",
+        "period_start", "period_end", "source_refs", "title_zh", "reason_codes", "question",
+        "components", "audit_refs",
+    }
+    if frozenset(value) not in {
+        frozenset(base_fields),
+        frozenset(base_fields | {"resolution_status", "explanations"}),
+    }:
+        raise _invalid()
+    sequence_fields = ("tax_ids", "source_refs", "reason_codes", "components", "audit_refs")
+    if any(not isinstance(value.get(field), list) for field in sequence_fields):
+        raise _invalid()
+    explanations = value.get("explanations", [])
+    if not isinstance(explanations, list):
+        raise _invalid()
+    question_payload = value.get("question")
+    try:
+        status = CrossCheckStatus(value.get("status"))
+    except (TypeError, ValueError):
+        raise _invalid() from None
+    return CrossCheckResult(
+        check_id=value.get("check_id"),
+        tax_ids=tuple(value["tax_ids"]),
+        status=status,
+        ledger_amount=_payload_decimal(value.get("ledger_amount"), optional=True),
+        comparison_amount=_payload_decimal(value.get("comparison_amount"), optional=True),
+        difference_amount=_payload_decimal(value.get("difference_amount"), optional=True),
+        difference_ratio=_payload_decimal(value.get("difference_ratio"), optional=True),
+        absolute_tolerance=_payload_decimal(value.get("absolute_tolerance")),
+        relative_tolerance=_payload_decimal(value.get("relative_tolerance")),
+        period_start=value.get("period_start"),
+        period_end=value.get("period_end"),
+        source_refs=tuple(_source_ref_from_payload(item) for item in value["source_refs"]),
+        title_zh=value.get("title_zh"),
+        reason_codes=tuple(value["reason_codes"]),
+        question=None if question_payload is None else _question_from_payload(question_payload),
+        components=tuple(_component_from_payload(item) for item in value["components"]),
+        audit_refs=tuple(value["audit_refs"]),
+        resolution_status=value.get("resolution_status", "unresolved"),
+        explanations=tuple(_explanation_from_payload(item) for item in explanations),
+    )
+
+
+def parse_tax_cross_check_payload(payload: object) -> TaxCrossCheckRun:
+    """Parse a persisted run back into the strict immutable contract."""
+
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "schema_version", "status", "results", "questions", "source_manifest_sha256",
+        "audit_events", "blocking_issue_refs"
+    }:
+        raise _invalid()
+    results = payload.get("results")
+    questions = payload.get("questions")
+    events = payload.get("audit_events")
+    issues = payload.get("blocking_issue_refs")
+    if any(not isinstance(item, list) for item in (results, questions, events, issues)):
+        raise _invalid()
+    return TaxCrossCheckRun(
+        schema_version=payload.get("schema_version"),
+        status=payload.get("status"),
+        results=tuple(_result_from_payload(item) for item in results),
+        questions=tuple(_question_from_payload(item) for item in questions),
+        source_manifest_sha256=payload.get("source_manifest_sha256"),
+        audit_events=tuple(events),
+        blocking_issue_refs=tuple(issues),
+    )
+
+
 __all__ = [
     "ABSOLUTE_TOLERANCE",
     "CHECK_ORDER",
     "RELATIVE_TOLERANCE",
     "TAX_CROSS_CHECK_SCHEMA_VERSION",
     "CrossCheckComponent",
+    "CrossCheckExplanation",
     "CrossCheckContext",
     "CrossCheckQuestion",
     "CrossCheckResult",
     "CrossCheckSourceRef",
     "CrossCheckStatus",
+    "EXPLANATION_CATEGORIES",
     "DateRange",
     "SourcedAmount",
     "TaxCrossCheckRun",
+    "AmountBridgeItem",
+    "apply_cross_check_explanation",
     "classified_ledger_total",
     "compare_amounts",
     "run_tax_cross_checks",
+    "parse_tax_cross_check_payload",
     "statement_total",
     "tax_fact_total",
     "tax_cross_check_payload",

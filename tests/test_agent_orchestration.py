@@ -5,10 +5,12 @@ import pytest
 
 from open_tax_check.agent_orchestration import (
     build_agent_question_tasks,
+    build_cross_check_question_tasks,
     confirmation_from_task,
     evidence_bundle_delivery_payload,
     task_payload,
 )
+from test_tax_cross_checks import difference_run
 from open_tax_check.evidence_bundle import EvidenceBundleResult
 from open_tax_check.tax_health import run_tax_health_check
 from open_tax_check.tax_models import (
@@ -69,6 +71,37 @@ def test_build_agent_question_tasks_is_priority_ordered_and_bounded():
     assert tasks[0].question_id == "question-a"
     assert tasks[0].task_id == "agent-task-question-a"
     assert task_payload(tasks[0])["question_zh"] == "是否有 A？"
+
+
+def test_cross_check_agent_envelope_is_bounded_and_allowlisted():
+    tasks = build_cross_check_question_tasks(difference_run(), max_questions=3)
+
+    assert len(tasks) == 1
+    payload = tasks[0]
+    assert payload["check_id"] == "FS-VAT-SALES-001"
+    assert payload["allowed_explanation_categories"] == [
+        "unbilled_revenue",
+        "deemed_sale",
+        "non_taxable_or_exempt_revenue",
+        "tax_inclusive_conversion",
+        "timing_difference",
+        "amended_return",
+        "book_adjustment",
+        "other",
+    ]
+    assert set(payload) == {
+        "task_id",
+        "question_id",
+        "check_id",
+        "question_zh",
+        "help_zh",
+        "allowed_explanation_categories",
+        "required_evidence_types",
+        "source_labels",
+    }
+    serialized = __import__("json").dumps(payload, ensure_ascii=False)
+    assert "absolute_tolerance" not in serialized
+    assert "filesystem" not in serialized and "source_manifest_sha256" not in serialized
 
 
 def test_confirmation_from_task_preserves_identity_and_evidence():

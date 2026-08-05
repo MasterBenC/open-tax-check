@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 
 from .evidence_bundle import EvidenceBundleResult
 from .tax_models import Confirmation, PromptChoice, Question, TaxCheckSnapshot
+from .tax_cross_checks import EXPLANATION_CATEGORIES, TaxCrossCheckRun
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +82,39 @@ def task_payload(task: AgentQuestionTask) -> dict[str, object]:
     payload = asdict(task)
     payload["choices"] = [asdict(choice) for choice in task.choices]
     return payload
+
+
+def build_cross_check_question_tasks(
+    run: TaxCrossCheckRun,
+    *,
+    max_questions: int = 3,
+) -> tuple[dict[str, object], ...]:
+    """Return the narrow host-Agent envelope for cross-check follow-up."""
+
+    if (
+        not isinstance(run, TaxCrossCheckRun)
+        or not isinstance(max_questions, int)
+        or isinstance(max_questions, bool)
+        or not 0 <= max_questions <= 3
+    ):
+        raise ValueError("invalid_cross_check_question_budget")
+    return tuple(
+        {
+            "task_id": f"agent-task-{question.question_id}",
+            "question_id": question.question_id,
+            "check_id": question.check_id,
+            "question_zh": question.question_zh,
+            "help_zh": question.help_zh,
+            "allowed_explanation_categories": list(EXPLANATION_CATEGORIES),
+            "required_evidence_types": list(question.evidence_types),
+            "source_labels": list(
+                dict.fromkeys(
+                    f"{ref.source_type}:{ref.locator}" for ref in question.source_refs
+                )
+            ),
+        }
+        for question in run.questions[:max_questions]
+    )
 
 
 def _value_matches(task: AgentQuestionTask, value: object) -> bool:

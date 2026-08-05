@@ -16,6 +16,7 @@ from .case_orchestration import (
     build_case_customer_tasks,
     case_status_payload,
     run_case_self_check,
+    confirm_cross_check_explanation,
 )
 from .delivery import DeliveryError, build_case_delivery
 from .agent_orchestration import evidence_bundle_delivery_payload, task_payload
@@ -35,6 +36,7 @@ from .pipeline import inspect_case, run_case
 from .tax_health import run_tax_health_check
 from .tax_io import tax_request_from_dict
 from .tax_models import Confirmation
+from .tax_cross_checks import tax_cross_check_payload
 from .tax_reporting import (
     PdfExportUnavailable,
     write_tax_health_report_pdf,
@@ -304,6 +306,12 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_case_parser = subparsers.add_parser("case-confirm", help="Apply a structured customer confirmation batch")
     confirm_case_parser.add_argument("--case", required=True, type=Path)
     confirm_case_parser.add_argument("--input", required=True, type=Path)
+    confirm_cross_check_parser = subparsers.add_parser(
+        "confirm-cross-check",
+        help="Confirm one evidence-bound cross-check explanation",
+    )
+    confirm_cross_check_parser.add_argument("--case", required=True, type=Path)
+    confirm_cross_check_parser.add_argument("--input", required=True, type=Path)
     delivery_parser = subparsers.add_parser(
         "case-delivery", help="Publish one revision-consistent customer delivery"
     )
@@ -575,6 +583,27 @@ def main() -> int:
             print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
             return 4
         print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "confirm-cross-check":
+        try:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("invalid_cross_check_confirmation")
+            result = confirm_cross_check_explanation(args.case, payload)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            allowed = {
+                "invalid_cross_check_confirmation",
+                "cross_check_confirmation_binding_mismatch",
+                "cross_check_confirmation_conflict",
+                "cross_check_confirmation_locked",
+                "cross_check_confirmation_write_failed",
+                "unverified_cross_check_evidence",
+                "unsafe_case_path",
+            }
+            error_code = str(error) if str(error) in allowed else "cross_check_confirmation_failed"
+            print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))
+            return 4
+        print(json.dumps(tax_cross_check_payload(result), ensure_ascii=False))
         return 0
     if args.command == "case-delivery":
         try:

@@ -16,9 +16,13 @@ from open_tax_check.tax_cross_checks import (
     CrossCheckContext,
     DateRange,
     TaxCrossCheckRun,
+    AmountBridgeItem,
+    CrossCheckExplanation,
+    apply_cross_check_explanation,
     classified_ledger_total,
     compare_amounts,
     run_tax_cross_checks,
+    parse_tax_cross_check_payload,
     statement_total,
     tax_fact_total,
     tax_cross_check_payload,
@@ -127,6 +131,110 @@ def completed_run() -> TaxCrossCheckRun:
         audit_events=(),
         blocking_issue_refs=(),
     )
+
+
+def difference_run() -> TaxCrossCheckRun:
+    base = completed_run()
+    target = CrossCheckResult(
+        check_id=CHECK_ORDER[1],
+        tax_ids=("vat",),
+        status=CrossCheckStatus.DIFFERENCE_FOUND,
+        ledger_amount=Decimal("1000.00"),
+        comparison_amount=Decimal("1100.00"),
+        difference_amount=Decimal("100.00"),
+        difference_ratio=Decimal("0.09090909090909090909090909091"),
+        absolute_tolerance=ABSOLUTE_TOLERANCE,
+        relative_tolerance=RELATIVE_TOLERANCE,
+        period_start="2025-01-01",
+        period_end="2025-12-31",
+        source_refs=(source_ref(),),
+        title_zh="利润表营业收入与增值税申报销售额核对",
+        reason_codes=("timing_difference",),
+        question=question(CHECK_ORDER[1]),
+        components=(),
+        audit_refs=(),
+    )
+    results = list(base.results)
+    results[1] = target
+    return TaxCrossCheckRun(
+        base.schema_version,
+        base.status,
+        tuple(results),
+        (target.question,),
+        base.source_manifest_sha256,
+        (),
+        (),
+    )
+
+
+def explanation() -> CrossCheckExplanation:
+    return CrossCheckExplanation(
+        check_id=CHECK_ORDER[1],
+        category="timing_difference",
+        explanation_zh="该差异为已核验的申报与账务确认期间差异。",
+        confirmed_by="Chen Li",
+        confirmed_at="2026-08-05T10:00:00+08:00",
+        evidence_refs=("source-1",),
+    )
+
+
+def test_text_only_explanation_cannot_close_difference():
+    updated = apply_cross_check_explanation(
+        difference_run(), explanation(), bridge=(), verified_evidence_refs=("source-1",)
+    )
+
+    assert updated.results[1].resolution_status == "explained_pending_verification"
+    assert updated.results[1].status is CrossCheckStatus.DIFFERENCE_FOUND
+    assert updated.results[1].difference_amount == Decimal("100.00")
+
+
+def test_complete_verified_bridge_can_close_difference():
+    bridge = AmountBridgeItem(
+        amount=Decimal("100.00"),
+        label_zh="申报确认期间差异",
+        evidence_refs=("source-1",),
+    )
+
+    updated = apply_cross_check_explanation(
+        difference_run(),
+        explanation(),
+        bridge=(bridge,),
+        verified_evidence_refs=("source-1",),
+    )
+
+    assert updated.results[1].resolution_status == "closed"
+    assert updated.results[1].status is CrossCheckStatus.DIFFERENCE_FOUND
+    assert updated.results[1].difference_amount == Decimal("100.00")
+
+
+def test_unverified_bridge_or_wrong_total_cannot_close_difference():
+    wrong = AmountBridgeItem(
+        amount=Decimal("99.99"),
+        label_zh="未完全桥接的期间差异",
+        evidence_refs=("source-1",),
+    )
+    updated = apply_cross_check_explanation(
+        difference_run(), explanation(), bridge=(wrong,), verified_evidence_refs=("source-1",)
+    )
+    assert updated.results[1].resolution_status == "explained_pending_verification"
+
+    with pytest.raises(ValueError, match="unverified_cross_check_evidence"):
+        apply_cross_check_explanation(
+            difference_run(), explanation(), bridge=(wrong,), verified_evidence_refs=()
+        )
+
+
+def test_cross_check_payload_round_trips_explanations_exactly():
+    bridge = AmountBridgeItem(
+        amount=Decimal("100.00"),
+        label_zh="申报确认期间差异",
+        evidence_refs=("source-1",),
+    )
+    updated = apply_cross_check_explanation(
+        difference_run(), explanation(), bridge=(bridge,), verified_evidence_refs=("source-1",)
+    )
+
+    assert parse_tax_cross_check_payload(tax_cross_check_payload(updated)) == updated
 
 
 def test_completed_run_requires_exact_fixed_order_and_is_immutable():

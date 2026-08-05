@@ -6,6 +6,8 @@ from datetime import date, datetime, timezone
 from dataclasses import replace
 from enum import StrEnum
 import json
+import hashlib
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -38,6 +40,14 @@ from .tax_models import (
     TaxStatus,
 )
 from .tax_reporting import effective_limitations, write_tax_health_report, write_tax_health_snapshot
+from .tax_cross_checks import (
+    AmountBridgeItem,
+    CrossCheckExplanation,
+    TaxCrossCheckRun,
+    apply_cross_check_explanation,
+    parse_tax_cross_check_payload,
+    tax_cross_check_payload,
+)
 
 
 CASE_SCHEMA_VERSION = "tax-case/v1"
@@ -47,6 +57,20 @@ PUBLIC_SNAPSHOT_NAME = "tax-health-snapshot.json"
 REPORT_NAME = "税务健康检查报告.md"
 HANDOFF_NAME = "税务健康检查交付说明.json"
 _INPUT_MANIFEST_LIMIT = 2 * 1024 * 1024
+_CROSS_CHECK_LIMIT = 4 * 1024 * 1024
+_CROSS_CHECK_CONFIRMATION_FIELDS = frozenset(
+    {
+        "question_id",
+        "check_id",
+        "source_manifest_sha256",
+        "category",
+        "explanation_zh",
+        "confirmed_by",
+        "confirmed_at",
+        "evidence_refs",
+        "bridge",
+    }
+)
 
 
 class CaseStatus(StrEnum):
@@ -485,6 +509,143 @@ def _confirmation_evidence_is_verified(root: Path, confirmation: Confirmation) -
         reference == customer_ref or _verified_manifest_source(root, reference)
         for reference in confirmation.evidence_refs
     )
+
+
+def _cross_check_bridge(payload: object) -> tuple[AmountBridgeItem, ...]:
+    if not isinstance(payload, list):
+        raise ValueError("invalid_cross_check_confirmation")
+    items: list[AmountBridgeItem] = []
+    for item in payload:
+        if not isinstance(item, Mapping) or set(item) != {
+            "amount", "label_zh", "evidence_refs"
+        } or not isinstance(item.get("evidence_refs"), list):
+            raise ValueError("invalid_cross_check_confirmation")
+        try:
+            amount = __import__("decimal").Decimal(item["amount"])
+            items.append(
+                AmountBridgeItem(
+                    amount=amount,
+                    label_zh=item["label_zh"],
+                    evidence_refs=tuple(item["evidence_refs"]),
+                )
+            )
+        except (ArithmeticError, TypeError, ValueError):
+            raise ValueError("invalid_cross_check_confirmation") from None
+    return tuple(items)
+
+
+def confirm_cross_check_explanation(
+    case_dir: Path,
+    payload: dict,
+) -> TaxCrossCheckRun:
+    """Persist one evidence-bound customer explanation as a new cross-check revision."""
+
+    root = _case_dir(case_dir)
+    if not isinstance(payload, dict) or set(payload) != _CROSS_CHECK_CONFIRMATION_FIELDS:
+        raise ValueError("invalid_cross_check_confirmation")
+    lock_path = root / "work" / ".cross-check-confirm.lock"
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise ValueError("cross_check_confirmation_locked") from None
+    os.close(lock_fd)
+    try:
+        cross_path = resolve_safe_source(
+            root / "work" / "tax-cross-checks.json", root / "work"
+        )
+        raw = cross_path.read_bytes()
+        if len(raw) > _CROSS_CHECK_LIMIT:
+            raise ValueError("invalid_cross_check_confirmation")
+        run = parse_tax_cross_check_payload(json.loads(raw.decode("utf-8")))
+        manifest_path = resolve_safe_source(
+            root / "work" / "input_manifest.json", root / "work"
+        )
+        manifest_raw = manifest_path.read_bytes()
+        manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+        if (
+            payload.get("source_manifest_sha256") != manifest_sha256
+            or run.source_manifest_sha256 != manifest_sha256
+        ):
+            raise ValueError("cross_check_confirmation_binding_mismatch")
+        question = next(
+            (
+                item for item in run.questions
+                if item.question_id == payload.get("question_id")
+                and item.check_id == payload.get("check_id")
+            ),
+            None,
+        )
+        canonical = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        event_prefix = f"cross-check-confirmation:{payload.get('question_id')}:"
+        previous = tuple(item for item in run.audit_events if item.startswith(event_prefix))
+        if previous:
+            if previous == (event_prefix + digest,):
+                return run
+            raise ValueError("cross_check_confirmation_conflict")
+        if question is None:
+            raise ValueError("cross_check_confirmation_binding_mismatch")
+        evidence_refs = payload.get("evidence_refs")
+        if not isinstance(evidence_refs, list) or not evidence_refs:
+            raise ValueError("invalid_cross_check_confirmation")
+        bridge = _cross_check_bridge(payload.get("bridge"))
+        all_refs = tuple(evidence_refs) + tuple(
+            ref for item in bridge for ref in item.evidence_refs
+        )
+        if any(not _verified_manifest_source(root, ref) for ref in all_refs):
+            raise ValueError("unverified_cross_check_evidence")
+        try:
+            explanation = CrossCheckExplanation(
+                check_id=payload["check_id"],
+                category=payload["category"],
+                explanation_zh=payload["explanation_zh"],
+                confirmed_by=payload["confirmed_by"],
+                confirmed_at=payload["confirmed_at"],
+                evidence_refs=tuple(evidence_refs),
+            )
+            revised = apply_cross_check_explanation(
+                run,
+                explanation,
+                bridge=bridge,
+                verified_evidence_refs=all_refs,
+            )
+        except ValueError as error:
+            if str(error) == "unverified_cross_check_evidence":
+                raise
+            raise ValueError("invalid_cross_check_confirmation") from None
+        revised = replace(
+            revised,
+            audit_events=revised.audit_events + (event_prefix + digest,),
+        )
+        pointer = root / "work" / "delivery.json"
+        pointer_backup = root / "work" / ".delivery.json.cross-check-backup"
+        pointer_moved = False
+        if pointer.is_file():
+            if pointer_backup.exists():
+                raise ValueError("cross_check_confirmation_write_failed")
+            os.replace(pointer, pointer_backup)
+            pointer_moved = True
+        try:
+            write_json(cross_path, tax_cross_check_payload(revised))
+        except Exception:
+            if pointer_moved:
+                os.replace(pointer_backup, pointer)
+            raise ValueError("cross_check_confirmation_write_failed") from None
+        if pointer_moved:
+            try:
+                pointer_backup.unlink()
+            except OSError:
+                pass
+        return revised
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid_cross_check_confirmation") from error
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def apply_case_confirmations(
