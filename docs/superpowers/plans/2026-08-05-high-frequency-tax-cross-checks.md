@@ -162,7 +162,7 @@ git commit -m "feat: add source-bound account classifications"
     ("100000.00", "100009.00", "within_tolerance", "9.00", "0.00008999190072893439590436860683"),
     ("100.00", "109.00", "difference_found", "9.00", "0.08256880733944954128440366972"),
     ("0.00", "1.00", "difference_found", "1.00", "1"),
-    ("-100.00", "-110.01", "difference_found", "10.01", "0.09099172802472502545223161531"),
+    ("-100.00", "-110.01", "difference_found", "10.01", "0.09099172802472502499772747932"),
 ])
 def test_compare_amounts_uses_both_fixed_thresholds(left, right, status, difference, ratio):
     result = compare_amounts(Decimal(left), Decimal(right))

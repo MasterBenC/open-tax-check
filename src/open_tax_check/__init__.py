@@ -12,6 +12,20 @@ from .account_classification import (
     load_active_account_classifications,
     parse_account_classification_review,
 )
+from .tax_cross_checks import (
+    ABSOLUTE_TOLERANCE,
+    CHECK_ORDER,
+    RELATIVE_TOLERANCE,
+    TAX_CROSS_CHECK_SCHEMA_VERSION,
+    CrossCheckComponent,
+    CrossCheckQuestion,
+    CrossCheckResult,
+    CrossCheckSourceRef,
+    CrossCheckStatus,
+    TaxCrossCheckRun,
+    compare_amounts,
+    tax_cross_check_payload,
+)
 
 from .customer_guide import (
     CASE_GUIDE_SCHEMA_VERSION,
