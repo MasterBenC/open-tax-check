@@ -52,7 +52,26 @@ _RESOLUTION_STATUSES = frozenset(
 )
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _DECIMAL_CONTEXT = Context(prec=28)
-_AI_IDENTITIES = frozenset({"ai", "agent", "host_ai", "model"})
+_AI_IDENTITIES = frozenset(
+    {
+        "ai",
+        "agent",
+        "host_ai",
+        "model",
+        "openai",
+        "chatgpt",
+        "gpt",
+        "claude",
+        "deepseek",
+        "qwen",
+        "hermes",
+        "copilot",
+        "qoder",
+        "luna",
+        "glm",
+        "seed",
+    }
+)
 
 
 class CrossCheckStatus(StrEnum):

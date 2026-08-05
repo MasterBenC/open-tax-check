@@ -192,7 +192,18 @@ def test_compare_amounts_is_independent_of_ambient_decimal_precision():
 
 @pytest.mark.parametrize(
     "confirmed_by",
-    ("Chen Li", "ai:tax-agent", "agent:reviewer", "model:gpt", "human:ai"),
+    (
+        "Chen Li",
+        "ai:tax-agent",
+        "agent:reviewer",
+        "model:gpt",
+        "human:ai",
+        "human:ChatGPT",
+        "human:Claude",
+        "human:DeepSeek",
+        "human:Qwen",
+        "human:Hermes Agent",
+    ),
 )
 def test_cross_check_explanation_requires_explicit_non_ai_human_attestation(
     confirmed_by,
