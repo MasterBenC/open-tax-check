@@ -365,6 +365,20 @@ def _tax_cross_check_record(
     }
 
 
+def _source_manifest_digest(root: Path) -> str | None:
+    path = root / "work" / "input_manifest.json"
+    if not os.path.lexists(path):
+        return None
+    try:
+        safe_path = resolve_safe_source(path, root / "work")
+        raw = safe_path.read_bytes()
+    except (OSError, ValueError):
+        raise DeliveryError("delivery_case_audit_invalid") from None
+    if len(raw) > _CASE_AUDIT_JSON_LIMIT:
+        raise DeliveryError("delivery_case_audit_invalid")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _validate_tax_cross_check_record(
     value: object,
     expected: dict[str, str] | None,
@@ -640,6 +654,8 @@ def build_case_delivery(
     options = _delivery_options(include_evidence_files=include_evidence_files)
     case_audit_artifacts, case_audit_payloads = _case_audit_artifacts(root)
     tax_cross_checks = _tax_cross_check_record(case_audit_artifacts, case_audit_payloads)
+    if tax_cross_checks is not None and tax_cross_checks["source_manifest_sha256"] != _source_manifest_digest(root):
+        raise DeliveryError("delivery_case_audit_invalid")
     if (
         isinstance(case_audit_payloads.get("tax_cross_checks"), dict)
         and case_audit_payloads["tax_cross_checks"].get("status") == "blocked_data_quality"

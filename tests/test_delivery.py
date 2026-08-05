@@ -1,5 +1,7 @@
 import json
 import re
+import hashlib
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -135,7 +137,12 @@ def test_case_delivery_renders_bound_entity_and_approved_findings(tmp_path: Path
 
 def test_case_delivery_renders_persisted_cross_check_difference(tmp_path: Path):
     case = _case(tmp_path)
-    run = difference_run()
+    manifest_payload = {"sources": []}
+    manifest_bytes = json.dumps(manifest_payload).encode("utf-8")
+    (case / "work/input_manifest.json").write_bytes(manifest_bytes)
+    run = replace(
+        difference_run(), source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest()
+    )
     (case / "work/tax-cross-checks.json").write_text(
         json.dumps(tax_cross_check_payload(run), ensure_ascii=False), encoding="utf-8"
     )
@@ -144,6 +151,17 @@ def test_case_delivery_renders_persisted_cross_check_difference(tmp_path: Path):
     html = (case / result["revision_path"] / "report.html").read_text(encoding="utf-8")
 
     assert run.results[1].title_zh in html
+
+
+def test_case_delivery_rejects_cross_check_bound_to_another_source_manifest(tmp_path: Path):
+    case = _case(tmp_path)
+    (case / "work/input_manifest.json").write_text(json.dumps({"sources": []}), encoding="utf-8")
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(difference_run())), encoding="utf-8"
+    )
+
+    with pytest.raises(DeliveryError, match="delivery_case_audit_invalid"):
+        build_case_delivery(case)
 
 
 def test_handoff_lists_only_existing_hashed_artifacts(tmp_path: Path):
@@ -191,6 +209,8 @@ def test_handoff_rejects_tampered_delivery_revision_path(tmp_path: Path):
 
 def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(tmp_path: Path):
     case = _case(tmp_path)
+    manifest_bytes = json.dumps({"sources": []}).encode("utf-8")
+    (case / "work/input_manifest.json").write_bytes(manifest_bytes)
     structured = case / "work/structured-documents"
     structured.mkdir()
     (structured / "bs.financial-statement.json").write_text(
@@ -206,7 +226,10 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
         encoding="utf-8",
     )
     (case / "work/tax-cross-checks.json").write_text(
-        json.dumps(tax_cross_check_payload(completed_run())),
+        json.dumps(tax_cross_check_payload(replace(
+            completed_run(),
+            source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        ))),
         encoding="utf-8",
     )
     (case / "work/coverage_matrix.json").write_text(
@@ -231,7 +254,7 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
             "case-audit/reviews/mapping-review.json",
         }.issubset(archive.namelist())
     delivery_manifest = json.loads((case / result["manifest_path"]).read_text(encoding="utf-8"))
-    assert delivery_manifest["tax_cross_checks"]["source_manifest_sha256"] == "a" * 64
+    assert delivery_manifest["tax_cross_checks"]["source_manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
     assert len(delivery_manifest["tax_cross_checks"]["sha256"]) == 64
 
 
