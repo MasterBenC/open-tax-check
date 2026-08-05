@@ -4,7 +4,17 @@
 
 ## [未发布]
 
-暂无。
+### 客户报告 v3
+
+- 正式客户交付升级为 `tax-health-report/v3`，只提供固定版式的 `税务健康检查报告.pdf`；Word/DOCX、可选 PDF 模式及相关 CLI 开关不再属于客户接口。
+- PDF 由离线 Chromium 渲染固定 HTML，内嵌 `NotoSansSC-VF.ttf`，阻断渲染期外部请求，并在字体、中文文本、报告编号、书签和目录实际页码校验通过后原子发布。
+- `report` extra 固定安装 Playwright 与 pypdf；安装后必须执行 `python -m playwright install chromium`。wheel 包含固定字体、CSS 与 OFL 许可证，字体仅对指定路径使用单独大小上限。
+- 案件交付必须成功生成 PDF 才能发布 v3 修订指针；HTML、工作底稿、机器快照和证据包继续作为内部审计产物，历史 v2 修订保持只读且不迁移。
+- AI 智能体应优先使用自身 OCR/视觉能力处理客户资料；本地 OCR 是可选补充能力。已上传但尚未解析的资料不得描述为“未提供”。
+
+### 破坏性变更
+
+- 移除客户侧 DOCX 输出、`--include-docx`、`--include-pdf` 和顶层 DOCX writer 导出。缺少 Chromium 时正式交付失败，不回退 Word。
 
 ## [1.1.0] - 2026-08-04
 
