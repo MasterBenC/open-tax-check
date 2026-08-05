@@ -261,6 +261,7 @@ def test_rerun_preserves_prior_explanation_history(monkeypatch):
     assert target.explanations == pending.results[1].explanations
     assert target.audit_refs == pending.results[1].audit_refs
     assert target.resolution_status == "explained_pending_verification"
+    assert any(event.startswith("cross-check-rerun-before:") for event in rerun.audit_events)
 
 
 def test_rerun_preserves_closed_explanation_without_reopening_question(monkeypatch):
@@ -711,6 +712,33 @@ def test_run_tax_cross_checks_returns_five_matched_results_in_fixed_order():
 def test_cross_checks_accept_enterprise_income_tax_structured_identifier():
     returns = list(complete_returns())
     returns[1] = replace(returns[1], tax_id="enterprise_income_tax")
+
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+
+    assert run.results[3].status is CrossCheckStatus.MATCHED
+    assert run.results[4].status is CrossCheckStatus.MATCHED
+
+
+def test_cross_checks_accept_enterprise_income_tax_fact_keys():
+    returns = list(complete_returns())
+    cit = returns[1]
+    returns[1] = replace(
+        cit,
+        tax_id="enterprise_income_tax",
+        lines=tuple(
+            replace(
+                line,
+                fact_key=(
+                    line.fact_key.replace("cit.", "enterprise_income_tax.", 1)
+                    if line.fact_key is not None
+                    else None
+                ),
+            )
+            for line in cit.lines
+        ),
+    )
 
     run = run_tax_cross_checks(
         ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
