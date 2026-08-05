@@ -509,6 +509,66 @@ def test_case_delivery_restores_previous_pointer_when_handoff_write_fails(tmp_pa
     assert first["revision"] == 1
 
 
+def test_case_delivery_revalidates_manifest_and_cross_checks_before_pointer_publish(
+    tmp_path: Path,
+):
+    case = _case(tmp_path)
+    manifest_bytes = json.dumps({"sources": []}).encode("utf-8")
+    manifest_path = case / "work/input_manifest.json"
+    manifest_path.write_bytes(manifest_bytes)
+    run = replace(
+        difference_run(),
+        source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+    )
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run)), encoding="utf-8"
+    )
+    from open_tax_check import delivery
+
+    original_publish = delivery._publish_pointer_and_handoff
+
+    def mutate_then_publish(root, pointer, **bindings):
+        manifest_path.write_text(json.dumps({"sources": [{"changed": True}]}), encoding="utf-8")
+        return original_publish(root, pointer, **bindings)
+
+    with patch.object(
+        delivery,
+        "_publish_pointer_and_handoff",
+        side_effect=mutate_then_publish,
+    ):
+        with pytest.raises(DeliveryError, match="delivery_case_audit_invalid"):
+            build_case_delivery(case)
+
+    assert not (case / "work/delivery.json").exists()
+    assert not (case / "work/deliveries/revision-0001-report-v3").exists()
+
+
+def test_pointer_rollback_failure_preserves_revision_referenced_by_new_pointer(
+    tmp_path: Path,
+):
+    case = _case(tmp_path)
+    first = build_case_delivery(case)
+    private_snapshot = case / "work/tax-health-snapshot.private.json"
+    payload = json.loads(private_snapshot.read_text(encoding="utf-8"))
+    payload["revision"] = 2
+    private_snapshot.write_text(json.dumps(payload), encoding="utf-8")
+
+    with patch(
+        "open_tax_check.delivery.build_case_customer_handoff",
+        side_effect=ValueError("handoff_write_failed"),
+    ), patch(
+        "open_tax_check.delivery._atomic_bytes",
+        side_effect=OSError("rollback_failed"),
+    ):
+        with pytest.raises(ValueError, match="^delivery_write_failed$"):
+            build_case_delivery(case)
+
+    pointer = json.loads((case / "work/delivery.json").read_text(encoding="utf-8"))
+    assert pointer["revision"] == 2
+    assert (case / pointer["revision_path"]).is_dir()
+    assert first["revision"] == 1
+
+
 def test_case_delivery_rejects_stale_existing_revision_for_changed_snapshot(tmp_path: Path):
     case = _case(tmp_path)
     first = build_case_delivery(case)

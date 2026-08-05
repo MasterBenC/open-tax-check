@@ -598,6 +598,7 @@ def main() -> int:
                 "cross_check_confirmation_locked",
                 "cross_check_confirmation_write_failed",
                 "unverified_cross_check_evidence",
+                "cross_check_rerun_inputs_invalid",
                 "unsafe_case_path",
             }
             error_code = str(error) if str(error) in allowed else "cross_check_confirmation_failed"

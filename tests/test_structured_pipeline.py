@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from open_tax_check.case import init_case
+import open_tax_check.pipeline as pipeline
 from open_tax_check.pipeline import inspect_case, load_case_structured_documents, run_case
 import open_tax_check.structured_document_providers as structured_providers
 from test_structured_documents import financial_payload, tax_return_payload
@@ -42,7 +43,7 @@ def _write_docs(case: Path, *, imbalance=False, period_mismatch=False, malformed
     tax["return_id"] = "vat-2026"
     tax["source_id"] = source_ids[tax_filename]
     tax["period_start"] = "2026-01-01"
-    tax["period_end"] = "2026-06-30" if period_mismatch else "2026-12-31"
+    tax["period_end"] = "2026-06-30" if period_mismatch else "2026-03-31"
     tax["filing_status"] = "draft"
     tax["filed_at"] = None
     tax["lines"][0]["source_anchor"]["source_id"] = tax["source_id"]
@@ -426,6 +427,53 @@ class StructuredPipelineTests(unittest.TestCase):
         cross_checks = json.loads((case / "work/tax-cross-checks.json").read_text(encoding="utf-8"))
         self.assertEqual(cross_checks["status"], "completed")
         self.assertEqual(len(cross_checks["results"]), 5)
+
+    def test_combined_run_consumes_frozen_structured_snapshot_after_active_mutation(self):
+        case = self.root / "frozen-structured"
+        init_case(
+            case,
+            "\u5b8c\u5168\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8",
+            "2026-01-01",
+            "2026-12-31",
+        )
+        (case / "input/journal.csv").write_text(
+            "\u51ed\u8bc1\u53f7,\u8bb0\u8d26\u65e5\u671f,\u79d1\u76ee\u7f16\u7801,\u79d1\u76ee\u540d\u79f0,\u4e1a\u52a1\u8bf4\u660e,\u501f\u65b9\u53d1\u751f\u989d,\u8d37\u65b9\u53d1\u751f\u989d\n"
+            "V001,2026-01-02,1002,\u94f6\u884c\u5b58\u6b3e,\u9500\u552e,1000,0\n"
+            "V001,2026-01-02,6001,\u4e3b\u8425\u4e1a\u52a1\u6536\u5165,\u9500\u552e,0,1000\n",
+            encoding="utf-8",
+        )
+        _write_docs(case)
+        original_preserve = pipeline._preserve_structured_documents
+
+        def preserve_then_mutate_active(context, source_root):
+            original_preserve(context, source_root)
+            tax_path = next(source_root.glob("*.tr.json"))
+            payload = json.loads(tax_path.read_text(encoding="utf-8"))
+            payload["period_end"] = "2026-06-30"
+            content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            tax_path.write_bytes(content)
+            index_path = case / "work/structured-document-index.json"
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            receipt = next(
+                item for item in index["documents"]
+                if item["relative_path"] == tax_path.name
+            )
+            receipt["document_sha256"] = __import__("hashlib").sha256(content).hexdigest()
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+
+        with patch.object(
+            pipeline,
+            "_preserve_structured_documents",
+            side_effect=preserve_then_mutate_active,
+        ):
+            code, result = run_case(case, "off")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "needs_professional_review")
+        frozen = json.loads(
+            (case / "work/structured-reconciliation.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(frozen["status"], "reconciled")
 
     def test_combined_run_preserves_structured_documents_in_deep_case_path(self):
         case = (

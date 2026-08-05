@@ -7,8 +7,10 @@ from pypdf import PdfReader
 
 from open_tax_check.pdf_report import (
     PdfExportUnavailable,
+    _chromium_launch_options,
     _footer_template,
     _header_template,
+    sync_playwright,
     validate_report_pdf,
     write_report_pdf,
 )
@@ -41,6 +43,17 @@ def _view(*, entity_name: str = "虚构科技有限公司"):
     )
 
 
+def _require_chromium() -> None:
+    if sync_playwright is None:
+        pytest.skip("Playwright is not installed")
+    try:
+        with sync_playwright() as runtime:
+            browser = runtime.chromium.launch(**_chromium_launch_options())
+            browser.close()
+    except Exception as error:
+        pytest.skip(f"Chromium unavailable: {error}")
+
+
 def test_renderer_unavailable_leaves_no_customer_file(tmp_path: Path, monkeypatch):
     output = tmp_path / "税务健康检查报告.pdf"
     monkeypatch.setattr("open_tax_check.pdf_report.sync_playwright", None)
@@ -61,6 +74,7 @@ def test_validation_rejects_malformed_pdf(tmp_path: Path):
 
 
 def test_real_chromium_pdf_is_valid_and_contains_customer_identity(tmp_path: Path):
+    _require_chromium()
     output = tmp_path / "税务健康检查报告.pdf"
 
     assert write_report_pdf(_view(), output) == output
@@ -85,6 +99,7 @@ def test_real_chromium_pdf_is_valid_and_contains_customer_identity(tmp_path: Pat
 
 
 def test_renderer_blocks_external_resource_before_publication(tmp_path: Path, monkeypatch):
+    _require_chromium()
     output = tmp_path / "report.pdf"
     monkeypatch.setattr(
         "open_tax_check.pdf_report.render_report_html",
@@ -98,6 +113,7 @@ def test_renderer_blocks_external_resource_before_publication(tmp_path: Path, mo
 
 
 def test_renderer_blocks_non_http_external_resource_before_publication(tmp_path: Path, monkeypatch):
+    _require_chromium()
     output = tmp_path / "report.pdf"
     monkeypatch.setattr(
         "open_tax_check.pdf_report.render_report_html",
@@ -118,6 +134,7 @@ def test_header_and_footer_embed_the_controlled_chinese_font():
 
 
 def test_renderer_rejects_an_unloadable_embedded_font(tmp_path: Path, monkeypatch):
+    _require_chromium()
     from open_tax_check.html_report import render_report_html as render_real_html
 
     output = tmp_path / "report.pdf"

@@ -14,6 +14,7 @@ from typing import Mapping
 from .agent_orchestration import (
     AgentQuestionTask,
     build_agent_question_tasks,
+    build_cross_check_question_tasks,
     task_payload,
 )
 from .case import resolve_safe_case_path, write_json
@@ -46,6 +47,7 @@ from .tax_cross_checks import (
     TaxCrossCheckRun,
     apply_cross_check_explanation,
     parse_tax_cross_check_payload,
+    rerun_tax_cross_check,
     tax_cross_check_payload,
 )
 
@@ -380,12 +382,12 @@ def _case_state(root: Path) -> Mapping[str, object]:
 def _persist_case_view(root: Path, snapshot: TaxCheckSnapshot) -> dict[str, object]:
     snapshot = replace(snapshot, limitations=effective_limitations(snapshot))
     status = _derive_status(snapshot)
-    tasks = tuple(build_agent_question_tasks(snapshot))
     private_path = root / "work" / PRIVATE_SNAPSHOT_NAME
     public_path = root / "work" / PUBLIC_SNAPSHOT_NAME
     tasks_path = root / "work" / "customer-tasks.json"
     report_path = root / "output" / REPORT_NAME
     _write_json(private_path, to_dict(snapshot))
+    tasks = build_case_customer_tasks(root)
     write_tax_health_snapshot(snapshot, public_path)
     write_tax_health_report(snapshot, report_path)
     _write_json(
@@ -466,8 +468,43 @@ def run_case_self_check(
     return _persist_case_view(root, snapshot)
 
 
-def build_case_customer_tasks(case_dir: Path) -> tuple[AgentQuestionTask, ...]:
-    return build_agent_question_tasks(load_case_snapshot(case_dir))
+def _load_case_cross_check_run(root: Path) -> TaxCrossCheckRun | None:
+    path = root / "work" / "tax-cross-checks.json"
+    if not path.is_file():
+        return None
+    raw = path.read_bytes()
+    if len(raw) > _CROSS_CHECK_LIMIT:
+        raise ValueError("invalid_tax_cross_check")
+    return parse_tax_cross_check_payload(json.loads(raw.decode("utf-8")))
+
+
+def build_case_customer_tasks(
+    case_dir: Path,
+) -> tuple[AgentQuestionTask | dict[str, object], ...]:
+    root = _case_dir(case_dir)
+    try:
+        health_tasks = tuple(build_agent_question_tasks(load_case_snapshot(root)))
+    except ValueError as error:
+        if str(error) != "case_snapshot_missing":
+            raise
+        health_tasks = ()
+    run = _load_case_cross_check_run(root)
+    cross_check_tasks = (
+        build_cross_check_question_tasks(run, max_questions=3)
+        if run is not None and run.status == "completed"
+        else ()
+    )
+    combined: list[AgentQuestionTask | dict[str, object]] = []
+    seen: set[str] = set()
+    for item in (*health_tasks, *cross_check_tasks):
+        task_id = item.task_id if isinstance(item, AgentQuestionTask) else str(item["task_id"])
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+        combined.append(item)
+        if len(combined) == 3:
+            break
+    return tuple(combined)
 
 
 def _verified_manifest_source(root: Path, source_id: str) -> bool:
@@ -516,9 +553,10 @@ def _cross_check_bridge(payload: object) -> tuple[AmountBridgeItem, ...]:
         raise ValueError("invalid_cross_check_confirmation")
     items: list[AmountBridgeItem] = []
     for item in payload:
-        if not isinstance(item, Mapping) or set(item) != {
-            "amount", "label_zh", "evidence_refs"
-        } or not isinstance(item.get("evidence_refs"), list):
+        if not isinstance(item, Mapping) or set(item) not in (
+            {"amount", "label_zh", "evidence_refs"},
+            {"amount", "label_zh", "evidence_refs", "component_id"},
+        ) or not isinstance(item.get("evidence_refs"), list):
             raise ValueError("invalid_cross_check_confirmation")
         try:
             amount = __import__("decimal").Decimal(item["amount"])
@@ -527,11 +565,83 @@ def _cross_check_bridge(payload: object) -> tuple[AmountBridgeItem, ...]:
                     amount=amount,
                     label_zh=item["label_zh"],
                     evidence_refs=tuple(item["evidence_refs"]),
+                    component_id=item.get("component_id"),
                 )
             )
         except (ArithmeticError, TypeError, ValueError):
             raise ValueError("invalid_cross_check_confirmation") from None
     return tuple(items)
+
+
+def _cross_check_rerun_inputs(
+    root: Path,
+    run: TaxCrossCheckRun,
+    check_id: str,
+) -> TaxCrossCheckRun:
+    from .account_classification import load_active_account_classifications
+    from .pipeline import load_case_structured_documents
+    from .tax_cross_checks import CrossCheckContext
+
+    journal_path = root / "work" / "normalized_journal.jsonl"
+    rows: tuple[Mapping[str, object], ...] = ()
+    if journal_path.is_file():
+        raw = resolve_safe_source(journal_path, root / "work").read_bytes()
+        if len(raw) > _CROSS_CHECK_LIMIT:
+            raise ValueError("cross_check_rerun_inputs_invalid")
+        parsed_rows = tuple(
+            json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()
+        )
+        if any(not isinstance(item, Mapping) for item in parsed_rows):
+            raise ValueError("cross_check_rerun_inputs_invalid")
+        rows = parsed_rows
+    try:
+        classifications = load_active_account_classifications(
+            root, run.source_manifest_sha256
+        )
+    except ValueError:
+        classifications = None
+    statements, returns, loader_issues = load_case_structured_documents(root)
+    if loader_issues:
+        raise ValueError("cross_check_rerun_inputs_invalid")
+    state = _read_json(root / "state.json")
+    if not isinstance(state, Mapping) or not isinstance(state.get("review_period"), Mapping):
+        raise ValueError("cross_check_rerun_inputs_invalid")
+    review_period = state["review_period"]
+    document = (statements + returns)[0] if statements or returns else None
+    return rerun_tax_cross_check(
+        run,
+        check_id,
+        rows,
+        classifications,
+        statements,
+        returns,
+        CrossCheckContext(
+            period_start=review_period["start"],
+            period_end=review_period["end"],
+            entity_name=state["entity_name"],
+            currency=document.currency if document is not None else "CNY",
+            unit_multiplier=document.unit_multiplier if document is not None else "1",
+        ),
+        run.source_manifest_sha256,
+    )
+
+
+def _pending_explanation_matches(
+    run: TaxCrossCheckRun,
+    payload: Mapping[str, object],
+) -> bool:
+    target = next((item for item in run.results if item.check_id == payload.get("check_id")), None)
+    if target is None or target.resolution_status != "explained_pending_verification" or not target.explanations:
+        return False
+    previous = target.explanations[-1]
+    return (
+        previous.category == payload.get("category")
+        and previous.explanation_zh == payload.get("explanation_zh")
+        and previous.confirmed_by == payload.get("confirmed_by")
+        and previous.confirmed_at == payload.get("confirmed_at")
+        and isinstance(payload.get("evidence_refs"), list)
+        and set(previous.evidence_refs).issubset(payload["evidence_refs"])
+    )
 
 
 def confirm_cross_check_explanation(
@@ -582,8 +692,19 @@ def confirm_cross_check_explanation(
         event_prefix = f"cross-check-confirmation:{payload.get('question_id')}:"
         previous = tuple(item for item in run.audit_events if item.startswith(event_prefix))
         if previous:
-            if previous == (event_prefix + digest,):
+            if event_prefix + digest in previous:
                 return run
+            if not _pending_explanation_matches(run, payload):
+                raise ValueError("cross_check_confirmation_conflict")
+        pending_target = next(
+            (
+                item for item in run.results
+                if item.check_id == payload.get("check_id")
+                and item.resolution_status == "explained_pending_verification"
+            ),
+            None,
+        )
+        if pending_target is not None and not _pending_explanation_matches(run, payload):
             raise ValueError("cross_check_confirmation_conflict")
         if question is None:
             raise ValueError("cross_check_confirmation_binding_mismatch")
@@ -605,14 +726,25 @@ def confirm_cross_check_explanation(
                 confirmed_at=payload["confirmed_at"],
                 evidence_refs=tuple(evidence_refs),
             )
-            revised = apply_cross_check_explanation(
-                run,
-                explanation,
-                bridge=bridge,
-                verified_evidence_refs=all_refs,
+            rerun = _cross_check_rerun_inputs(root, run, payload["check_id"])
+            target = next(
+                item for item in rerun.results if item.check_id == payload["check_id"]
+            )
+            revised = (
+                apply_cross_check_explanation(
+                    rerun,
+                    explanation,
+                    bridge=bridge,
+                    verified_evidence_refs=all_refs,
+                )
+                if target.status.value == "difference_found"
+                else rerun
             )
         except ValueError as error:
-            if str(error) == "unverified_cross_check_evidence":
+            if str(error) in {
+                "unverified_cross_check_evidence",
+                "cross_check_rerun_inputs_invalid",
+            }:
                 raise
             raise ValueError("invalid_cross_check_confirmation") from None
         revised = replace(
@@ -620,24 +752,55 @@ def confirm_cross_check_explanation(
             audit_events=revised.audit_events + (event_prefix + digest,),
         )
         pointer = root / "work" / "delivery.json"
-        pointer_backup = root / "work" / ".delivery.json.cross-check-backup"
-        pointer_moved = False
-        if pointer.is_file():
-            if pointer_backup.exists():
-                raise ValueError("cross_check_confirmation_write_failed")
-            os.replace(pointer, pointer_backup)
-            pointer_moved = True
+        private_path = root / "work" / PRIVATE_SNAPSHOT_NAME
+        transaction_paths = (
+            cross_path,
+            private_path,
+            root / "work" / PUBLIC_SNAPSHOT_NAME,
+            root / "work" / "customer-tasks.json",
+            root / "output" / REPORT_NAME,
+            root / "output" / HANDOFF_NAME,
+            root / "state.json",
+            pointer,
+        )
+        original_bytes = {
+            path: path.read_bytes() if path.is_file() else None
+            for path in transaction_paths
+        }
         try:
+            pointer.unlink(missing_ok=True)
             write_json(cross_path, tax_cross_check_payload(revised))
+            if private_path.is_file():
+                snapshot = load_case_snapshot(root)
+                target = next(
+                    item for item in revised.results if item.check_id == payload["check_id"]
+                )
+                snapshot = replace(
+                    snapshot,
+                    revision=snapshot.revision + 1,
+                    audit_events=snapshot.audit_events
+                    + (
+                        AuditEvent(
+                            event_type="cross_check_confirmation",
+                            occurred_at=payload["confirmed_at"],
+                            tax_ids=target.tax_ids,
+                            confirmation_digest=digest,
+                        ),
+                    ),
+                )
+                _persist_case_view(root, snapshot)
         except Exception:
-            if pointer_moved:
-                os.replace(pointer_backup, pointer)
+            for path, content in original_bytes.items():
+                try:
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        temporary = path.with_name(f".{path.name}.cross-check-restore")
+                        temporary.write_bytes(content)
+                        os.replace(temporary, path)
+                except OSError:
+                    pass
             raise ValueError("cross_check_confirmation_write_failed") from None
-        if pointer_moved:
-            try:
-                pointer_backup.unlink()
-            except OSError:
-                pass
         return revised
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("invalid_cross_check_confirmation") from error
@@ -683,22 +846,56 @@ def case_status_payload(case_dir: Path) -> dict[str, object]:
         raise ValueError("invalid_case_state")
     state_status = _status_before_snapshot(state)
     hard_state = state_status in {CaseStatus.BLOCKED_DATA_QUALITY, CaseStatus.FAILED}
+    tasks: tuple[AgentQuestionTask | dict[str, object], ...] = ()
+    cross_check_run = None
+    if not hard_state:
+        tasks = build_case_customer_tasks(root)
+        cross_check_run = _load_case_cross_check_run(root)
     if private_path.is_file() and not hard_state:
         snapshot = load_case_snapshot(root)
         status = _derive_status(snapshot)
         revision = snapshot.revision
-        pending_task_count = len(snapshot.questions)
-        tasks = build_agent_question_tasks(snapshot)
-        required_evidence_types = sorted({
-            evidence_type for task in tasks for evidence_type in task.evidence_types
-        })
-        affected_tax_ids = sorted({tax_id for task in tasks for tax_id in task.tax_ids})
-        customer_message_zh = (
-            tasks[0].question_zh if tasks else _STATUS_MESSAGES_ZH[status]
-        )
     else:
         status = state_status
         revision = load_case_snapshot(root).revision if private_path.is_file() else 0
+    if tasks and not hard_state:
+        status = CaseStatus.WAITING_FOR_CUSTOMER_CONFIRMATION
+        pending_task_count = len(tasks)
+        required_evidence_types = sorted({
+            evidence_type
+            for task in tasks
+            for evidence_type in (
+                task.get("required_evidence_types", ())
+                if isinstance(task, Mapping)
+                else task.evidence_types
+            )
+        })
+        cross_check_ids = {
+            str(task["check_id"])
+            for task in tasks
+            if isinstance(task, Mapping) and isinstance(task.get("check_id"), str)
+        }
+        affected_tax_ids = sorted({
+            tax_id
+            for result in (cross_check_run.results if cross_check_run is not None else ())
+            if result.check_id in cross_check_ids
+            for tax_id in result.tax_ids
+        } | {
+            tax_id
+            for task in tasks
+            if isinstance(task, AgentQuestionTask)
+            for tax_id in task.tax_ids
+        })
+        first = tasks[0]
+        customer_message_zh = (
+            first["question_zh"] if isinstance(first, Mapping) else first.question_zh
+        )
+    elif private_path.is_file() and not hard_state:
+        pending_task_count = 0
+        required_evidence_types = []
+        affected_tax_ids = []
+        customer_message_zh = _STATUS_MESSAGES_ZH[status]
+    else:
         pending_task_count = 0
         required_evidence_types = list(_STATUS_EVIDENCE_TYPES[status])
         affected_tax_ids = []

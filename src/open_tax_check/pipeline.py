@@ -857,6 +857,8 @@ def load_case_state(case_dir: Path) -> dict:
 
 def load_case_structured_documents(
     case_dir: Path,
+    *,
+    source_case_dir: Path | None = None,
 ) -> tuple[tuple[FinancialStatement, ...], tuple[TaxReturn, ...], tuple[str, ...]]:
     """Load only imported structured contracts from the managed case directory."""
 
@@ -964,8 +966,9 @@ def load_case_structured_documents(
                 or not isinstance(source.get("filename"), str)
             ):
                 raise RuntimeError("receipt_mismatch")
+            source_root = source_case_dir if source_case_dir is not None else case_dir
             source_path = resolve_safe_source(
-                case_dir / "input" / source["filename"], case_dir / "input"
+                source_root / "input" / source["filename"], source_root / "input"
             )
             if _sha256(source_path) != source_sha256:
                 raise RuntimeError("receipt_mismatch")
@@ -1858,7 +1861,8 @@ def _complete_normalized_run(
     if structured_root.is_dir():
         _preserve_structured_documents(context, structured_root)
         statements, tax_returns, structured_loader_issues = load_case_structured_documents(
-            context.case_dir
+            context.run_dir,
+            source_case_dir=context.case_dir,
         )
         if statements or tax_returns or structured_loader_issues:
             structured_result = reconcile_structured_documents(statements, tax_returns)
@@ -2294,9 +2298,12 @@ def _preserve_structured_documents(context: _CaseRun, source_root: Path) -> None
 
 
 def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
-    statements, tax_returns, loader_issues = load_case_structured_documents(context.case_dir)
     source_root = context.case_dir / "work" / "structured-documents"
     _preserve_structured_documents(context, source_root)
+    statements, tax_returns, loader_issues = load_case_structured_documents(
+        context.run_dir,
+        source_case_dir=context.case_dir,
+    )
     result = reconcile_structured_documents(statements, tax_returns)
     if loader_issues:
         result = DocumentReconciliationResult(

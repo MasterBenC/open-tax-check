@@ -53,7 +53,7 @@ def _statement(statement_id, statement_type, totals, *, period=PERIOD, issues=No
     return financial_statement_from_dict(payload)
 
 
-def _tax(*, value="1000.00", period=PERIOD, issues=None):
+def _tax(*, value="1000.00", period=("2026-01-01", "2026-03-31"), issues=None):
     payload = {
         "schema_version": "tax-return/v1",
         "return_id": "vat-2026",
@@ -167,6 +167,41 @@ def test_period_mismatch_blocks_before_cross_document_checks():
 
     assert result.status == "blocked_data_quality"
     assert any(issue.code == "period_mismatch" for issue in result.issues)
+
+
+def test_monthly_and_quarterly_vat_subperiods_reconcile_with_annual_statements():
+    statements, _ = _balanced_documents()
+    returns = tuple(
+        replace(
+            _tax(period=period),
+            return_id=f"vat-{index}",
+        )
+        for index, period in enumerate(
+            (
+                ("2026-01-01", "2026-03-31"),
+                ("2026-04-01", "2026-04-30"),
+                ("2026-05-01", "2026-05-31"),
+                ("2026-06-01", "2026-06-30"),
+                ("2026-07-01", "2026-09-30"),
+                ("2026-10-01", "2026-12-31"),
+            ),
+            start=1,
+        )
+    )
+
+    result = reconcile_structured_documents(statements, returns)
+
+    assert result.status == "reconciled"
+    assert not any(issue.code == "period_mismatch" for issue in result.issues)
+
+
+def test_annual_or_arbitrary_vat_periods_cannot_masquerade_as_valid_cadence():
+    statements, _ = _balanced_documents()
+
+    for period in (("2026-01-01", "2026-12-31"), ("2026-01-01", "2026-06-30")):
+        result = reconcile_structured_documents(statements, (_tax(period=period),))
+        assert result.status == "blocked_data_quality"
+        assert any(issue.code == "invalid_vat_filing_period" for issue in result.issues)
 
 
 def test_tax_fact_mismatch_is_deferred_and_does_not_block_quality():

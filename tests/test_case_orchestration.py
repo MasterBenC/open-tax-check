@@ -17,8 +17,21 @@ from open_tax_check.case_orchestration import (
     run_case_self_check,
     confirm_cross_check_explanation,
 )
-from open_tax_check.tax_cross_checks import tax_cross_check_payload
-from test_tax_cross_checks import difference_run
+from open_tax_check.tax_cross_checks import (
+    CrossCheckContext,
+    CrossCheckStatus,
+    run_tax_cross_checks,
+    tax_cross_check_payload,
+)
+from test_tax_cross_checks import difference_run, statement, tax_return
+from open_tax_check.structured_document_providers import (
+    persist_financial_statement,
+    persist_tax_return,
+)
+from open_tax_check.structured_documents import (
+    financial_statement_to_dict,
+    tax_return_to_dict,
+)
 from open_tax_check.tax_models import Confirmation, DateRange, FactState, TaxCheckRequest, TaxFact
 
 
@@ -55,15 +68,76 @@ def _bind_source(case_dir, source_id="source-001", filename="source.pdf", conten
     )
 
 
+def _write_cross_check_documents(case_dir, *, quarterly_sales="275.00"):
+    from dataclasses import replace
+
+    source_id = "source-1"
+
+    def bind(document):
+        lines = tuple(
+            replace(
+                line,
+                source_anchor=replace(
+                    line.source_anchor,
+                    source_id=source_id,
+                    page_number=None,
+                    sheet_name="Sheet1",
+                    cell="A1",
+                ),
+            )
+            for line in document.lines
+        )
+        return replace(
+            document,
+            source_id=source_id,
+            entity_name="\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8",
+            lines=lines,
+        )
+
+    financial = bind(statement())
+    persist_financial_statement(
+        case_dir, source_id, financial_statement_to_dict(financial)
+    )
+    for index, (period_start, period_end) in enumerate(
+        (
+            ("2025-01-01", "2025-03-31"),
+            ("2025-04-01", "2025-06-30"),
+            ("2025-07-01", "2025-09-30"),
+            ("2025-10-01", "2025-12-31"),
+        ),
+        start=1,
+    ):
+        vat = bind(
+            tax_return(
+                "vat",
+                {"vat.taxable_sales": quarterly_sales},
+                return_id=f"vat-q{index}",
+                period_start=period_start,
+                period_end=period_end,
+            )
+        )
+        persist_tax_return(case_dir, source_id, tax_return_to_dict(vat))
+
+
 class CaseOrchestrationTests(unittest.TestCase):
   def test_cross_check_confirmation_is_incremental_append_only_and_idempotent(self):
     with __import__("tempfile").TemporaryDirectory() as temp_dir:
       case_dir = __import__("pathlib").Path(temp_dir) / "case"
       init_case(case_dir, "虚构科技有限公司", "2025-01-01", "2025-12-31")
       _bind_source(case_dir, source_id="source-1")
+      _write_cross_check_documents(case_dir)
       manifest_sha256 = hashlib.sha256(
         (case_dir / "work" / "input_manifest.json").read_bytes()
       ).hexdigest()
+      run_case_self_check(
+        case_dir,
+        TaxCheckRequest(
+          DateRange(date(2025, 1, 1), date(2025, 12, 31)),
+          "CN",
+          input_hashes=(manifest_sha256,),
+        ),
+        occurred_at="2026-08-05T09:00:00+08:00",
+      )
       run = __import__("dataclasses").replace(
         difference_run(), source_manifest_sha256=manifest_sha256
       )
@@ -78,7 +152,7 @@ class CaseOrchestrationTests(unittest.TestCase):
         "source_manifest_sha256": manifest_sha256,
         "category": "timing_difference",
         "explanation_zh": "该差异为已核验的申报与账务确认期间差异。",
-        "confirmed_by": "Chen Li",
+        "confirmed_by": "human:Chen Li",
         "confirmed_at": "2026-08-05T10:00:00+08:00",
         "evidence_refs": ["source-1"],
         "bridge": [{
@@ -96,6 +170,11 @@ class CaseOrchestrationTests(unittest.TestCase):
       self.assertEqual(repeated, revised)
       self.assertEqual(len(repeated.audit_events), len(revised.audit_events))
       self.assertFalse(delivery_pointer.exists())
+      self.assertEqual(load_case_snapshot(case_dir).revision, 2)
+      self.assertEqual(
+        load_case_snapshot(case_dir).audit_events[-1].event_type,
+        "cross_check_confirmation",
+      )
 
       conflicting = {**payload, "explanation_zh": "另一项互相冲突的客户说明。"}
       with self.assertRaisesRegex(ValueError, "cross_check_confirmation_conflict"):
@@ -116,7 +195,7 @@ class CaseOrchestrationTests(unittest.TestCase):
         "source_manifest_sha256": "a" * 64,
         "category": "timing_difference",
         "explanation_zh": "该差异为客户确认的期间差异。",
-        "confirmed_by": "Chen Li",
+        "confirmed_by": "human:Chen Li",
         "confirmed_at": "2026-08-05T10:00:00+08:00",
         "evidence_refs": ["source-1"],
         "bridge": [],
@@ -126,6 +205,157 @@ class CaseOrchestrationTests(unittest.TestCase):
         confirm_cross_check_explanation(case_dir, payload)
 
       self.assertEqual(cross_path.read_text(encoding="utf-8"), original)
+
+  def test_pending_text_explanation_can_be_completed_only_with_consistent_bridge(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8", "2025-01-01", "2025-12-31")
+      _bind_source(case_dir, source_id="source-1")
+      _write_cross_check_documents(case_dir)
+      manifest_sha256 = hashlib.sha256(
+        (case_dir / "work/input_manifest.json").read_bytes()
+      ).hexdigest()
+      run = __import__("dataclasses").replace(
+        difference_run(), source_manifest_sha256=manifest_sha256
+      )
+      (case_dir / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run)), encoding="utf-8"
+      )
+      payload = {
+        "question_id": run.questions[0].question_id,
+        "check_id": run.questions[0].check_id,
+        "source_manifest_sha256": manifest_sha256,
+        "category": "timing_difference",
+        "explanation_zh": "\u5df2\u7531\u4eba\u5de5\u6838\u5bf9\u671f\u95f4\u5dee\u5f02\u3002",
+        "confirmed_by": "human:Chen Li",
+        "confirmed_at": "2026-08-05T10:00:00+08:00",
+        "evidence_refs": ["source-1"],
+        "bridge": [],
+      }
+
+      pending = confirm_cross_check_explanation(case_dir, payload)
+      pending_question = next(
+        item for item in pending.questions if item.check_id == payload["check_id"]
+      )
+      closed = confirm_cross_check_explanation(
+        case_dir,
+        {
+          **payload,
+          "question_id": pending_question.question_id,
+          "bridge": [{
+            "amount": "100.00",
+            "label_zh": "\u7533\u62a5\u671f\u95f4\u5dee\u5f02",
+            "evidence_refs": ["source-1"],
+          }],
+        },
+      )
+
+      self.assertEqual(pending.results[1].resolution_status, "explained_pending_verification")
+      self.assertEqual(closed.results[1].resolution_status, "closed")
+      with self.assertRaisesRegex(ValueError, "cross_check_confirmation_conflict"):
+        confirm_cross_check_explanation(
+          case_dir, {**payload, "explanation_zh": "\u51b2\u7a81\u7684\u65b0\u8bf4\u660e\u3002"}
+        )
+
+  def test_case_tasks_exposes_bounded_cross_check_questions_without_private_snapshot(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8", "2025-01-01", "2025-12-31")
+      _bind_source(case_dir, source_id="source-1")
+      manifest_sha256 = hashlib.sha256(
+        (case_dir / "work/input_manifest.json").read_bytes()
+      ).hexdigest()
+      run = run_tax_cross_checks(
+        (),
+        None,
+        (),
+        (),
+        CrossCheckContext(
+          "2025-01-01", "2025-12-31",
+          "\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8", "CNY",
+        ),
+        manifest_sha256,
+      )
+      (case_dir / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run)), encoding="utf-8"
+      )
+
+      tasks = build_case_customer_tasks(case_dir)
+
+      self.assertLessEqual(len(tasks), 3)
+      self.assertTrue(tasks)
+      self.assertTrue(all(isinstance(item, dict) and "check_id" in item for item in tasks))
+
+  def test_case_status_includes_cross_check_tasks_when_health_snapshot_has_none(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8", "2025-01-01", "2025-12-31")
+      _bind_source(case_dir, source_id="source-1")
+      manifest_sha256 = hashlib.sha256(
+        (case_dir / "work/input_manifest.json").read_bytes()
+      ).hexdigest()
+      run = run_tax_cross_checks(
+        (), None, (), (),
+        CrossCheckContext(
+          "2025-01-01", "2025-12-31",
+          "\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8", "CNY",
+        ),
+        manifest_sha256,
+      )
+      (case_dir / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run)), encoding="utf-8"
+      )
+
+      status = case_status_payload(case_dir)
+
+      self.assertEqual(status["status"], CaseStatus.WAITING_FOR_CUSTOMER_CONFIRMATION.value)
+      self.assertEqual(status["pending_task_count"], 3)
+      self.assertTrue(status["required_evidence_types"])
+      self.assertTrue(status["affected_tax_ids"])
+
+  def test_missing_source_confirmation_reruns_affected_check_and_regenerates_queue(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8", "2025-01-01", "2025-12-31")
+      _bind_source(case_dir, source_id="source-1")
+      manifest_sha256 = hashlib.sha256(
+        (case_dir / "work/input_manifest.json").read_bytes()
+      ).hexdigest()
+      run = run_tax_cross_checks(
+        (), None, (), (),
+        CrossCheckContext(
+          "2025-01-01", "2025-12-31",
+          "\u865a\u6784\u79d1\u6280\u6709\u9650\u516c\u53f8", "CNY",
+        ),
+        manifest_sha256,
+      )
+      target_question = next(
+        item for item in run.questions if item.check_id == "FS-VAT-SALES-001"
+      )
+      (case_dir / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run)), encoding="utf-8"
+      )
+      _write_cross_check_documents(case_dir, quarterly_sales="250.00")
+
+      revised = confirm_cross_check_explanation(
+        case_dir,
+        {
+          "question_id": target_question.question_id,
+          "check_id": target_question.check_id,
+          "source_manifest_sha256": manifest_sha256,
+          "category": "amended_return",
+          "explanation_zh": "\u5df2\u8865\u5145\u5b8c\u6574\u7533\u62a5\u8d44\u6599\u5e76\u7531\u4eba\u5de5\u786e\u8ba4\u3002",
+          "confirmed_by": "human:Chen Li",
+          "confirmed_at": "2026-08-05T10:00:00+08:00",
+          "evidence_refs": ["source-1"],
+          "bridge": [],
+        },
+      )
+
+      target = next(item for item in revised.results if item.check_id == target_question.check_id)
+      self.assertIs(target.status, CrossCheckStatus.MATCHED)
+      self.assertNotIn(target_question.check_id, {item.check_id for item in revised.questions})
+      self.assertEqual(revised.results[0], run.results[0])
 
   def test_package_facade_exposes_case_orchestration_contract(self):
     import open_tax_check

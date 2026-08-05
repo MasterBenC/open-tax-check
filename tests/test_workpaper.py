@@ -224,3 +224,47 @@ def test_workpaper_writes_persisted_cross_check_audit_rows_without_recalculation
         assert target[-2:] == (run.source_manifest_sha256, 7)
     finally:
         workbook.close()
+
+
+def test_workpaper_uses_each_component_status_instead_of_overall_status(tmp_path: Path):
+    from test_tax_cross_checks import (
+        classifications,
+        complete_returns,
+        context,
+        ledger_rows,
+        run_tax_cross_checks,
+        statement,
+        tax_return,
+    )
+
+    returns = list(complete_returns())
+    returns[1] = tax_return(
+        "cit",
+        {
+            "cit.revenue": "1100.00",
+            "cit.total_profit": "200.00",
+            "cit.business_entertainment.book_amount": "10.00",
+            "cit.business_entertainment.tax_amount": "5.00",
+        },
+    )
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+    path = tmp_path / "components.xlsx"
+    write_tax_health_workpaper(
+        _snapshot(), path, case_audit={"tax_cross_checks": tax_cross_check_payload(run)}
+    )
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=False)
+    try:
+        rows = [
+            row for row in workbook["\u8d26\u7a0e\u4ea4\u53c9\u6838\u5bf9"].values
+            if row[0] == "FS-CIT-REV-PROFIT-001"
+        ]
+        by_component = {row[1]: row for row in rows}
+        assert by_component["revenue"][8] == "\u53d1\u73b0\u91d1\u989d\u5dee\u5f02"
+        assert by_component["total_profit"][8] == "\u91d1\u989d\u4e00\u81f4"
+    finally:
+        workbook.close()

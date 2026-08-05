@@ -379,3 +379,67 @@ def test_cross_check_not_performed_is_material_gap_not_match():
         for text in view.appendix_executed_checks
         if "FS-VAT-SALES-001" in text
     )
+
+
+def test_multi_component_cross_check_uses_component_values_without_speculation():
+    from test_tax_cross_checks import (
+        classifications,
+        complete_returns,
+        context,
+        ledger_rows,
+        run_tax_cross_checks,
+        statement,
+        tax_return,
+    )
+
+    returns = list(complete_returns())
+    returns[1] = tax_return(
+        "cit",
+        {
+            "cit.revenue": "1100.00",
+            "cit.total_profit": "200.00",
+            "cit.business_entertainment.book_amount": "10.00",
+            "cit.business_entertainment.tax_amount": "5.00",
+        },
+    )
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+
+    view = build_report_view_v3(
+        _snapshot(), entity_name="\u793a\u4f8b\u516c\u53f8", tax_cross_checks=run
+    )
+    risk = next(item for item in view.risks if item.finding_id == "FS-CIT-REV-PROFIT-001")
+
+    assert "\u6536\u5165" in risk.observed_zh
+    assert "1000.00" in risk.observed_zh and "1100.00" in risk.observed_zh
+    assert "\u5229\u6da6\u603b\u989d" in risk.observed_zh
+    assert "\u91d1\u989d\u4e00\u81f4" in risk.observed_zh
+    assert "\u53ef\u80fd" not in risk.why_it_matters_zh
+
+
+def test_closed_cross_check_uses_completed_next_action():
+    from open_tax_check.tax_cross_checks import (
+        AmountBridgeItem,
+        apply_cross_check_explanation,
+    )
+    from test_tax_cross_checks import explanation
+    from decimal import Decimal
+
+    run = apply_cross_check_explanation(
+        difference_run(),
+        explanation(),
+        bridge=(AmountBridgeItem(
+            Decimal("100.00"),
+            "\u671f\u95f4\u5dee\u5f02",
+            ("source-1",),
+        ),),
+        verified_evidence_refs=("source-1",),
+    )
+    view = build_report_view_v3(
+        _snapshot(), entity_name="\u793a\u4f8b\u516c\u53f8", tax_cross_checks=run
+    )
+    risk = next(item for item in view.risks if item.finding_id == "FS-VAT-SALES-001")
+
+    assert "\u5df2\u5b8c\u6210" in risk.next_action_zh
+    assert "\u91cd\u65b0\u6267\u884c" not in risk.next_action_zh

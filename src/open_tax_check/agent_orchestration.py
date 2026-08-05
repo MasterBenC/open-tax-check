@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from collections.abc import Mapping
 
 from .evidence_bundle import EvidenceBundleResult
 from .tax_models import Confirmation, PromptChoice, Question, TaxCheckSnapshot
@@ -77,8 +78,10 @@ def build_agent_question_tasks(
     )
 
 
-def task_payload(task: AgentQuestionTask) -> dict[str, object]:
+def task_payload(task: AgentQuestionTask | Mapping[str, object]) -> dict[str, object]:
     """Return the allowlisted JSON envelope a host Agent may present or store."""
+    if isinstance(task, Mapping):
+        return dict(task)
     payload = asdict(task)
     payload["choices"] = [asdict(choice) for choice in task.choices]
     return payload

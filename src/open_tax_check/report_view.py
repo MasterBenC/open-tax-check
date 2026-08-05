@@ -11,7 +11,7 @@ import json
 from .reporting import select_reportable_findings
 from .tax_models import Limitation, TaxCheckSnapshot, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
-from .tax_cross_checks import CrossCheckStatus, TaxCrossCheckRun
+from .tax_cross_checks import CrossCheckStatus, TaxCrossCheckRun, compare_amounts
 
 
 AMOUNT_DISCLAIMER_ZH = "试算金额不代表应补税额、欠税金额或最终申报金额。"
@@ -26,6 +26,54 @@ MATERIAL_STATUS_ZH = {
 }
 RISK_SEVERITY_ORDER = {"high": 0, "medium": 1, "notice": 2}
 _TAX_NAMES = {item.tax_id: item.name_zh for item in TAX_DEFINITIONS}
+_CROSS_CHECK_COMPONENT_ZH = {
+    "revenue": "\u6536\u5165",
+    "total_profit": "\u5229\u6da6\u603b\u989d",
+    "declared_book_amount": "\u8d26\u8f7d\u4e1a\u52a1\u62db\u5f85\u8d39",
+    "calculated_deductible": "\u8ba1\u7b97\u53ef\u6263\u9664\u91d1\u989d",
+    "calculated_tax_add_back": "\u8ba1\u7b97\u7eb3\u7a0e\u8c03\u589e\u91d1\u989d",
+}
+_CROSS_CHECK_STATUS_ZH = {
+    CrossCheckStatus.MATCHED: "\u91d1\u989d\u4e00\u81f4",
+    CrossCheckStatus.WITHIN_TOLERANCE: "\u5bb9\u5dee\u5185",
+    CrossCheckStatus.DIFFERENCE_FOUND: "\u53d1\u73b0\u91d1\u989d\u5dee\u5f02",
+}
+
+
+def _cross_check_observed_zh(result: object) -> str:
+    components = result.components  # type: ignore[attr-defined]
+    if not components:
+        return (
+            "\u672c\u6b21\u8d26\u5957\u3001\u8d22\u52a1\u62a5\u8868\u4e0e\u7533\u62a5\u8d44\u6599\u6838\u5bf9\u53d1\u73b0\u91d1\u989d\u5dee\u5f02\uff1a"
+            f"\u8d26\u5957\u6216\u62a5\u8868\u91d1\u989d {result.ledger_amount:f} \u5143\uff0c"  # type: ignore[attr-defined]
+            f"\u7533\u62a5\u6216\u5bf9\u6bd4\u91d1\u989d {result.comparison_amount:f} \u5143\uff0c"  # type: ignore[attr-defined]
+            f"\u7edd\u5bf9\u5dee\u5f02 {result.difference_amount:f} \u5143\u3002"  # type: ignore[attr-defined]
+        )
+    details = []
+    for component in components:
+        status = compare_amounts(
+            component.ledger_amount, component.comparison_amount
+        )[0]
+        details.append(
+            f"{_CROSS_CHECK_COMPONENT_ZH.get(component.component_id, component.component_id)}\uff1a"
+            f"\u8d26\u5957\u6216\u62a5\u8868\u91d1\u989d {component.ledger_amount:f} \u5143\uff0c"
+            f"\u7533\u62a5\u6216\u5bf9\u6bd4\u91d1\u989d {component.comparison_amount:f} \u5143\uff0c"
+            f"\u7edd\u5bf9\u5dee\u5f02 {component.difference_amount:f} \u5143\uff0c"
+            f"\u72b6\u6001\u4e3a{_CROSS_CHECK_STATUS_ZH[status]}"
+        )
+    return (
+        "\u672c\u6b21\u8d26\u5957\u3001\u8d22\u52a1\u62a5\u8868\u4e0e\u7533\u62a5\u8d44\u6599\u6838\u5bf9\u53d1\u73b0\u91d1\u989d\u5dee\u5f02\uff1a"
+        + "\uff1b".join(details)
+        + "\u3002"
+    )
+
+
+def _cross_check_next_action_zh(resolution_status: str) -> str:
+    if resolution_status == "closed":
+        return "\u8be5\u5dee\u5f02\u5df2\u5b8c\u6210\u9010\u9879\u91d1\u989d\u6865\u63a5\u548c\u8bc1\u636e\u6838\u9a8c\uff0c\u4fdd\u7559\u672c\u6b21\u590d\u6838\u8bb0\u5f55\u3002"
+    if resolution_status == "explained_pending_verification":
+        return "\u8bf7\u8865\u5145\u6216\u6838\u9a8c\u672a\u5b8c\u6210\u7684\u9010\u9879\u91d1\u989d\u6865\u63a5\u53ca\u652f\u6301\u51ed\u8bc1\u3002"
+    return "\u8bf7\u6309\u7ec4\u6210\u9879\u76ee\u9010\u9879\u63d0\u4f9b\u91d1\u989d\u6865\u63a5\u8bf4\u660e\u548c\u53ef\u6838\u9a8c\u51ed\u8bc1\u3002"
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,16 +335,12 @@ def build_report_view_v3(
                     severity=("notice" if result.resolution_status == "closed" else "medium"),
                     tax_ids=result.tax_ids,
                     affected_period_zh=f"{result.period_start}至{result.period_end}",
-                    observed_zh=(
-                        "本次账套、财务报表与申报资料核对发现金额差异："
-                        f"账套或报表金额 {result.ledger_amount:f} 元，申报或对比金额 "
-                        f"{result.comparison_amount:f} 元，绝对差异 {result.difference_amount:f} 元。"
-                    ),
-                    why_it_matters_zh="该差异可能反映确认期间、含税口径、会计调整或申报口径不同，需要结合原始凭证核实。",
+                    observed_zh=_cross_check_observed_zh(result),
+                    why_it_matters_zh="该差异尚需结合原始凭证、报表和申报资料逐项核实。",
                     can_conclude_zh="可以确认当前已导入的两组金额存在上述差异。",
                     cannot_conclude_zh="不能仅凭该差异认定漏税、应补税、欠税或违法。",
                     required_materials_zh=("相关账套、财务报表、纳税申报表及差异支持凭证",),
-                    next_action_zh="请按差异金额逐项提供桥接说明和可核验凭证，再重新执行该项核对。",
+                    next_action_zh=_cross_check_next_action_zh(result.resolution_status),
                     evidence_refs=tuple(dict.fromkeys(ref.source_id for ref in result.source_refs)),
                 ))
             if result.status is CrossCheckStatus.NOT_PERFORMED:

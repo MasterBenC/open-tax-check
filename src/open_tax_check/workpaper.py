@@ -13,7 +13,11 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .tax_models import TaxCheckSnapshot, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
-from .tax_cross_checks import CrossCheckStatus, parse_tax_cross_check_payload
+from .tax_cross_checks import (
+    CrossCheckStatus,
+    compare_amounts,
+    parse_tax_cross_check_payload,
+)
 
 
 WORKPAPER_SCHEMA_VERSION = "tax-workpaper/v1"
@@ -317,6 +321,13 @@ def _tax_cross_check_rows(
             difference = component.difference_amount if component is not None else result.difference_amount
             ratio = component.difference_ratio if component is not None else result.difference_ratio
             refs = component.source_refs if component is not None else result.source_refs
+            row_status = (
+                compare_amounts(
+                    component.ledger_amount, component.comparison_amount
+                )[0]
+                if component is not None
+                else result.status
+            )
             rows.append((
                 result.check_id,
                 component.component_id if component is not None else "整体",
@@ -326,7 +337,7 @@ def _tax_cross_check_rows(
                 "" if ratio is None else format(ratio, "f"),
                 format(result.absolute_tolerance, "f"),
                 format(result.relative_tolerance, "f"),
-                status_zh[result.status],
+                status_zh[row_status],
                 "；".join(f"{ref.source_id}:{ref.locator}" for ref in refs),
                 "；".join(result.audit_refs),
                 run.source_manifest_sha256,

@@ -1,6 +1,6 @@
 import json
-from dataclasses import FrozenInstanceError
-from decimal import Decimal
+from dataclasses import FrozenInstanceError, replace
+from decimal import Decimal, localcontext
 
 import pytest
 
@@ -172,10 +172,40 @@ def explanation() -> CrossCheckExplanation:
         check_id=CHECK_ORDER[1],
         category="timing_difference",
         explanation_zh="该差异为已核验的申报与账务确认期间差异。",
-        confirmed_by="Chen Li",
+        confirmed_by="human:Chen Li",
         confirmed_at="2026-08-05T10:00:00+08:00",
         evidence_refs=("source-1",),
     )
+
+
+def test_compare_amounts_is_independent_of_ambient_decimal_precision():
+    with localcontext() as decimal_context:
+        decimal_context.prec = 6
+        actual = compare_amounts(Decimal("100000.00"), Decimal("100009.00"))
+
+    assert actual == (
+        CrossCheckStatus.WITHIN_TOLERANCE,
+        Decimal("9.00"),
+        Decimal("0.00008999190072893439590436860683"),
+    )
+
+
+@pytest.mark.parametrize(
+    "confirmed_by",
+    ("Chen Li", "ai:tax-agent", "agent:reviewer", "model:gpt", "human:ai"),
+)
+def test_cross_check_explanation_requires_explicit_non_ai_human_attestation(
+    confirmed_by,
+):
+    with pytest.raises(ValueError, match="invalid_tax_cross_check"):
+        CrossCheckExplanation(
+            check_id=CHECK_ORDER[1],
+            category="timing_difference",
+            explanation_zh="\u8be5\u5dee\u5f02\u7531\u4eba\u5de5\u590d\u6838\u786e\u8ba4\u3002",
+            confirmed_by=confirmed_by,
+            confirmed_at="2026-08-05T10:00:00+08:00",
+            evidence_refs=("source-1",),
+        )
 
 
 def test_text_only_explanation_cannot_close_difference():
@@ -497,7 +527,10 @@ def context() -> CrossCheckContext:
 
 def complete_returns() -> tuple[TaxReturn, ...]:
     return (
-        tax_return("vat", {"vat.taxable_sales": "1000.00", "vat.output_tax": "130.00"}),
+        tax_return(
+            "vat", {"vat.taxable_sales": "250.00", "vat.output_tax": "32.50"},
+            return_id="vat-q1", period_start="2025-01-01", period_end="2025-03-31",
+        ),
         tax_return(
             "cit",
             {
@@ -507,16 +540,31 @@ def complete_returns() -> tuple[TaxReturn, ...]:
                 "cit.business_entertainment.tax_amount": "5.00",
             },
         ),
+        tax_return(
+            "vat", {"vat.taxable_sales": "250.00", "vat.output_tax": "32.50"},
+            return_id="vat-q2", period_start="2025-04-01", period_end="2025-06-30",
+        ),
+        tax_return(
+            "vat", {"vat.taxable_sales": "250.00", "vat.output_tax": "32.50"},
+            return_id="vat-q3", period_start="2025-07-01", period_end="2025-09-30",
+        ),
+        tax_return(
+            "vat", {"vat.taxable_sales": "250.00", "vat.output_tax": "32.50"},
+            return_id="vat-q4", period_start="2025-10-01", period_end="2025-12-31",
+        ),
     )
 
 
 def test_source_extractors_scale_confirmed_values_and_preserve_refs():
     statement_amount = statement_total((statement(unit_multiplier="10000"),), "income_statement", "revenue")
     tax_amount = tax_fact_total(
-        (tax_return("vat", {"vat.taxable_sales": "100.00"}, unit_multiplier="10000"),),
+        (tax_return(
+            "vat", {"vat.taxable_sales": "100.00"}, unit_multiplier="10000",
+            period_start="2025-01-01", period_end="2025-03-31",
+        ),),
         "vat",
         "vat.taxable_sales",
-        DateRange("2025-01-01", "2025-12-31"),
+        DateRange("2025-01-01", "2025-03-31"),
     )
     ledger_amount = classified_ledger_total(ledger_rows(), classifications(), "business_entertainment")
 
@@ -535,8 +583,20 @@ def test_run_tax_cross_checks_returns_five_matched_results_in_fixed_order():
     assert tuple(item.check_id for item in run.results) == CHECK_ORDER
     assert all(item.status is CrossCheckStatus.MATCHED for item in run.results)
     assert len(run.results[3].components) == 2
-    assert len(run.results[4].components) == 2
+    assert len(run.results[4].components) == 3
     assert run.questions == ()
+
+
+def test_cross_checks_accept_enterprise_income_tax_structured_identifier():
+    returns = list(complete_returns())
+    returns[1] = replace(returns[1], tax_id="enterprise_income_tax")
+
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+
+    assert run.results[3].status is CrossCheckStatus.MATCHED
+    assert run.results[4].status is CrossCheckStatus.MATCHED
 
 
 def test_missing_sources_are_not_performed_and_questions_are_bounded_to_three():
@@ -570,17 +630,104 @@ def test_incomplete_or_overlapping_vat_periods_are_not_summed():
 
 
 def test_unambiguous_latest_amended_return_replaces_original():
-    original = tax_return("vat", {"vat.taxable_sales": "900.00"}, return_id="original")
+    original = tax_return(
+        "vat", {"vat.taxable_sales": "900.00"}, return_id="original",
+        period_start="2025-01-01", period_end="2025-03-31",
+    )
     amended = tax_return(
         "vat", {"vat.taxable_sales": "1000.00"}, return_id="amended",
         filing_status="amended", filed_at="2026-02-01T08:00:00+08:00",
+        period_start="2025-01-01", period_end="2025-03-31",
     )
 
     total = tax_fact_total(
         (original, amended), "vat", "vat.taxable_sales",
-        DateRange("2025-01-01", "2025-12-31"),
+        DateRange("2025-01-01", "2025-03-31"),
     )
     assert total.amount == Decimal("1000.00")
+
+
+def test_latest_amendment_missing_requested_fact_does_not_fall_back_to_original():
+    original = tax_return(
+        "vat", {"vat.taxable_sales": "900.00"}, return_id="original",
+        period_start="2025-01-01", period_end="2025-03-31",
+    )
+    amended = tax_return(
+        "vat",
+        {"vat.output_tax": "130.00"},
+        return_id="amended",
+        filing_status="amended",
+        filed_at="2026-02-01T08:00:00+08:00",
+        period_start="2025-01-01",
+        period_end="2025-03-31",
+    )
+
+    assert tax_fact_total(
+        (original, amended),
+        "vat",
+        "vat.taxable_sales",
+        DateRange("2025-01-01", "2025-03-31"),
+    ) is None
+
+
+def test_vat_requires_complete_monthly_or_quarterly_filing_cadence():
+    monthly_periods = (
+        ("2025-01-01", "2025-01-31"),
+        ("2025-02-01", "2025-02-28"),
+        ("2025-03-01", "2025-03-31"),
+        ("2025-04-01", "2025-04-30"),
+        ("2025-05-01", "2025-05-31"),
+        ("2025-06-01", "2025-06-30"),
+        ("2025-07-01", "2025-07-31"),
+        ("2025-08-01", "2025-08-31"),
+        ("2025-09-01", "2025-09-30"),
+        ("2025-10-01", "2025-10-31"),
+        ("2025-11-01", "2025-11-30"),
+        ("2025-12-01", "2025-12-31"),
+    )
+    quarterly_periods = (
+        ("2025-01-01", "2025-03-31"),
+        ("2025-04-01", "2025-06-30"),
+        ("2025-07-01", "2025-09-30"),
+        ("2025-10-01", "2025-12-31"),
+    )
+
+    def returns(periods):
+        return tuple(
+            tax_return(
+                "vat",
+                {"vat.taxable_sales": "100.00"},
+                return_id=f"vat-{index}",
+                period_start=start,
+                period_end=end,
+            )
+            for index, (start, end) in enumerate(periods, start=1)
+        )
+
+    period = DateRange("2025-01-01", "2025-12-31")
+    assert tax_fact_total(
+        returns(monthly_periods), "vat", "vat.taxable_sales", period
+    ).amount == Decimal("1200.00")
+    assert tax_fact_total(
+        returns(quarterly_periods), "vat", "vat.taxable_sales", period
+    ).amount == Decimal("400.00")
+    assert tax_fact_total(
+        returns((("2025-01-01", "2025-12-31"),)),
+        "vat",
+        "vat.taxable_sales",
+        period,
+    ) is None
+    assert tax_fact_total(
+        returns(
+            (
+                ("2025-01-01", "2025-06-30"),
+                ("2025-07-01", "2025-12-31"),
+            )
+        ),
+        "vat",
+        "vat.taxable_sales",
+        period,
+    ) is None
 
 
 def test_cit_components_do_not_cancel_each_other():
@@ -604,6 +751,74 @@ def test_cit_components_do_not_cancel_each_other():
     assert cit.difference_amount == Decimal("200.00")
 
 
+def test_multi_component_closure_requires_an_exact_bridge_for_each_component():
+    returns = list(complete_returns())
+    returns[1] = tax_return(
+        "cit",
+        {
+            "cit.revenue": "1100.00",
+            "cit.total_profit": "100.00",
+            "cit.business_entertainment.book_amount": "10.00",
+            "cit.business_entertainment.tax_amount": "5.00",
+        },
+    )
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+    target = run.results[3]
+    explanation = CrossCheckExplanation(
+        check_id=target.check_id,
+        category="timing_difference",
+        explanation_zh="\u5df2\u9010\u9879\u6838\u5bf9\u6536\u5165\u548c\u5229\u6da6\u5dee\u5f02\u3002",
+        confirmed_by="human:Chen Li",
+        confirmed_at="2026-08-05T10:00:00+08:00",
+        evidence_refs=("source-1",),
+    )
+    cancelling = (
+        AmountBridgeItem(
+            amount=Decimal("100.00"),
+            label_zh="\u6536\u5165\u5dee\u5f02",
+            evidence_refs=("source-1",),
+        ),
+        AmountBridgeItem(
+            amount=Decimal("-100.00"),
+            label_zh="\u5229\u6da6\u5dee\u5f02",
+            evidence_refs=("source-1",),
+        ),
+    )
+
+    aggregate_only = apply_cross_check_explanation(
+        run,
+        explanation,
+        bridge=cancelling,
+        verified_evidence_refs=("source-1",),
+    )
+    exact = apply_cross_check_explanation(
+        run,
+        explanation,
+        bridge=(
+            __import__("dataclasses").replace(cancelling[0], component_id="revenue"),
+            __import__("dataclasses").replace(cancelling[1], component_id="total_profit"),
+        ),
+        verified_evidence_refs=("source-1",),
+    )
+
+    assert aggregate_only.results[3].resolution_status == "explained_pending_verification"
+    assert exact.results[3].resolution_status == "closed"
+    assert parse_tax_cross_check_payload(tax_cross_check_payload(exact)) == exact
+
+
+def test_business_entertainment_persists_deductible_and_tax_add_back_components():
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), complete_returns(), context(), "a" * 64
+    )
+    components = {item.component_id: item for item in run.results[4].components}
+
+    assert components["calculated_deductible"].ledger_amount == Decimal("5.00")
+    assert components["calculated_tax_add_back"].ledger_amount == Decimal("5.00")
+    assert components["calculated_tax_add_back"].comparison_amount == Decimal("5.00")
+
+
 @pytest.mark.parametrize("check_index", range(5))
 def test_each_cross_check_can_surface_a_real_difference(check_index):
     rows = ledger_rows()
@@ -612,7 +827,8 @@ def test_each_cross_check_can_surface_a_real_difference(check_index):
         rows[0]["credit"] = "1100.00"
     elif check_index == 1:
         returns[0] = tax_return(
-            "vat", {"vat.taxable_sales": "900.00", "vat.output_tax": "130.00"}
+            "vat", {"vat.taxable_sales": "150.00", "vat.output_tax": "32.50"},
+            return_id="vat-q1", period_start="2025-01-01", period_end="2025-03-31",
         )
     elif check_index == 2:
         rows[2]["credit"] = "150.00"
@@ -656,7 +872,8 @@ def test_each_cross_check_can_surface_a_real_difference(check_index):
 def test_dual_threshold_is_used_by_an_executed_check():
     returns = list(complete_returns())
     returns[0] = tax_return(
-        "vat", {"vat.taxable_sales": "1000.01", "vat.output_tax": "130.00"}
+        "vat", {"vat.taxable_sales": "250.01", "vat.output_tax": "32.50"},
+        return_id="vat-q1", period_start="2025-01-01", period_end="2025-03-31",
     )
     run = run_tax_cross_checks(
         ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64

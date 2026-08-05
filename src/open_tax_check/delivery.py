@@ -54,6 +54,10 @@ class DeliveryError(ValueError):
         super().__init__(code)
 
 
+class _PointerRollbackError(DeliveryError):
+    """The new pointer may be live, so its referenced revision must remain."""
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -152,7 +156,24 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
                 pass
 
 
-def _publish_pointer_and_handoff(root: Path, pointer: dict[str, object]) -> None:
+def _publish_pointer_and_handoff(
+    root: Path,
+    pointer: dict[str, object],
+    *,
+    expected_case_audit_digest: str,
+    expected_tax_cross_checks: dict[str, str] | None,
+    expected_source_manifest_sha256: str | None,
+) -> None:
+    current_artifacts, current_payloads = _case_audit_artifacts(root)
+    current_tax_cross_checks = _tax_cross_check_record(
+        current_artifacts, current_payloads
+    )
+    if (
+        _case_audit_digest(current_artifacts) != expected_case_audit_digest
+        or current_tax_cross_checks != expected_tax_cross_checks
+        or _source_manifest_digest(root) != expected_source_manifest_sha256
+    ):
+        raise DeliveryError("delivery_case_audit_invalid")
     pointer_path = root / "work" / DELIVERY_POINTER_NAME
     previous = pointer_path.read_bytes() if pointer_path.is_file() else None
     _atomic_json(pointer_path, pointer)
@@ -164,8 +185,13 @@ def _publish_pointer_and_handoff(root: Path, pointer: dict[str, object]) -> None
                 pointer_path.unlink()
             except FileNotFoundError:
                 pass
+            except OSError:
+                raise _PointerRollbackError("delivery_write_failed") from None
         else:
-            _atomic_bytes(pointer_path, previous)
+            try:
+                _atomic_bytes(pointer_path, previous)
+            except OSError:
+                raise _PointerRollbackError("delivery_write_failed") from None
         raise
 
 
@@ -654,7 +680,8 @@ def build_case_delivery(
     options = _delivery_options(include_evidence_files=include_evidence_files)
     case_audit_artifacts, case_audit_payloads = _case_audit_artifacts(root)
     tax_cross_checks = _tax_cross_check_record(case_audit_artifacts, case_audit_payloads)
-    if tax_cross_checks is not None and tax_cross_checks["source_manifest_sha256"] != _source_manifest_digest(root):
+    source_manifest_sha256 = _source_manifest_digest(root)
+    if tax_cross_checks is not None and tax_cross_checks["source_manifest_sha256"] != source_manifest_sha256:
         raise DeliveryError("delivery_case_audit_invalid")
     if (
         isinstance(case_audit_payloads.get("tax_cross_checks"), dict)
@@ -697,7 +724,13 @@ def build_case_delivery(
         ):
             raise DeliveryError("delivery_revision_conflict")
         pointer = _pointer_payload(root, manifest, final_directory)
-        _publish_pointer_and_handoff(root, pointer)
+        _publish_pointer_and_handoff(
+            root,
+            pointer,
+            expected_case_audit_digest=case_audit_digest,
+            expected_tax_cross_checks=tax_cross_checks,
+            expected_source_manifest_sha256=source_manifest_sha256,
+        )
         return pointer
 
     temporary_directory = Path(tempfile.mkdtemp(prefix=".otcd-", dir=delivery_root))
@@ -812,12 +845,22 @@ def build_case_delivery(
         published_directory = True
         temporary_directory = None  # type: ignore[assignment]
         pointer = _pointer_payload(root, manifest, final_directory)
-        _publish_pointer_and_handoff(root, pointer)
+        _publish_pointer_and_handoff(
+            root,
+            pointer,
+            expected_case_audit_digest=case_audit_digest,
+            expected_tax_cross_checks=tax_cross_checks,
+            expected_source_manifest_sha256=source_manifest_sha256,
+        )
         return pointer
     except PdfExportUnavailable as error:
         raise DeliveryError(str(error)) from None
-    except DeliveryError:
-        if published_directory and final_directory.exists():
+    except DeliveryError as error:
+        if (
+            published_directory
+            and final_directory.exists()
+            and not isinstance(error, _PointerRollbackError)
+        ):
             try:
                 shutil.rmtree(final_directory)
             except OSError:

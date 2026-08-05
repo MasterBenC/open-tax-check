@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -24,84 +25,40 @@ EXPECTED_JOURNAL_ROWS = [
 
 class FictionalExampleTests(unittest.TestCase):
     def test_five_cross_check_acceptance_scenarios_have_bounded_machine_outcomes(self):
-        from dataclasses import replace
-        from decimal import Decimal
-        from open_tax_check.tax_cross_checks import (
-            CrossCheckContext,
-            CrossCheckStatus,
-            parse_tax_cross_check_payload,
-            run_tax_cross_checks,
-            tax_cross_check_payload,
-        )
-        from test_tax_cross_checks import (
-            classifications,
-            completed_run,
-            complete_returns,
-            context,
-            difference_run,
-            ledger_rows,
-            statement,
-            tax_return,
-        )
+        from scripts.run_fictional_example import _prepare_complete_pipeline_case
 
-        matched = completed_run()
-        tolerance_base = difference_run()
-        tolerance_result = replace(
-            tolerance_base.results[1],
-            status=CrossCheckStatus.WITHIN_TOLERANCE,
-            comparison_amount=Decimal("1000.05"),
-            difference_amount=Decimal("0.05"),
-            difference_ratio=Decimal("0.00004999750012499375031248437578"),
-            question=None,
-            reason_codes=(),
+        scenarios = (
+            ("all_matched", {}, "matched"),
+            ("inside_both_tolerances", {"vat_sales": "62500.05"}, "within_tolerance"),
+            ("vat_sales_output_difference", {"vat_sales": "65000.00"}, "difference_found"),
+            ("cit_revenue_profit_entertainment_difference", {"cit_revenue": "900000.00"}, "difference_found"),
+            (
+                "multiple_missing_sources",
+                {"include_structured": False, "confirm_classification": False},
+                "not_performed",
+            ),
         )
-        tolerance_results = list(tolerance_base.results)
-        tolerance_results[1] = tolerance_result
-        tolerance = replace(tolerance_base, results=tuple(tolerance_results), questions=())
-        vat_difference = difference_run()
+        for name, options, expected_status in scenarios:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                case_dir = Path(temp_dir) / "case"
+                _prepare_complete_pipeline_case(case_dir, **options)
+                payload = json.loads(
+                    (case_dir / "work" / "tax-cross-checks.json").read_text(encoding="utf-8")
+                )
 
-        cit_returns = list(complete_returns())
-        cit_returns[1] = tax_return(
-            "cit",
-            {
-                "cit.revenue": "900.00",
-                "cit.total_profit": "150.00",
-                "cit.business_entertainment.book_amount": "20.00",
-                "cit.business_entertainment.tax_amount": "1.00",
-            },
-        )
-        cit_difference = run_tax_cross_checks(
-            ledger_rows(), classifications(), (statement(),), tuple(cit_returns), context(), "b" * 64
-        )
-        many_missing = run_tax_cross_checks(
-            (),
-            None,
-            (),
-            (),
-            CrossCheckContext("2025-01-01", "2025-12-31", "示例公司", "CNY"),
-            "c" * 64,
-        )
-
-        scenarios = {
-            "all_matched": matched,
-            "inside_both_tolerances": tolerance,
-            "vat_sales_output_difference": vat_difference,
-            "cit_revenue_profit_entertainment_difference": cit_difference,
-            "multiple_missing_sources": many_missing,
-        }
-        for name, run in scenarios.items():
-            with self.subTest(name=name):
-                self.assertEqual(parse_tax_cross_check_payload(tax_cross_check_payload(run)), run)
-                self.assertLessEqual(len(run.questions), 3)
-                self.assertEqual(len(run.results), 5)
-
-        self.assertTrue(all(item.status is CrossCheckStatus.MATCHED for item in matched.results))
-        self.assertEqual(tolerance.results[1].status, CrossCheckStatus.WITHIN_TOLERANCE)
-        self.assertEqual(vat_difference.results[1].status, CrossCheckStatus.DIFFERENCE_FOUND)
-        self.assertEqual(cit_difference.results[3].status, CrossCheckStatus.DIFFERENCE_FOUND)
-        self.assertEqual(cit_difference.results[4].status, CrossCheckStatus.DIFFERENCE_FOUND)
-        self.assertEqual(len(many_missing.questions), 3)
-        self.assertTrue(all(item.status is CrossCheckStatus.NOT_PERFORMED for item in many_missing.results))
+                self.assertEqual(payload["schema_version"], "tax-cross-checks/v1")
+                self.assertEqual(len(payload["results"]), 5)
+                self.assertLessEqual(len(payload["questions"]), 3)
+                if name == "all_matched":
+                    self.assertTrue(all(item["status"] == "matched" for item in payload["results"]))
+                elif name == "inside_both_tolerances":
+                    self.assertEqual(payload["results"][1]["status"], expected_status)
+                elif name == "vat_sales_output_difference":
+                    self.assertEqual(payload["results"][1]["status"], expected_status)
+                elif name == "cit_revenue_profit_entertainment_difference":
+                    self.assertEqual(payload["results"][3]["status"], expected_status)
+                else:
+                    self.assertTrue(all(item["status"] == expected_status for item in payload["results"]))
 
     def test_mapping_payloads_use_preset_reviewer_mappings_not_proposals(self):
         """Changing proposal heuristics must not change the fictional review decision."""
@@ -229,8 +186,14 @@ class FictionalExampleTests(unittest.TestCase):
 
     def test_complete_fictional_case_uses_only_the_generated_excel_journal(self):
         from scripts.run_fictional_example import run_fictional_case
+        from open_tax_check.delivery import DeliveryError
 
-        result = run_fictional_case(format="excel", complete=True)
+        try:
+            result = run_fictional_case(format="excel", complete=True)
+        except DeliveryError as error:
+            if str(error) == "pdf_renderer_unavailable":
+                self.skipTest("Chromium is unavailable for the formal PDF delivery")
+            raise
 
         self.assertEqual(result.status, "completed_with_limitations")
         self.assertEqual(result.rule_amounts, {"CIT-BE-001": "15000.00"})
@@ -260,6 +223,8 @@ class FictionalExampleTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            if proc.returncode != 0 and "pdf_renderer_unavailable" in proc.stderr:
+                self.skipTest("Chromium is unavailable for the formal PDF delivery")
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertFalse((case_dir / "input/journal.csv").exists())
             for filename in (
@@ -276,13 +241,16 @@ class FictionalExampleTests(unittest.TestCase):
                 "iit-return.txt",
             ):
                 self.assertTrue((case_dir / "input" / filename).is_file(), filename)
+            from scripts.run_fictional_example import COMPLETE_VAT_FILENAMES
+            for filename in COMPLETE_VAT_FILENAMES:
+                self.assertTrue((case_dir / "input" / filename).is_file(), filename)
 
             structured = case_dir / "work/structured-documents"
             self.assertEqual(
                 len(list(structured.glob("*.fs.json"))),
                 3,
             )
-            self.assertEqual(len(list(structured.glob("*.tr.json"))), 4)
+            self.assertEqual(len(list(structured.glob("*.tr.json"))), 19)
             self.assertTrue((case_dir / "work/structured-document-index.json").is_file())
             structured_index = json.loads(
                 (case_dir / "work/structured-document-index.json").read_text(
@@ -291,7 +259,7 @@ class FictionalExampleTests(unittest.TestCase):
             )
             self.assertEqual(
                 len({item["source_id"] for item in structured_index["documents"]}),
-                7,
+                22,
             )
 
             private_snapshot = json.loads(
@@ -299,6 +267,14 @@ class FictionalExampleTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
+            cross_checks = json.loads(
+                (case_dir / "work" / "tax-cross-checks.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(all(item["status"] == "matched" for item in cross_checks["results"]))
+            classification = json.loads(
+                (case_dir / "reviews" / "account_classification.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(classification["reviewer"], "human:Chen Li")
             event_types = {
                 event["event_type"] for event in private_snapshot["audit_events"]
             }
@@ -363,7 +339,11 @@ class FictionalExampleTests(unittest.TestCase):
             )
             revision_dir = manifest_path.parent
             for item in manifest["artifacts"]:
-                self.assertTrue((revision_dir / item["relative_path"]).is_file())
+                artifact_path = revision_dir / item["relative_path"]
+                self.assertTrue(artifact_path.is_file())
+                self.assertEqual(
+                    hashlib.sha256(artifact_path.read_bytes()).hexdigest(), item["sha256"]
+                )
             with ZipFile(revision_dir / "evidence-bundle.zip") as archive:
                 self.assertIsNone(archive.testzip())
                 self.assertIn(
@@ -380,7 +360,12 @@ class FictionalExampleTests(unittest.TestCase):
             self.assertEqual(machine_snapshot["limitations"], private_snapshot["limitations"])
             report = (revision_dir / "report.html").read_text(encoding="utf-8")
             self.assertIn(private_snapshot["limitations"][0]["message_zh"], report)
-            self.assertTrue((revision_dir / "税务健康检查报告.pdf").is_file())
+            pdf_path = revision_dir / "税务健康检查报告.pdf"
+            self.assertTrue(pdf_path.is_file())
+            from pypdf import PdfReader
+            pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(pdf_path).pages)
+            self.assertIn("税务健康检查报告", pdf_text)
+            self.assertIn("虚构科技有限公司", pdf_text)
             from openpyxl import load_workbook
             workbook = load_workbook(revision_dir / "税务健康检查工作底稿.xlsx", read_only=True)
             try:

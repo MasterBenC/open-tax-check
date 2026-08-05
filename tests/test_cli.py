@@ -18,7 +18,7 @@ def test_confirm_cross_check_cli_accepts_one_strict_payload(tmp_path):
         "source_manifest_sha256": "a" * 64,
         "category": "timing_difference",
         "explanation_zh": "该差异为客户确认的期间差异。",
-        "confirmed_by": "Chen Li",
+        "confirmed_by": "human:Chen Li",
         "confirmed_at": "2026-08-05T10:00:00+08:00",
         "evidence_refs": ["source-1"],
         "bridge": [],
@@ -34,6 +34,36 @@ def test_confirm_cross_check_cli_accepts_one_strict_payload(tmp_path):
 
     assert code == 0
     assert json.loads(output.getvalue())["status"] == "completed"
+
+
+def test_confirm_cross_check_cli_reports_invalid_rerun_inputs(tmp_path):
+    payload_path = tmp_path / "cross-check-confirmation.json"
+    payload_path.write_text("{}", encoding="utf-8")
+    output = io.StringIO()
+
+    with patch.object(
+        cli,
+        "confirm_cross_check_explanation",
+        side_effect=ValueError("cross_check_rerun_inputs_invalid"),
+    ), patch.object(
+        sys,
+        "argv",
+        [
+            "opentaxcheck",
+            "confirm-cross-check",
+            "--case",
+            str(tmp_path / "case"),
+            "--input",
+            str(payload_path),
+        ],
+    ), contextlib.redirect_stdout(output):
+        code = main()
+
+    assert code == 4
+    assert json.loads(output.getvalue()) == {
+        "status": "failed",
+        "error_code": "cross_check_rerun_inputs_invalid",
+    }
 
 
 def test_confirm_account_classification_rejects_ai_reviewer(tmp_path):

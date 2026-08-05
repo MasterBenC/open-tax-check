@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from calendar import monthrange
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 
 from .numeric import exact_subtract, parse_decimal
 from .structured_documents import FinancialStatement, TaxReturn, TaxReturnLine
@@ -60,7 +62,12 @@ def _same_context(
     if not documents:
         issues.append(_issue("missing_structured_document"))
         return
-    first = documents[0]
+    statements = tuple(
+        item for item in documents if isinstance(item, FinancialStatement)
+    )
+    first = statements[0] if statements else documents[0]
+    reference_start = date.fromisoformat(first.period_start)
+    reference_end = date.fromisoformat(first.period_end)
     for document in documents[1:]:
         for field, code in (
             ("entity_name", "entity_mismatch"),
@@ -69,12 +76,47 @@ def _same_context(
         ):
             if getattr(document, field) != getattr(first, field):
                 issues.append(_issue(code, first, document))
-        if (document.period_start, document.period_end) != (
+    for document in documents:
+        if document is first:
+            continue
+        document_start = date.fromisoformat(document.period_start)
+        document_end = date.fromisoformat(document.period_end)
+        if isinstance(document, TaxReturn) and document.tax_id == "vat":
+            if not _valid_vat_filing_period(document_start, document_end):
+                issues.append(_issue("invalid_vat_filing_period", document))
+                if (document.period_start, document.period_end) != (
+                    first.period_start,
+                    first.period_end,
+                ):
+                    issues.append(_issue("period_mismatch", first, document))
+            elif document_start < reference_start or document_end > reference_end:
+                issues.append(_issue("period_mismatch", first, document))
+        elif (document.period_start, document.period_end) != (
             first.period_start,
             first.period_end,
         ):
             issues.append(_issue("period_mismatch", first, document))
+    if isinstance(first, TaxReturn) and first.tax_id == "vat":
+        first_start = date.fromisoformat(first.period_start)
+        first_end = date.fromisoformat(first.period_end)
+        if not _valid_vat_filing_period(first_start, first_end):
+            issues.append(_issue("invalid_vat_filing_period", first))
     checks.append({"check": "document_context", "status": "passed" if not issues else "blocked"})
+
+
+def _valid_vat_filing_period(start: date, end: date) -> bool:
+    if start.day != 1 or start.year != end.year:
+        return False
+    if end == date(start.year, start.month, monthrange(start.year, start.month)[1]):
+        return True
+    if start.month not in {1, 4, 7, 10}:
+        return False
+    quarter_end_month = start.month + 2
+    return end == date(
+        start.year,
+        quarter_end_month,
+        monthrange(start.year, quarter_end_month)[1],
+    )
 
 
 def _existing_issues(

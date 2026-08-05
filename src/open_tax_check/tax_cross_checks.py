@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from calendar import monthrange
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 from enum import Enum, StrEnum
 import hashlib
 import json
@@ -50,6 +51,8 @@ _RESOLUTION_STATUSES = frozenset(
     {"unresolved", "explained_pending_verification", "closed"}
 )
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_DECIMAL_CONTEXT = Context(prec=28)
+_AI_IDENTITIES = frozenset({"ai", "agent", "host_ai", "model"})
 
 
 class CrossCheckStatus(StrEnum):
@@ -137,11 +140,12 @@ def compare_amounts(
     left = _finite_decimal(left)
     right = _finite_decimal(right)
     assert left is not None and right is not None
-    difference = abs(left - right)
-    if difference == 0:
-        return CrossCheckStatus.MATCHED, difference, Decimal("0")
-    denominator = max(abs(left), abs(right))
-    ratio = Decimal("1") if denominator == 0 else difference / denominator
+    with localcontext(_DECIMAL_CONTEXT):
+        difference = abs(left - right)
+        if difference == 0:
+            return CrossCheckStatus.MATCHED, difference, Decimal("0")
+        denominator = max(abs(left), abs(right))
+        ratio = Decimal("1") if denominator == 0 else difference / denominator
     status = (
         CrossCheckStatus.WITHIN_TOLERANCE
         if difference <= ABSOLUTE_TOLERANCE
@@ -242,6 +246,7 @@ class AmountBridgeItem:
     amount: Decimal
     label_zh: str
     evidence_refs: tuple[str, ...]
+    component_id: str | None = None
 
     def __post_init__(self) -> None:
         _finite_decimal(self.amount)
@@ -249,6 +254,7 @@ class AmountBridgeItem:
             not _CJK_RE.search(_text(self.label_zh))
             or not self.evidence_refs
             or any(not isinstance(item, str) or not item.strip() for item in self.evidence_refs)
+            or (self.component_id is not None and not _text(self.component_id))
         ):
             raise _invalid()
 
@@ -266,9 +272,14 @@ class CrossCheckExplanation:
     def __post_init__(self) -> None:
         if self.check_id not in CHECK_ORDER or self.category not in _EXPLANATION_CATEGORIES:
             raise _invalid()
+        confirmer = _text(self.confirmed_by)
+        if not confirmer.casefold().startswith("human:"):
+            raise _invalid()
+        identity = confirmer.split(":", 1)[1].strip()
+        if not identity or any(token in _AI_IDENTITIES for token in re.split(r"[^a-z0-9_]+", identity.casefold())):
+            raise _invalid()
         if (
             not _CJK_RE.search(_text(self.explanation_zh))
-            or not _text(self.confirmed_by)
             or not self.evidence_refs
             or any(not isinstance(item, str) or not item.strip() for item in self.evidence_refs)
             or any(not isinstance(item, AmountBridgeItem) for item in self.bridge_items)
@@ -333,6 +344,10 @@ class CrossCheckResult:
             self.status is not CrossCheckStatus.DIFFERENCE_FOUND or not self.explanations
         ):
             raise _invalid()
+        if self.resolution_status == "closed" and not _bridge_closes_result(
+            self, self.explanations[-1].bridge_items
+        ):
+            raise _invalid()
         _finite_decimal(self.absolute_tolerance)
         _finite_decimal(self.relative_tolerance)
         amounts = (
@@ -367,9 +382,8 @@ class CrossCheckResult:
                     CrossCheckStatus.DIFFERENCE_FOUND,
                 ).index,
             )
-            expected_difference = sum(
-                (item.difference_amount for item in self.components),
-                Decimal("0"),
+            expected_difference = _sum_decimals(
+                item.difference_amount for item in self.components
             )
             expected_ratio = max(item.difference_ratio for item in self.components)
             if (
@@ -435,7 +449,49 @@ def _scaled_amount(value: str, multiplier: str) -> Decimal:
     scale = Decimal(multiplier)
     if not amount.is_finite() or not scale.is_finite() or scale <= 0:
         raise _invalid()
-    return amount * scale
+    with localcontext(_DECIMAL_CONTEXT):
+        return amount * scale
+
+
+def _sum_decimals(values: Iterable[Decimal]) -> Decimal:
+    with localcontext(_DECIMAL_CONTEXT):
+        return sum(values, Decimal("0"))
+
+
+def _signed_difference(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext(_DECIMAL_CONTEXT):
+        return right - left
+
+
+def _bridge_closes_result(
+    result: CrossCheckResult,
+    bridge_items: Sequence[AmountBridgeItem],
+) -> bool:
+    items = tuple(bridge_items)
+    if not items:
+        return False
+    if result.components:
+        expected = {
+            component.component_id: _signed_difference(
+                component.ledger_amount, component.comparison_amount
+            )
+            for component in result.components
+        }
+        if any(item.component_id not in expected for item in items):
+            return False
+        actual = {
+            component_id: _sum_decimals(
+                item.amount for item in items if item.component_id == component_id
+            )
+            for component_id in expected
+        }
+        return actual == expected
+    if any(item.component_id is not None for item in items):
+        return False
+    assert result.ledger_amount is not None and result.comparison_amount is not None
+    return _sum_decimals(item.amount for item in items) == _signed_difference(
+        result.ledger_amount, result.comparison_amount
+    )
 
 
 def statement_total(
@@ -495,6 +551,22 @@ def _selected_return_for_period(items: Sequence[TaxReturn]) -> TaxReturn | None:
     return latest[0]
 
 
+def _valid_vat_filing_period(start: date, end: date) -> bool:
+    if start.day != 1 or start.year != end.year:
+        return False
+    monthly_end = date(start.year, start.month, monthrange(start.year, start.month)[1])
+    if end == monthly_end:
+        return True
+    if start.month not in {1, 4, 7, 10}:
+        return False
+    quarter_end_month = start.month + 2
+    return end == date(
+        start.year,
+        quarter_end_month,
+        monthrange(start.year, quarter_end_month)[1],
+    )
+
+
 def tax_fact_total(
     returns: Sequence[TaxReturn],
     tax_id: str,
@@ -508,7 +580,6 @@ def tax_fact_total(
         for item in returns
         if item.tax_id == tax_id
         and item.filing_status in {"filed", "amended"}
-        and any(line.fact_key == fact_key for line in item.lines)
     )
     if not relevant:
         return None
@@ -533,7 +604,12 @@ def tax_fact_total(
     for item in selected:
         item_start = date.fromisoformat(item.period_start)
         item_end = date.fromisoformat(item.period_end)
-        if item_start != cursor or item_end < item_start or item_end > expected_end:
+        if (
+            item_start != cursor
+            or item_end < item_start
+            or item_end > expected_end
+            or (tax_id == "vat" and not _valid_vat_filing_period(item_start, item_end))
+        ):
             return None
         cursor = item_end + timedelta(days=1)
     if cursor != expected_end + timedelta(days=1):
@@ -552,7 +628,7 @@ def tax_fact_total(
         if len(lines) != 1:
             return None
         line = lines[0]
-        total += _scaled_amount(line.value, item.unit_multiplier)
+        total = _sum_decimals((total, _scaled_amount(line.value, item.unit_multiplier)))
         refs.append(
             CrossCheckSourceRef(
                 source_id=item.source_id,
@@ -607,7 +683,7 @@ def classified_ledger_total(
 
 def _combined_amount(*items: SourcedAmount) -> SourcedAmount:
     return SourcedAmount(
-        sum((item.amount for item in items), Decimal("0")),
+        _sum_decimals(item.amount for item in items),
         tuple(ref for item in items for ref in item.source_refs),
     )
 
@@ -660,7 +736,7 @@ def _amount_result(
                 CrossCheckStatus.DIFFERENCE_FOUND,
             ).index,
         )
-        difference = sum((item.difference_amount for item in components), Decimal("0"))
+        difference = _sum_decimals(item.difference_amount for item in components)
         ratio = max(item.difference_ratio for item in components)
     else:
         status, difference, ratio = compare_amounts(left.amount, right.amount)
@@ -789,19 +865,11 @@ def _attach_questions(
     )
 
 
-def run_tax_cross_checks(
-    rows: Sequence[Mapping[str, object]],
-    classifications: AccountClassificationReview | None,
+def _context_issue_refs(
     financial_statements: Sequence[FinancialStatement],
     tax_returns: Sequence[TaxReturn],
     context: CrossCheckContext,
-    source_manifest_sha256: str,
-    explanations: Sequence[object] = (),
-) -> TaxCrossCheckRun:
-    """Execute the five fixed cross-checks without inferring missing facts."""
-
-    if explanations:
-        raise _invalid()
+) -> tuple[str, ...]:
     context_issues = list(context.blocked_issue_refs)
     for item in financial_statements:
         if item.entity_name != context.entity_name:
@@ -829,6 +897,107 @@ def run_tax_cross_checks(
             or date.fromisoformat(item.period_end) > period_end
         ):
             context_issues.append("period_mismatch")
+    return tuple(dict.fromkeys(context_issues))
+
+
+def _execute_cross_check(
+    check_id: str,
+    rows: Sequence[Mapping[str, object]],
+    classifications: AccountClassificationReview | None,
+    financial_statements: Sequence[FinancialStatement],
+    tax_returns: Sequence[TaxReturn],
+    context: CrossCheckContext,
+) -> CrossCheckResult:
+    if check_id not in CHECK_ORDER:
+        raise _invalid()
+    period = DateRange(context.period_start, context.period_end)
+
+    def statement_amount(key: str) -> SourcedAmount | None:
+        return statement_total(financial_statements, "income_statement", key)
+
+    def tax_amount(tax_id: str, key: str) -> SourcedAmount | None:
+        identifiers = (tax_id, "enterprise_income_tax") if tax_id == "cit" else (tax_id,)
+        for identifier in identifiers:
+            value = tax_fact_total(tax_returns, identifier, key, period)
+            if value is not None:
+                return value
+        return None
+
+    def ledger_amount(category: str) -> SourcedAmount | None:
+        if classifications is None:
+            return None
+        return classified_ledger_total(rows, classifications, category)
+
+    title = _CHECK_TITLES[check_id]
+    if check_id == CHECK_ORDER[0]:
+        main_revenue = ledger_amount("main_business_revenue")
+        other_revenue = ledger_amount("other_business_revenue")
+        income_revenue = statement_amount("revenue")
+        if main_revenue is None or other_revenue is None or income_revenue is None:
+            return _missing_result(check_id, ("cit", "vat"), title, context, ("missing_controlled_revenue_or_statement",))
+        return _amount_result(check_id, ("cit", "vat"), title, context, _combined_amount(main_revenue, other_revenue), income_revenue)
+    if check_id == CHECK_ORDER[1]:
+        income_revenue = statement_amount("revenue")
+        vat_sales = tax_amount("vat", "vat.taxable_sales")
+        if income_revenue is None or vat_sales is None:
+            return _missing_result(check_id, ("vat", "cit"), title, context, ("missing_income_statement_or_vat_sales",))
+        return _amount_result(check_id, ("vat", "cit"), title, context, income_revenue, vat_sales)
+    if check_id == CHECK_ORDER[2]:
+        ledger_output = ledger_amount("vat_output_tax")
+        vat_output = tax_amount("vat", "vat.output_tax")
+        if ledger_output is None or vat_output is None:
+            return _missing_result(check_id, ("vat",), title, context, ("missing_controlled_output_tax_or_vat_return",))
+        return _amount_result(check_id, ("vat",), title, context, ledger_output, vat_output)
+    if check_id == CHECK_ORDER[3]:
+        income_revenue = statement_amount("revenue")
+        total_profit = statement_amount("total_profit")
+        cit_revenue = tax_amount("cit", "cit.revenue")
+        cit_profit = tax_amount("cit", "cit.total_profit")
+        if any(item is None for item in (income_revenue, total_profit, cit_revenue, cit_profit)):
+            return _missing_result(check_id, ("cit",), title, context, ("missing_income_statement_or_cit_facts",))
+        assert income_revenue and total_profit and cit_revenue and cit_profit
+        components = (
+            _component("revenue", income_revenue, cit_revenue),
+            _component("total_profit", total_profit, cit_profit),
+        )
+        return _amount_result(check_id, ("cit",), title, context, _combined_amount(income_revenue, total_profit), _combined_amount(cit_revenue, cit_profit), components=components)
+
+    entertainment = ledger_amount("business_entertainment")
+    be_book = tax_amount("cit", "cit.business_entertainment.book_amount")
+    be_tax = tax_amount("cit", "cit.business_entertainment.tax_amount")
+    cit_revenue = tax_amount("cit", "cit.revenue")
+    if any(item is None for item in (entertainment, be_book, be_tax, cit_revenue)):
+        return _missing_result(check_id, ("cit",), title, context, ("missing_entertainment_or_cit_facts",))
+    assert entertainment and be_book and be_tax and cit_revenue
+    calculation = business_entertainment_adjustment(entertainment.amount, cit_revenue.amount)
+    deductible = SourcedAmount(Decimal(calculation["deductible_amount"]), entertainment.source_refs + cit_revenue.source_refs)
+    tax_add_back = SourcedAmount(Decimal(calculation["tax_adjustment"]), entertainment.source_refs + cit_revenue.source_refs)
+    declared_add_back = SourcedAmount(
+        _signed_difference(be_tax.amount, be_book.amount),
+        be_book.source_refs + be_tax.source_refs,
+    )
+    components = (
+        _component("declared_book_amount", entertainment, be_book),
+        _component("calculated_deductible", deductible, be_tax),
+        _component("calculated_tax_add_back", tax_add_back, declared_add_back),
+    )
+    return _amount_result(check_id, ("cit",), title, context, _combined_amount(entertainment, deductible, tax_add_back), _combined_amount(be_book, be_tax, declared_add_back), components=components)
+
+
+def run_tax_cross_checks(
+    rows: Sequence[Mapping[str, object]],
+    classifications: AccountClassificationReview | None,
+    financial_statements: Sequence[FinancialStatement],
+    tax_returns: Sequence[TaxReturn],
+    context: CrossCheckContext,
+    source_manifest_sha256: str,
+    explanations: Sequence[object] = (),
+) -> TaxCrossCheckRun:
+    """Execute the five fixed cross-checks without inferring missing facts."""
+
+    if explanations:
+        raise _invalid()
+    context_issues = _context_issue_refs(financial_statements, tax_returns, context)
     if context_issues:
         return TaxCrossCheckRun(
             TAX_CROSS_CHECK_SCHEMA_VERSION,
@@ -837,75 +1006,20 @@ def run_tax_cross_checks(
             (),
             source_manifest_sha256,
             (),
-            tuple(dict.fromkeys(context_issues)),
+            context_issues,
         )
-    period = DateRange(context.period_start, context.period_end)
-    income_revenue = statement_total(financial_statements, "income_statement", "revenue")
-    total_profit = statement_total(financial_statements, "income_statement", "total_profit")
-    vat_sales = tax_fact_total(tax_returns, "vat", "vat.taxable_sales", period)
-    vat_output = tax_fact_total(tax_returns, "vat", "vat.output_tax", period)
-    cit_revenue = tax_fact_total(tax_returns, "cit", "cit.revenue", period)
-    cit_profit = tax_fact_total(tax_returns, "cit", "cit.total_profit", period)
-    be_book = tax_fact_total(
-        tax_returns, "cit", "cit.business_entertainment.book_amount", period
-    )
-    be_tax = tax_fact_total(
-        tax_returns, "cit", "cit.business_entertainment.tax_amount", period
-    )
-    main_revenue = (
-        classified_ledger_total(rows, classifications, "main_business_revenue")
-        if classifications is not None
-        else None
-    )
-    other_revenue = (
-        classified_ledger_total(rows, classifications, "other_business_revenue")
-        if classifications is not None
-        else None
-    )
-    ledger_output = (
-        classified_ledger_total(rows, classifications, "vat_output_tax")
-        if classifications is not None
-        else None
-    )
-    entertainment = (
-        classified_ledger_total(rows, classifications, "business_entertainment")
-        if classifications is not None
-        else None
-    )
-    results: list[CrossCheckResult] = []
-    if main_revenue is None or other_revenue is None or income_revenue is None:
-        results.append(_missing_result(CHECK_ORDER[0], ("cit", "vat"), _CHECK_TITLES[CHECK_ORDER[0]], context, ("missing_controlled_revenue_or_statement",)))
-    else:
-        results.append(_amount_result(CHECK_ORDER[0], ("cit", "vat"), _CHECK_TITLES[CHECK_ORDER[0]], context, _combined_amount(main_revenue, other_revenue), income_revenue))
-    if income_revenue is None or vat_sales is None:
-        results.append(_missing_result(CHECK_ORDER[1], ("vat", "cit"), _CHECK_TITLES[CHECK_ORDER[1]], context, ("missing_income_statement_or_vat_sales",)))
-    else:
-        results.append(_amount_result(CHECK_ORDER[1], ("vat", "cit"), _CHECK_TITLES[CHECK_ORDER[1]], context, income_revenue, vat_sales))
-    if ledger_output is None or vat_output is None:
-        results.append(_missing_result(CHECK_ORDER[2], ("vat",), _CHECK_TITLES[CHECK_ORDER[2]], context, ("missing_controlled_output_tax_or_vat_return",)))
-    else:
-        results.append(_amount_result(CHECK_ORDER[2], ("vat",), _CHECK_TITLES[CHECK_ORDER[2]], context, ledger_output, vat_output))
-    if any(item is None for item in (income_revenue, total_profit, cit_revenue, cit_profit)):
-        results.append(_missing_result(CHECK_ORDER[3], ("cit",), _CHECK_TITLES[CHECK_ORDER[3]], context, ("missing_income_statement_or_cit_facts",)))
-    else:
-        assert income_revenue and total_profit and cit_revenue and cit_profit
-        components = (
-            _component("revenue", income_revenue, cit_revenue),
-            _component("total_profit", total_profit, cit_profit),
+    results = tuple(
+        _execute_cross_check(
+            check_id,
+            rows,
+            classifications,
+            financial_statements,
+            tax_returns,
+            context,
         )
-        results.append(_amount_result(CHECK_ORDER[3], ("cit",), _CHECK_TITLES[CHECK_ORDER[3]], context, _combined_amount(income_revenue, total_profit), _combined_amount(cit_revenue, cit_profit), components=components))
-    if any(item is None for item in (entertainment, be_book, be_tax, cit_revenue)):
-        results.append(_missing_result(CHECK_ORDER[4], ("cit",), _CHECK_TITLES[CHECK_ORDER[4]], context, ("missing_entertainment_or_cit_facts",)))
-    else:
-        assert entertainment and be_book and be_tax and cit_revenue
-        calculation = business_entertainment_adjustment(entertainment.amount, cit_revenue.amount)
-        deductible = SourcedAmount(Decimal(calculation["deductible_amount"]), entertainment.source_refs + cit_revenue.source_refs)
-        components = (
-            _component("declared_book_amount", entertainment, be_book),
-            _component("declared_tax_amount", deductible, be_tax),
-        )
-        results.append(_amount_result(CHECK_ORDER[4], ("cit",), _CHECK_TITLES[CHECK_ORDER[4]], context, _combined_amount(entertainment, deductible), _combined_amount(be_book, be_tax), components=components))
-    final_results, questions = _attach_questions(tuple(results))
+        for check_id in CHECK_ORDER
+    )
+    final_results, questions = _attach_questions(results)
     return TaxCrossCheckRun(
         TAX_CROSS_CHECK_SCHEMA_VERSION,
         "completed",
@@ -915,6 +1029,41 @@ def run_tax_cross_checks(
         (),
         (),
     )
+
+
+def rerun_tax_cross_check(
+    run: TaxCrossCheckRun,
+    check_id: str,
+    rows: Sequence[Mapping[str, object]],
+    classifications: AccountClassificationReview | None,
+    financial_statements: Sequence[FinancialStatement],
+    tax_returns: Sequence[TaxReturn],
+    context: CrossCheckContext,
+    source_manifest_sha256: str,
+) -> TaxCrossCheckRun:
+    """Rerun one affected check and rebuild the bounded global question queue."""
+
+    if (
+        not isinstance(run, TaxCrossCheckRun)
+        or run.status != "completed"
+        or check_id not in CHECK_ORDER
+        or source_manifest_sha256 != run.source_manifest_sha256
+        or _context_issue_refs(financial_statements, tax_returns, context)
+    ):
+        raise _invalid()
+    replacement = _execute_cross_check(
+        check_id,
+        rows,
+        classifications,
+        financial_statements,
+        tax_returns,
+        context,
+    )
+    results = tuple(
+        replacement if item.check_id == check_id else item for item in run.results
+    )
+    final_results, questions = _attach_questions(results)
+    return replace(run, results=final_results, questions=questions)
 
 
 def apply_cross_check_explanation(
@@ -949,11 +1098,9 @@ def apply_cross_check_explanation(
     if original.status is not CrossCheckStatus.DIFFERENCE_FOUND:
         raise ValueError("cross_check_explanation_not_applicable")
     assert original.ledger_amount is not None and original.comparison_amount is not None
-    signed_difference = original.comparison_amount - original.ledger_amount
-    bridge_total = sum((item.amount for item in bridge_items), Decimal("0"))
     resolution = (
         "closed"
-        if bridge_items and bridge_total == signed_difference
+        if _bridge_closes_result(original, bridge_items)
         else "explained_pending_verification"
     )
     recorded = replace(explanation, bridge_items=bridge_items)
@@ -1041,9 +1188,10 @@ def _source_ref_from_payload(value: object) -> CrossCheckSourceRef:
 
 
 def _bridge_from_payload(value: object) -> AmountBridgeItem:
-    if not isinstance(value, Mapping) or set(value) != {
-        "amount", "label_zh", "evidence_refs"
-    }:
+    if not isinstance(value, Mapping) or set(value) not in (
+        {"amount", "label_zh", "evidence_refs"},
+        {"amount", "label_zh", "evidence_refs", "component_id"},
+    ):
         raise _invalid()
     refs = value.get("evidence_refs")
     if not isinstance(refs, list):
@@ -1052,6 +1200,7 @@ def _bridge_from_payload(value: object) -> AmountBridgeItem:
         amount=_payload_decimal(value.get("amount")),
         label_zh=value.get("label_zh"),
         evidence_refs=tuple(refs),
+        component_id=value.get("component_id"),
     )
 
 
@@ -1213,6 +1362,7 @@ __all__ = [
     "classified_ledger_total",
     "compare_amounts",
     "run_tax_cross_checks",
+    "rerun_tax_cross_check",
     "parse_tax_cross_check_payload",
     "statement_total",
     "tax_fact_total",
