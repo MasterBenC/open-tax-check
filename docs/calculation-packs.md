@@ -58,4 +58,4 @@ opentaxcheck tax-health-check --request request.json --output-dir output --pack 
 
 ## 交付边界
 
-机器快照保留稳定英文公式 ID 和税目 selector，供 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code、OpenClaw 等宿主审计复用；客户 Markdown、Word 和 PDF 报告显示中文税目和百分比税率。所有输出仍受免责声明约束，不构成涉税鉴证、专业税务意见或纳税申报结论。
+机器快照保留稳定英文公式 ID 和税目 selector，供 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code、OpenClaw 等宿主审计复用；正式客户报告只提供中文 PDF，并显示中文税目和百分比税率。HTML、Markdown、工作底稿、机器快照和证据包仅作为内部审计产物，不提供 Word。所有输出仍受免责声明约束，不构成涉税鉴证、专业税务意见或纳税申报结论。
