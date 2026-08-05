@@ -13,9 +13,23 @@ from open_tax_check.tax_cross_checks import (
     CrossCheckResult,
     CrossCheckSourceRef,
     CrossCheckStatus,
+    CrossCheckContext,
+    DateRange,
     TaxCrossCheckRun,
+    classified_ledger_total,
     compare_amounts,
+    run_tax_cross_checks,
+    statement_total,
+    tax_fact_total,
     tax_cross_check_payload,
+)
+from open_tax_check.account_classification import parse_account_classification_review
+from open_tax_check.structured_documents import (
+    FinancialStatement,
+    FinancialStatementLine,
+    SourceAnchor,
+    TaxReturn,
+    TaxReturnLine,
 )
 
 
@@ -221,3 +235,365 @@ def test_payload_is_stable_json_safe_and_uses_decimal_strings():
     assert json.dumps(first, ensure_ascii=False, sort_keys=True) == json.dumps(
         second, ensure_ascii=False, sort_keys=True
     )
+
+
+def anchor(source_id: str) -> SourceAnchor:
+    return SourceAnchor(source_id, 1, None, None, None)
+
+
+def statement(
+    *, revenue: str = "1000.00", total_profit: str = "200.00",
+    unit_multiplier: str = "1",
+) -> FinancialStatement:
+    lines = tuple(
+        FinancialStatementLine(
+            code,
+            name,
+            name,
+            amount,
+            None,
+            anchor("statement-source"),
+            "customer",
+            "confirmed",
+        )
+        for code, name, amount in (
+            ("revenue", "营业收入", revenue),
+            ("total_profit", "利润总额", total_profit),
+        )
+    )
+    return FinancialStatement(
+        "financial-statement/v1",
+        "statement-1",
+        "statement-source",
+        "示例公司",
+        "income_statement",
+        "2025-01-01",
+        "2025-12-31",
+        None,
+        "CNY",
+        unit_multiplier,
+        lines,
+        (("revenue", revenue), ("total_profit", total_profit)),
+        (),
+    )
+
+
+def tax_return(
+    tax_id: str,
+    facts: dict[str, str],
+    *,
+    return_id: str | None = None,
+    period_start: str = "2025-01-01",
+    period_end: str = "2025-12-31",
+    filing_status: str = "filed",
+    filed_at: str | None = "2026-01-20T08:00:00+08:00",
+    unit_multiplier: str = "1",
+) -> TaxReturn:
+    lines = tuple(
+        TaxReturnLine(
+            "A100000" if tax_id == "cit" else "VAT001",
+            str(index),
+            fact_key,
+            fact_key,
+            value,
+            "decimal",
+            anchor(f"{tax_id}-source"),
+            "customer",
+            "confirmed",
+        )
+        for index, (fact_key, value) in enumerate(facts.items(), start=1)
+    )
+    return TaxReturn(
+        "tax-return/v1",
+        return_id or f"{tax_id}-return",
+        f"{tax_id}-source",
+        "示例公司",
+        tax_id,
+        "annual_return",
+        period_start,
+        period_end,
+        filing_status,
+        filed_at,
+        "CNY",
+        unit_multiplier,
+        lines,
+        (),
+        (),
+    )
+
+
+def classifications():
+    return parse_account_classification_review(
+        {
+            "schema_version": "account-classification/v1",
+            "source_manifest_sha256": "a" * 64,
+            "mapping_fingerprint": "b" * 64,
+            "reviewer": "Chen Li",
+            "confirmed_at": "2026-08-05T09:30:00+08:00",
+            "classifications": [
+                {"account_code": "6001", "account_name": "主营业务收入", "category": "main_business_revenue"},
+                {"account_code": "6051", "account_name": "其他业务收入", "category": "other_business_revenue"},
+                {"account_code": "222101", "account_name": "销项税额", "category": "vat_output_tax"},
+                {"account_code": "660201", "account_name": "业务招待费", "category": "business_entertainment"},
+            ],
+        }
+    )
+
+
+def ledger_rows() -> list[dict]:
+    def lineage(row: int, column: int) -> dict:
+        label = chr(64 + column)
+        return {
+            "source_id": "ledger-source",
+            "sheet_id": "journal",
+            "row": row,
+            "column": column,
+            "coordinate": f"{label}{row}",
+            "original_type": "str",
+            "value_origin": "source",
+            "mapping_version": "mapping/v1",
+        }
+
+    values = (
+        ("6001", "主营业务收入", "0.00", "1000.00"),
+        ("6051", "其他业务收入", "0.00", "0.00"),
+        ("222101", "销项税额", "0.00", "130.00"),
+        ("660201", "业务招待费", "10.00", "0.00"),
+    )
+    return [
+        {
+            "account_code": code,
+            "account_name": name,
+            "debit": debit,
+            "credit": credit,
+            "field_lineage": {
+                field: lineage(row_number, column)
+                for column, field in enumerate(
+                    ("account_code", "account_name", "debit", "credit"), start=1
+                )
+            },
+        }
+        for row_number, (code, name, debit, credit) in enumerate(values, start=2)
+    ]
+
+
+def context() -> CrossCheckContext:
+    return CrossCheckContext(
+        period_start="2025-01-01",
+        period_end="2025-12-31",
+        entity_name="示例公司",
+        currency="CNY",
+        blocked_issue_refs=(),
+    )
+
+
+def complete_returns() -> tuple[TaxReturn, ...]:
+    return (
+        tax_return("vat", {"vat.taxable_sales": "1000.00", "vat.output_tax": "130.00"}),
+        tax_return(
+            "cit",
+            {
+                "cit.revenue": "1000.00",
+                "cit.total_profit": "200.00",
+                "cit.business_entertainment.book_amount": "10.00",
+                "cit.business_entertainment.tax_amount": "5.00",
+            },
+        ),
+    )
+
+
+def test_source_extractors_scale_confirmed_values_and_preserve_refs():
+    statement_amount = statement_total((statement(unit_multiplier="10000"),), "income_statement", "revenue")
+    tax_amount = tax_fact_total(
+        (tax_return("vat", {"vat.taxable_sales": "100.00"}, unit_multiplier="10000"),),
+        "vat",
+        "vat.taxable_sales",
+        DateRange("2025-01-01", "2025-12-31"),
+    )
+    ledger_amount = classified_ledger_total(ledger_rows(), classifications(), "business_entertainment")
+
+    assert statement_amount.amount == Decimal("10000000.00")
+    assert tax_amount.amount == Decimal("1000000.00")
+    assert ledger_amount.amount == Decimal("10.00")
+    assert all(item.source_id for item in statement_amount.source_refs + tax_amount.source_refs + ledger_amount.source_refs)
+
+
+def test_run_tax_cross_checks_returns_five_matched_results_in_fixed_order():
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), complete_returns(), context(), "a" * 64
+    )
+
+    assert run.status == "completed"
+    assert tuple(item.check_id for item in run.results) == CHECK_ORDER
+    assert all(item.status is CrossCheckStatus.MATCHED for item in run.results)
+    assert len(run.results[3].components) == 2
+    assert len(run.results[4].components) == 2
+    assert run.questions == ()
+
+
+def test_missing_sources_are_not_performed_and_questions_are_bounded_to_three():
+    run = run_tax_cross_checks(
+        ledger_rows(), None, (), (), context(), "a" * 64
+    )
+
+    assert all(item.status is CrossCheckStatus.NOT_PERFORMED for item in run.results)
+    assert len(run.questions) == 3
+    assert len({item.question_id for item in run.questions}) == 3
+    assert all("漏税" not in item.question_zh and "应补税" not in item.question_zh for item in run.questions)
+
+
+def test_incomplete_or_overlapping_vat_periods_are_not_summed():
+    first = tax_return(
+        "vat", {"vat.taxable_sales": "500.00"}, return_id="vat-1",
+        period_start="2025-01-01", period_end="2025-06-30",
+    )
+    gap = tax_return(
+        "vat", {"vat.taxable_sales": "500.00"}, return_id="vat-2",
+        period_start="2025-07-02", period_end="2025-12-31",
+    )
+    overlap = tax_return(
+        "vat", {"vat.taxable_sales": "500.00"}, return_id="vat-3",
+        period_start="2025-06-30", period_end="2025-12-31",
+    )
+    period = DateRange("2025-01-01", "2025-12-31")
+
+    assert tax_fact_total((first, gap), "vat", "vat.taxable_sales", period) is None
+    assert tax_fact_total((first, overlap), "vat", "vat.taxable_sales", period) is None
+
+
+def test_unambiguous_latest_amended_return_replaces_original():
+    original = tax_return("vat", {"vat.taxable_sales": "900.00"}, return_id="original")
+    amended = tax_return(
+        "vat", {"vat.taxable_sales": "1000.00"}, return_id="amended",
+        filing_status="amended", filed_at="2026-02-01T08:00:00+08:00",
+    )
+
+    total = tax_fact_total(
+        (original, amended), "vat", "vat.taxable_sales",
+        DateRange("2025-01-01", "2025-12-31"),
+    )
+    assert total.amount == Decimal("1000.00")
+
+
+def test_cit_components_do_not_cancel_each_other():
+    returns = list(complete_returns())
+    returns[1] = tax_return(
+        "cit",
+        {
+            "cit.revenue": "1100.00",
+            "cit.total_profit": "100.00",
+            "cit.business_entertainment.book_amount": "10.00",
+            "cit.business_entertainment.tax_amount": "5.00",
+        },
+    )
+
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+    cit = run.results[3]
+    assert cit.ledger_amount == cit.comparison_amount == Decimal("1200.00")
+    assert cit.status is CrossCheckStatus.DIFFERENCE_FOUND
+    assert cit.difference_amount == Decimal("200.00")
+
+
+@pytest.mark.parametrize("check_index", range(5))
+def test_each_cross_check_can_surface_a_real_difference(check_index):
+    rows = ledger_rows()
+    returns = list(complete_returns())
+    if check_index == 0:
+        rows[0]["credit"] = "1100.00"
+    elif check_index == 1:
+        returns[0] = tax_return(
+            "vat", {"vat.taxable_sales": "900.00", "vat.output_tax": "130.00"}
+        )
+    elif check_index == 2:
+        rows[2]["credit"] = "150.00"
+    elif check_index == 3:
+        returns[1] = tax_return(
+            "cit",
+            {
+                "cit.revenue": "900.00",
+                "cit.total_profit": "200.00",
+                "cit.business_entertainment.book_amount": "10.00",
+                "cit.business_entertainment.tax_amount": "5.00",
+            },
+        )
+    else:
+        returns[1] = tax_return(
+            "cit",
+            {
+                "cit.revenue": "1000.00",
+                "cit.total_profit": "200.00",
+                "cit.business_entertainment.book_amount": "20.00",
+                "cit.business_entertainment.tax_amount": "5.00",
+            },
+        )
+
+    run = run_tax_cross_checks(
+        rows, classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+    assert run.results[check_index].status is CrossCheckStatus.DIFFERENCE_FOUND
+    assert run.results[check_index].reason_codes == (
+        "unbilled_revenue",
+        "deemed_sale",
+        "non_taxable_or_exempt_revenue",
+        "tax_inclusive_conversion",
+        "timing_difference",
+        "amended_return",
+        "book_adjustment",
+        "other",
+    )
+
+
+def test_dual_threshold_is_used_by_an_executed_check():
+    returns = list(complete_returns())
+    returns[0] = tax_return(
+        "vat", {"vat.taxable_sales": "1000.01", "vat.output_tax": "130.00"}
+    )
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), tuple(returns), context(), "a" * 64
+    )
+    assert run.results[1].status is CrossCheckStatus.WITHIN_TOLERANCE
+
+
+@pytest.mark.parametrize("field", ["entity_name", "currency", "unit_multiplier"])
+def test_document_context_mismatch_blocks_the_whole_run(field):
+    values = {
+        "period_start": "2025-01-01",
+        "period_end": "2025-12-31",
+        "entity_name": "示例公司",
+        "currency": "CNY",
+        "unit_multiplier": "1",
+        "blocked_issue_refs": (),
+    }
+    values[field] = {
+        "entity_name": "另一公司",
+        "currency": "USD",
+        "unit_multiplier": "10000",
+    }[field]
+    run = run_tax_cross_checks(
+        ledger_rows(), classifications(), (statement(),), complete_returns(),
+        CrossCheckContext(**values), "a" * 64,
+    )
+    assert run.status == "blocked_data_quality"
+    assert run.results == () and run.questions == ()
+    assert run.blocking_issue_refs
+
+
+def test_draft_and_ambiguous_amended_returns_are_not_used():
+    draft = tax_return(
+        "vat", {"vat.taxable_sales": "1000.00"}, filing_status="draft"
+    )
+    amended_one = tax_return(
+        "vat", {"vat.taxable_sales": "1000.00"}, return_id="amended-1",
+        filing_status="amended", filed_at="2026-02-01T08:00:00+08:00",
+    )
+    amended_two = tax_return(
+        "vat", {"vat.taxable_sales": "1001.00"}, return_id="amended-2",
+        filing_status="amended", filed_at="2026-02-01T08:00:00+08:00",
+    )
+    period = DateRange("2025-01-01", "2025-12-31")
+    assert tax_fact_total((draft,), "vat", "vat.taxable_sales", period) is None
+    assert tax_fact_total(
+        (amended_one, amended_two), "vat", "vat.taxable_sales", period
+    ) is None

@@ -40,6 +40,16 @@ _CONFIRMATION_STATES = {"proposed", "confirmed", "rejected"}
 _FILING_STATUSES = {"draft", "filed", "amended", "unknown"}
 _VALUE_TYPES = {"decimal", "text", "choice", "boolean", "empty"}
 _FACT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$")
+CONTROLLED_CROSS_CHECK_FACT_KEYS = frozenset(
+    {
+        "vat.taxable_sales",
+        "vat.output_tax",
+        "cit.revenue",
+        "cit.total_profit",
+        "cit.business_entertainment.book_amount",
+        "cit.business_entertainment.tax_amount",
+    }
+)
 _TAX_IDS = frozenset(item.tax_id for item in TAX_DEFINITIONS)
 
 _MAX_LINES = 10_000
