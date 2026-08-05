@@ -45,7 +45,22 @@ _CLASSIFICATION_FIELDS = frozenset(
 )
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _NON_HUMAN_REVIEWER_RE = re.compile(
-    r"(?:^|[\s:_-])(?:ai|agent|host_ai|model)(?:$|[\s:_-])"
+    r"(?:openai|chatgpt|deepseek|qwen|gemini|doubao|kimi|claude|hermes|"
+    r"workbuddy|coze|qodor|openclaw|glm|gpt|"
+    r"(?:^|[\s:_-])(?:ai|agent|host_ai|model)(?:$|[\s:_-]))"
+)
+_COORDINATE_RE = re.compile(r"^([A-Z]{1,3})([1-9][0-9]*)$")
+_LINEAGE_FIELDS = frozenset(
+    {
+        "source_id",
+        "sheet_id",
+        "row",
+        "column",
+        "coordinate",
+        "original_type",
+        "value_origin",
+        "mapping_version",
+    }
 )
 
 
@@ -154,14 +169,66 @@ def parse_account_classification_review(payload: dict) -> AccountClassificationR
     )
 
 
+def _column_number(label: str) -> int:
+    number = 0
+    for character in label:
+        number = number * 26 + ord(character) - ord("A") + 1
+    return number
+
+
+def _valid_lineage_location(value: object) -> bool:
+    if not isinstance(value, Mapping) or not _LINEAGE_FIELDS.issubset(value):
+        return False
+    source_id = value.get("source_id")
+    sheet_id = value.get("sheet_id")
+    row = value.get("row")
+    column = value.get("column")
+    coordinate = value.get("coordinate")
+    coordinate_match = (
+        _COORDINATE_RE.fullmatch(coordinate)
+        if isinstance(coordinate, str)
+        else None
+    )
+    return (
+        isinstance(source_id, str)
+        and bool(source_id)
+        and isinstance(sheet_id, str)
+        and bool(sheet_id)
+        and isinstance(row, int)
+        and not isinstance(row, bool)
+        and row > 0
+        and isinstance(column, int)
+        and not isinstance(column, bool)
+        and column > 0
+        and coordinate_match is not None
+        and int(coordinate_match.group(2)) == row
+        and _column_number(coordinate_match.group(1)) == column
+        and all(
+            isinstance(value.get(field), str) and bool(value[field])
+            for field in ("original_type", "value_origin", "mapping_version")
+        )
+    )
+
+
 def _has_required_lineage(row: Mapping[str, object]) -> bool:
     lineage = row.get("field_lineage")
-    return isinstance(lineage, Mapping) and all(
-        isinstance(lineage.get(field), Mapping)
-        and isinstance(lineage[field].get("source_id"), str)
-        and bool(lineage[field]["source_id"])
-        for field in ("account_code", "account_name", "debit", "credit")
-    )
+    fields = ("account_code", "account_name", "debit", "credit")
+    if not isinstance(lineage, Mapping) or not all(
+        _valid_lineage_location(lineage.get(field)) for field in fields
+    ):
+        return False
+    locations = tuple(lineage[field] for field in fields)
+    return len(
+        {
+            (
+                location["source_id"],
+                location["sheet_id"],
+                location["row"],
+                location["mapping_version"],
+            )
+            for location in locations
+        }
+    ) == 1
 
 
 def aggregate_classified_amount(

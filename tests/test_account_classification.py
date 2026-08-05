@@ -59,6 +59,18 @@ def review():
 
 
 def rows() -> list[dict]:
+    def lineage(column: int) -> dict:
+        return {
+            "source_id": "source-1",
+            "sheet_id": "sheet-1",
+            "row": 2,
+            "column": column,
+            "coordinate": f"{chr(64 + column)}2",
+            "original_type": "str" if column < 3 else "Decimal",
+            "value_origin": "source",
+            "mapping_version": "mapping/v1",
+        }
+
     return [
         {
             "account_code": "222101",
@@ -66,10 +78,10 @@ def rows() -> list[dict]:
             "debit": "20.00",
             "credit": "150.00",
             "field_lineage": {
-                "account_code": {"source_id": "source-1"},
-                "account_name": {"source_id": "source-1"},
-                "debit": {"source_id": "source-1"},
-                "credit": {"source_id": "source-1"},
+                "account_code": lineage(1),
+                "account_name": lineage(2),
+                "debit": lineage(3),
+                "credit": lineage(4),
             },
         },
         {
@@ -78,10 +90,10 @@ def rows() -> list[dict]:
             "debit": "0.00",
             "credit": "0.00",
             "field_lineage": {
-                "account_code": {"source_id": "source-1"},
-                "account_name": {"source_id": "source-1"},
-                "debit": {"source_id": "source-1"},
-                "credit": {"source_id": "source-1"},
+                "account_code": {**lineage(1), "row": 3, "coordinate": "A3"},
+                "account_name": {**lineage(2), "row": 3, "coordinate": "B3"},
+                "debit": {**lineage(3), "row": 3, "coordinate": "C3"},
+                "credit": {**lineage(4), "row": 3, "coordinate": "D3"},
             },
         },
         {
@@ -90,10 +102,10 @@ def rows() -> list[dict]:
             "debit": "0.00",
             "credit": "999.00",
             "field_lineage": {
-                "account_code": {"source_id": "source-1"},
-                "account_name": {"source_id": "source-1"},
-                "debit": {"source_id": "source-1"},
-                "credit": {"source_id": "source-1"},
+                "account_code": {**lineage(1), "row": 4, "coordinate": "A4"},
+                "account_name": {**lineage(2), "row": 4, "coordinate": "B4"},
+                "debit": {**lineage(3), "row": 4, "coordinate": "C4"},
+                "credit": {**lineage(4), "row": 4, "coordinate": "D4"},
             },
         },
     ]
@@ -147,6 +159,32 @@ def test_aggregate_uses_only_confirmed_exact_account_identity():
 
 def test_aggregate_returns_none_when_no_category_is_confirmed():
     assert aggregate_classified_amount(rows(), review(), "business_entertainment") is None
+
+
+@pytest.mark.parametrize("mutation", ["source", "sheet", "row", "minimal"])
+def test_aggregate_rejects_incoherent_or_incomplete_lineage(mutation):
+    corrupted = rows()
+    lineage = corrupted[0]["field_lineage"]
+    if mutation == "minimal":
+        lineage["debit"] = {"source_id": "source-1"}
+    else:
+        field = {"source": "source_id", "sheet": "sheet_id", "row": "row"}[mutation]
+        lineage["debit"][field] = "other" if mutation != "row" else 99
+
+    with pytest.raises(ValueError, match="invalid_account_classification_lineage"):
+        aggregate_classified_amount(corrupted, review(), "vat_output_tax")
+
+
+@pytest.mark.parametrize(
+    "reviewer",
+    ["OpenAI", "ChatGPT", "GPT-5.6", "Claude 4.8", "DeepSeek V4", "Qwen", "Hermes Agent"],
+)
+def test_known_ai_or_agent_identity_cannot_confirm_classification(reviewer):
+    payload = valid_review_payload()
+    payload["reviewer"] = reviewer
+
+    with pytest.raises(ValueError, match="invalid_account_classification"):
+        parse_account_classification_review(payload)
 
 
 def test_loading_requires_the_supplied_current_manifest_binding(tmp_path):
