@@ -1,7 +1,9 @@
 # 客户报告 v3 验证记录
 
-验证日期：2026-08-05  
-验证分支：`feat/html-pdf-customer-report`  
+验证日期：2026-08-05
+
+验证分支：`feat/html-pdf-customer-report`
+
 报告结构版本：`tax-health-report/v3`
 
 ## 验证结论
