@@ -23,6 +23,86 @@ EXPECTED_JOURNAL_ROWS = [
 
 
 class FictionalExampleTests(unittest.TestCase):
+    def test_five_cross_check_acceptance_scenarios_have_bounded_machine_outcomes(self):
+        from dataclasses import replace
+        from decimal import Decimal
+        from open_tax_check.tax_cross_checks import (
+            CrossCheckContext,
+            CrossCheckStatus,
+            parse_tax_cross_check_payload,
+            run_tax_cross_checks,
+            tax_cross_check_payload,
+        )
+        from test_tax_cross_checks import (
+            classifications,
+            completed_run,
+            complete_returns,
+            context,
+            difference_run,
+            ledger_rows,
+            statement,
+            tax_return,
+        )
+
+        matched = completed_run()
+        tolerance_base = difference_run()
+        tolerance_result = replace(
+            tolerance_base.results[1],
+            status=CrossCheckStatus.WITHIN_TOLERANCE,
+            comparison_amount=Decimal("1000.05"),
+            difference_amount=Decimal("0.05"),
+            difference_ratio=Decimal("0.00004999750012499375031248437578"),
+            question=None,
+            reason_codes=(),
+        )
+        tolerance_results = list(tolerance_base.results)
+        tolerance_results[1] = tolerance_result
+        tolerance = replace(tolerance_base, results=tuple(tolerance_results), questions=())
+        vat_difference = difference_run()
+
+        cit_returns = list(complete_returns())
+        cit_returns[1] = tax_return(
+            "cit",
+            {
+                "cit.revenue": "900.00",
+                "cit.total_profit": "150.00",
+                "cit.business_entertainment.book_amount": "20.00",
+                "cit.business_entertainment.tax_amount": "1.00",
+            },
+        )
+        cit_difference = run_tax_cross_checks(
+            ledger_rows(), classifications(), (statement(),), tuple(cit_returns), context(), "b" * 64
+        )
+        many_missing = run_tax_cross_checks(
+            (),
+            None,
+            (),
+            (),
+            CrossCheckContext("2025-01-01", "2025-12-31", "示例公司", "CNY"),
+            "c" * 64,
+        )
+
+        scenarios = {
+            "all_matched": matched,
+            "inside_both_tolerances": tolerance,
+            "vat_sales_output_difference": vat_difference,
+            "cit_revenue_profit_entertainment_difference": cit_difference,
+            "multiple_missing_sources": many_missing,
+        }
+        for name, run in scenarios.items():
+            with self.subTest(name=name):
+                self.assertEqual(parse_tax_cross_check_payload(tax_cross_check_payload(run)), run)
+                self.assertLessEqual(len(run.questions), 3)
+                self.assertEqual(len(run.results), 5)
+
+        self.assertTrue(all(item.status is CrossCheckStatus.MATCHED for item in matched.results))
+        self.assertEqual(tolerance.results[1].status, CrossCheckStatus.WITHIN_TOLERANCE)
+        self.assertEqual(vat_difference.results[1].status, CrossCheckStatus.DIFFERENCE_FOUND)
+        self.assertEqual(cit_difference.results[3].status, CrossCheckStatus.DIFFERENCE_FOUND)
+        self.assertEqual(cit_difference.results[4].status, CrossCheckStatus.DIFFERENCE_FOUND)
+        self.assertEqual(len(many_missing.questions), 3)
+        self.assertTrue(all(item.status is CrossCheckStatus.NOT_PERFORMED for item in many_missing.results))
+
     def test_mapping_payloads_use_preset_reviewer_mappings_not_proposals(self):
         """Changing proposal heuristics must not change the fictional review decision."""
         from scripts.run_fictional_example import _mapping_payloads
@@ -112,6 +192,36 @@ class FictionalExampleTests(unittest.TestCase):
         excel_result = run_fictional_case(format="excel")
 
         self.assertEqual(csv_result.rule_amounts, excel_result.rule_amounts)
+        self.assertIsNotNone(excel_result.cross_check_payload)
+        self.assertIsNotNone(csv_result.cross_check_payload)
+        self.assertEqual(
+            excel_result.cross_check_payload["schema_version"],
+            "tax-cross-checks/v1",
+        )
+        semantic = lambda payload: {
+            "status": payload["status"],
+            "results": [
+                {
+                    key: item[key]
+                    for key in (
+                        "check_id", "status", "ledger_amount", "comparison_amount",
+                        "difference_amount", "difference_ratio", "reason_codes",
+                    )
+                }
+                for item in payload["results"]
+            ],
+            "questions": [item["check_id"] for item in payload["questions"]],
+            "audit_events": payload["audit_events"],
+        }
+        self.assertEqual(
+            semantic(csv_result.cross_check_payload),
+            semantic(excel_result.cross_check_payload),
+        )
+        self.assertNotEqual(
+            csv_result.cross_check_payload["source_manifest_sha256"],
+            excel_result.cross_check_payload["source_manifest_sha256"],
+        )
+        self.assertLessEqual(len(excel_result.cross_check_payload["questions"]), 3)
         self.assertEqual(csv_result.rule_amounts, {"CIT-BE-001": "15000.00"})
         self.assertEqual(excel_result.status, "needs_professional_review")
         self.assertTrue(excel_result.trial_balance_passed)

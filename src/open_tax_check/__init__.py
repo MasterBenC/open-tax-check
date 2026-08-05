@@ -26,12 +26,17 @@ from .tax_cross_checks import (
     DateRange,
     SourcedAmount,
     TaxCrossCheckRun,
+    AmountBridgeItem,
+    CrossCheckExplanation,
+    EXPLANATION_CATEGORIES,
+    apply_cross_check_explanation,
     compare_amounts,
     classified_ledger_total,
     run_tax_cross_checks,
     statement_total,
     tax_fact_total,
     tax_cross_check_payload,
+    parse_tax_cross_check_payload,
 )
 
 from .customer_guide import (
@@ -59,6 +64,7 @@ from .document_extraction import (
 from .agent_orchestration import (
     AgentQuestionTask,
     build_agent_question_tasks,
+    build_cross_check_question_tasks,
     confirmation_from_task,
     evidence_bundle_delivery_payload,
     task_payload,
@@ -89,6 +95,7 @@ from .case_orchestration import (
     case_status_payload,
     load_case_snapshot,
     run_case_self_check,
+    confirm_cross_check_explanation,
 )
 from .delivery import (
     DELIVERY_POINTER_NAME,

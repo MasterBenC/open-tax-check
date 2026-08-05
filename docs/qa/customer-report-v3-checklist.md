@@ -112,7 +112,17 @@ python -m pytest tests/test_pdf_report.py::test_real_chromium_pdf_is_valid_and_c
 - 高、中、提示和资料状态同时使用文字、边框与灰度层次，黑白打印仍可辨识。
 - 普通报告末页存在较多留白，但包含附录和报告修订信息，不属于空白页。
 
-## 证据边界
+## 2026-08-05 高频账税交叉核对增量验收
+
+当前功能分支 `feat/high-frequency-tax-cross-checks` 已在 Windows / Python 3.12 使用本机 Playwright Chromium 1228 完成以下增量验证：
+
+- 管道、结构化勾稽、交付与报告组合回归：`150 passed, 3 skipped, 20 subtests passed`。三个环境相关跳过项单独记录，不作为通过。
+- 客户报告、工作底稿、交付、HTML 与真实 PDF：`61 passed, 2 skipped`；HTML/PDF 表格分段回归：`12 passed`。
+- 生成 `matched`、`tolerance`、`difference`、`many-missing` 四类真实 PDF；逐页转为 PNG 后检查共 27 页。未发现字体缺失、文字重叠、页边裁切、意外空白页或灰度不可辨识问题。
+- 初次视觉检查发现长表续页未稳定重复表头；已改为固定分段表格，每段自带表头并避免段内分页。复渲染后的差异报告 8 页、资料缺口报告 7 页均通过逐页检查。
+- 当前增量尚未在新的远端提交上运行 Windows、macOS、Linux × Python 3.11–3.13 矩阵；下方历史 CI 记录不能替代本分支的远端证据，推送前保持为待验证。
+
+## 历史报告 v3 证据边界
 
 - Playwright 1.62 对应的默认 Chromium 下载曾在本机因 CDN 连接重置而未完成；本地真实渲染因此使用已安装的 Playwright Chromium 1228 路径。GitHub Actions 的九组矩阵均已成功执行默认 Chromium 安装。
 - macOS、Linux 和 Python 3.11 未在本机运行；其通过结论仅来自上述 GitHub Actions 远端证据。

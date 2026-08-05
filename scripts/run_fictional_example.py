@@ -100,6 +100,7 @@ class FictionalCaseResult:
     delivery_status: str | None = None
     delivery_revision: int | None = None
     journey_stages: tuple[str, ...] = ()
+    cross_check_payload: dict[str, object] | None = None
 
 
 def _configure_utf8_output() -> None:
@@ -169,6 +170,12 @@ def _result(case_dir: Path, status: str) -> FictionalCaseResult:
     reconciliation = json.loads(
         (case_dir / "work" / "reconciliation.json").read_text(encoding="utf-8")
     )
+    cross_check_path = case_dir / "work" / "tax-cross-checks.json"
+    cross_check_payload = (
+        json.loads(cross_check_path.read_text(encoding="utf-8"))
+        if cross_check_path.is_file()
+        else None
+    )
     return FictionalCaseResult(
         status=status,
         rule_amounts={
@@ -184,6 +191,7 @@ def _result(case_dir: Path, status: str) -> FictionalCaseResult:
             reconciliation["journal_to_trial_balance"]
             and reconciliation["journal_to_trial_balance"]["passed"]
         ),
+        cross_check_payload=cross_check_payload,
     )
 
 

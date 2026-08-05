@@ -78,6 +78,26 @@ opentaxcheck case-tasks --case .\cases\demo
 opentaxcheck case-confirm --case .\cases\demo --input .\confirmations.json
 ```
 
+### 高频账税交叉核对
+
+完成选表、字段映射和账套规范化后，先由客户或明确授权的人员确认受控科目分类：
+
+分类合同的 `reviewer` 必须使用 `human:<姓名或授权标识>`，没有显式人工确认声明时失败关闭；AI 智能体不得自行填写该声明。
+
+```powershell
+opentaxcheck confirm-account-classification --case .\cases\demo --input .\account-classification.json
+```
+
+系统固定执行五项高频核对：账套收入与利润表营业收入、利润表营业收入与增值税申报销售额、账套销项税额与增值税申报销项税额、利润表收入/利润总额与企业所得税申报、账套业务招待费与企业所得税申报。金额采用精确十进制；只有绝对差异不超过 `10.00` 元且相对差异不超过 `0.0001` 时才标记为容差内。金额差异属于税务风险提示，不属于数据质量阻断，也不等于漏税或应补税结论。
+
+系统一次最多向 AI 智能体提供三项待补问题。智能体只能展示问题、协助识别资料和整理客户原话；不得选择科目分类、解释类别、修改阈值、伪造证据或关闭差异。客户提供可核验资料后，使用：
+
+```powershell
+opentaxcheck confirm-cross-check --case .\cases\demo --input .\cross-check-confirmation.json
+```
+
+解释必须绑定当前问题、检查编号、来源清单 SHA-256、确认人、带时区确认时间和当前案件中可核验的证据引用。纯文字解释只能进入“已说明、待核验”；只有带证据的有符号金额桥接精确等于原始差异时才能关闭该项。原始金额、原始状态和历史审计事件始终保留。正式客户交付仍只提供中文《税务健康检查报告》PDF。
+
 私有恢复快照保存在 `work/tax-health-snapshot.private.json`；面向宿主的脱敏快照、中文补件清单和报告分别保存在 `work/tax-health-snapshot.json`、`work/customer-tasks.json` 和 `output/税务健康检查报告.md`。确认回写只接受问题标识、事实键、值、确认人、带时区时间戳和证据引用，不接受宿主提供的案件状态。前置账务或报表勾稽已处于 `blocked_data_quality` 时，命令拒绝生成正常税务报告。
 
 补件完成后，可用 `opentaxcheck case-delivery --case .\\cases\\demo` 发布一个不可变的 `tax-delivery/v1` 修订。交付目录为 `work/deliveries/revision-0001-report-v3/`（实际编号跟随案件快照），正式客户报告固定为《税务健康检查报告》PDF；HTML、工作底稿、机器快照和证据包仅作内部审计产物。PDF 失败时不会发布修订或更新指针；历史 v2 目录只读保留。

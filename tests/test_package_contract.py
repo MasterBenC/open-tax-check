@@ -168,6 +168,20 @@ class PackageContractTests(unittest.TestCase):
             {"start": "2025-01-01", "end": "2025-12-31"},
         )
 
+    def test_package_facade_exposes_cross_check_follow_up_contracts(self):
+        import open_tax_check
+
+        for name in (
+            "AmountBridgeItem",
+            "CrossCheckExplanation",
+            "EXPLANATION_CATEGORIES",
+            "apply_cross_check_explanation",
+            "parse_tax_cross_check_payload",
+            "build_cross_check_question_tasks",
+            "confirm_cross_check_explanation",
+        ):
+            self.assertTrue(hasattr(open_tax_check, name), name)
+
 
 if __name__ == "__main__":
     unittest.main()
