@@ -56,6 +56,23 @@ def _outline_titles(items: object) -> tuple[str, ...]:
     return tuple(titles)
 
 
+def _outline_page_numbers(path: Path) -> dict[str, int]:
+    from pypdf import PdfReader
+
+    reader = PdfReader(path, strict=True)
+    numbers: dict[str, int] = {}
+    pending = list(reader.outline)
+    while pending:
+        item = pending.pop(0)
+        if isinstance(item, list):
+            pending[0:0] = item
+            continue
+        title = getattr(item, "title", None)
+        if isinstance(title, str):
+            numbers[title] = reader.get_destination_page_number(item) + 1
+    return numbers
+
+
 def validate_report_pdf(path: Path, expected_report_id: str) -> None:
     """Reject a PDF that lacks the bounded customer-report structure."""
 
@@ -178,18 +195,37 @@ def write_report_pdf(view: ReportViewV3, path: Path) -> Path:
                 except PlaywrightTimeoutError as error:
                     raise PdfExportUnavailable("pdf_font_unavailable") from error
                 page.emulate_media(media="print")
-                page.pdf(
-                    path=str(temporary_path),
-                    format="A4",
-                    print_background=True,
-                    prefer_css_page_size=True,
-                    display_header_footer=True,
-                    header_template=_header_template(view),
-                    footer_template=_footer_template(view),
-                    margin={"top": "18mm", "right": "0", "bottom": "17mm", "left": "0"},
-                    tagged=True,
-                    outline=True,
+                pdf_options = {
+                    "path": str(temporary_path),
+                    "format": "A4",
+                    "print_background": True,
+                    "prefer_css_page_size": True,
+                    "display_header_footer": True,
+                    "header_template": _header_template(view),
+                    "footer_template": _footer_template(view),
+                    "margin": {"top": "18mm", "right": "0", "bottom": "17mm", "left": "0"},
+                    "tagged": True,
+                    "outline": True,
+                }
+                page.pdf(**pdf_options)
+                page_numbers = _outline_page_numbers(temporary_path)
+                page.evaluate(
+                    """pageNumbers => {
+                        for (const item of document.querySelectorAll(
+                            '.toc-page[data-title]'
+                        )) {
+                            const pageNumber = pageNumbers[item.dataset.title];
+                            if (!Number.isInteger(pageNumber)) {
+                                throw new Error('missing_toc_destination');
+                            }
+                            item.textContent = String(pageNumber);
+                        }
+                    }""",
+                    page_numbers,
                 )
+                page.pdf(**pdf_options)
+                if _outline_page_numbers(temporary_path) != page_numbers:
+                    raise PdfExportUnavailable("pdf_validation_failed")
                 browser.close()
                 browser = None
         except PdfExportUnavailable:

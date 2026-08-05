@@ -48,9 +48,12 @@ h3 { margin-bottom: 2mm; font-size: 12.5pt; }
 .report-status { color: #1f4e5f; font-weight: 700; }
 .page-break { break-before: page; }
 
-.toc ol { padding-left: 6mm; }
+.toc ol { padding-left: 0; list-style: none; }
 .toc li { margin: 2mm 0; }
-.toc a { color: #202428; text-decoration: none; }
+.toc a { color: #202428; text-decoration: none; display: flex; justify-content: space-between; }
+.toc-page { min-width: 14mm; text-align: right; }
+.toc-page::before { content: "第 "; }
+.toc-page::after { content: " 页"; }
 
 .summary-grid, .overview-grid {
   display: grid;

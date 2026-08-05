@@ -52,7 +52,8 @@ def _toc() -> str:
         ("appendix", "附录"),
     )
     items = "".join(
-        f'<li><a href="#{_e(section_id)}">{index}. {_e(label)}</a></li>'
+        f'<li><a href="#{_e(section_id)}"><span>{index}. {_e(label)}</span>'
+        f'<span class="toc-page" data-title="{_e(label)}"></span></a></li>'
         for index, (section_id, label) in enumerate(entries, start=1)
     )
     return f'<nav class="toc page-break" aria-label="目录"><h2>目录</h2><ol>{items}</ol></nav>'

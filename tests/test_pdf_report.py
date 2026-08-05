@@ -1,5 +1,6 @@
 from datetime import date
 from pathlib import Path
+import re
 
 import pytest
 from pypdf import PdfReader
@@ -71,6 +72,16 @@ def test_real_chromium_pdf_is_valid_and_contains_customer_identity(tmp_path: Pat
     assert "THR-20260101-20261231-R0003" in text
     assert "虚构科技有限公司" in text
     assert reader.outline
+    toc_text = reader.pages[1].extract_text() or ""
+    assert "1. 1." not in toc_text
+    printed_pages = [int(value) for value in re.findall("第\\s*(\\d+)", toc_text)]
+    target_pages = []
+    for reference in reader.pages[1].get("/Annots", ()):
+        annotation = reference.get_object()
+        destination = reader.named_destinations[str(annotation["/Dest"])]
+        target_pages.append(reader.get_destination_page_number(destination) + 1)
+    assert len(printed_pages) == len(target_pages) == 8
+    assert printed_pages == target_pages
 
 
 def test_renderer_blocks_external_resource_before_publication(tmp_path: Path, monkeypatch):
