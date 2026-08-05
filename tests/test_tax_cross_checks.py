@@ -304,6 +304,41 @@ def test_rerun_preserves_closed_explanation_without_reopening_question(monkeypat
     assert not any(item.check_id == CHECK_ORDER[1] for item in rerun.questions)
 
 
+def test_rerun_clears_explanation_when_check_becomes_matched(monkeypatch):
+    import open_tax_check.tax_cross_checks as cross_checks
+
+    pending = apply_cross_check_explanation(
+        difference_run(), explanation(), bridge=(), verified_evidence_refs=("source-1",)
+    )
+    fresh = replace(
+        pending.results[1],
+        status=CrossCheckStatus.MATCHED,
+        ledger_amount=Decimal("100.00"),
+        comparison_amount=Decimal("100.00"),
+        difference_amount=Decimal("0.00"),
+        difference_ratio=Decimal("0"),
+        question=None,
+        resolution_status="unresolved",
+        explanations=(),
+    )
+    monkeypatch.setattr(cross_checks, "_execute_cross_check", lambda *args: fresh)
+
+    rerun = rerun_tax_cross_check(
+        pending,
+        CHECK_ORDER[1],
+        (),
+        None,
+        (),
+        (),
+        CrossCheckContext("2025-01-01", "2025-12-31", "虚构科技有限公司", "CNY"),
+        pending.source_manifest_sha256,
+    )
+    target = rerun.results[1]
+    assert target.status is CrossCheckStatus.MATCHED
+    assert target.explanations == ()
+    assert target.audit_refs == pending.results[1].audit_refs
+
+
 def test_complete_verified_bridge_can_close_difference():
     bridge = AmountBridgeItem(
         amount=Decimal("100.00"),

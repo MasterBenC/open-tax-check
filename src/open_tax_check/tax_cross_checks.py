@@ -1106,7 +1106,6 @@ def rerun_tax_cross_check(
             replacement = replace(
                 replacement,
                 audit_refs=previous.audit_refs,
-                explanations=previous.explanations,
             )
     results = tuple(
         replacement if item.check_id == check_id else item for item in run.results
