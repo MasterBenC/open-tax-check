@@ -436,7 +436,7 @@ def classifications():
             "schema_version": "account-classification/v1",
             "source_manifest_sha256": "a" * 64,
             "mapping_fingerprint": "b" * 64,
-            "reviewer": "Chen Li",
+            "reviewer": "human:Chen Li",
             "confirmed_at": "2026-08-05T09:30:00+08:00",
             "classifications": [
                 {"account_code": "6001", "account_name": "主营业务收入", "category": "main_business_revenue"},

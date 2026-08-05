@@ -114,9 +114,13 @@ def _valid_confirmation_timestamp(value: object) -> bool:
 
 
 def _valid_human_reviewer(value: object) -> bool:
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
         return False
-    return _NON_HUMAN_REVIEWER_RE.search(value.strip().casefold()) is None
+    reviewer = value.strip()
+    if not reviewer.casefold().startswith("human:"):
+        return False
+    identity = reviewer.split(":", 1)[1].strip()
+    return bool(identity) and _NON_HUMAN_REVIEWER_RE.search(identity.casefold()) is None
 
 
 def parse_account_classification_review(payload: dict) -> AccountClassificationReview:

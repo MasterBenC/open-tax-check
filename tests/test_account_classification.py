@@ -20,7 +20,7 @@ def valid_review_payload() -> dict:
         "schema_version": "account-classification/v1",
         "source_manifest_sha256": "a" * 64,
         "mapping_fingerprint": "b" * 64,
-        "reviewer": "Chen Li",
+        "reviewer": "human:Chen Li",
         "confirmed_at": "2026-08-05T09:30:00+08:00",
         "classifications": [
             {
@@ -177,7 +177,7 @@ def test_aggregate_rejects_incoherent_or_incomplete_lineage(mutation):
 
 @pytest.mark.parametrize(
     "reviewer",
-    ["OpenAI", "ChatGPT", "GPT-5.6", "Claude 4.8", "DeepSeek V4", "Qwen", "Hermes Agent"],
+    ["OpenAI", "ChatGPT", "GPT-5.6", "Claude 4.8", "DeepSeek V4", "Qwen", "Hermes Agent", "Mistral", "Llama", "Grok", "Copilot", "Qoder"],
 )
 def test_known_ai_or_agent_identity_cannot_confirm_classification(reviewer):
     payload = valid_review_payload()

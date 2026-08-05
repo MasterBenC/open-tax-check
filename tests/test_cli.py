@@ -86,7 +86,7 @@ def test_confirm_account_classification_emits_stable_stale_binding_error(tmp_pat
                 "schema_version": "account-classification/v1",
                 "source_manifest_sha256": "a" * 64,
                 "mapping_fingerprint": "b" * 64,
-                "reviewer": "Chen Li",
+                "reviewer": "human:Chen Li",
                 "confirmed_at": "2026-08-05T09:30:00+08:00",
                 "classifications": [],
             }
