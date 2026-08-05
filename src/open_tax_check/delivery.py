@@ -274,6 +274,11 @@ def _case_audit_artifacts(
             root / "work/structured-reconciliation.json",
             "case-audit/structured-reconciliation.json",
         ),
+        (
+            "tax_cross_checks",
+            root / "work/tax-cross-checks.json",
+            "case-audit/tax-cross-checks.json",
+        ),
         ("coverage_matrix", root / "work/coverage_matrix.json", "case-audit/coverage-matrix.json"),
         (
             "mapping_review",
@@ -327,6 +332,48 @@ def _case_audit_digest(artifacts: tuple[BundleArtifact, ...]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _tax_cross_check_record(
+    artifacts: tuple[BundleArtifact, ...],
+    payloads: dict[str, object],
+) -> dict[str, str] | None:
+    payload = payloads.get("tax_cross_checks")
+    if payload is None:
+        return None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != "tax-cross-checks/v1"
+        or payload.get("status") not in {"completed", "blocked_data_quality"}
+        or not isinstance(payload.get("source_manifest_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", payload["source_manifest_sha256"]) is None
+    ):
+        raise DeliveryError("delivery_case_audit_invalid")
+    artifact = next(
+        (
+            item for item in artifacts
+            if item.archive_path == "case-audit/tax-cross-checks.json"
+        ),
+        None,
+    )
+    if artifact is None:
+        raise DeliveryError("delivery_case_audit_invalid")
+    return {
+        "sha256": _sha256(artifact.path),
+        "source_manifest_sha256": payload["source_manifest_sha256"],
+    }
+
+
+def _validate_tax_cross_check_record(
+    value: object,
+    expected: dict[str, str] | None,
+) -> None:
+    if expected is None:
+        if value is not None:
+            raise DeliveryError("delivery_manifest_invalid")
+        return
+    if value != expected:
+        raise DeliveryError("delivery_manifest_invalid")
 
 
 def _report_context(
@@ -415,6 +462,17 @@ def _manifest_for_directory(path: Path) -> dict[str, object]:
             _HISTORICAL_REPORT_SCHEMA_VERSION,
             REPORT_SCHEMA_VERSION,
         }
+    ):
+        raise DeliveryError("delivery_manifest_invalid")
+    tax_cross_checks = payload.get("tax_cross_checks")
+    if tax_cross_checks is not None and (
+        not isinstance(tax_cross_checks, dict)
+        or set(tax_cross_checks) != {"sha256", "source_manifest_sha256"}
+        or not all(
+            isinstance(tax_cross_checks.get(key), str)
+            and _SHA256_RE.fullmatch(tax_cross_checks[key]) is not None
+            for key in ("sha256", "source_manifest_sha256")
+        )
     ):
         raise DeliveryError("delivery_manifest_invalid")
     return payload
@@ -543,6 +601,10 @@ def _existing_delivery(
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         raise DeliveryError("delivery_pointer_invalid") from None
     _verify_delivery_artifacts(manifest_path.parent, manifest)
+    _validate_tax_cross_check_record(
+        manifest.get("tax_cross_checks"),
+        _tax_cross_check_record(*_case_audit_artifacts(root)),
+    )
     expected_pointer = _pointer_payload(root, manifest, manifest_path.parent)
     if pointer != expected_pointer:
         raise DeliveryError("delivery_pointer_invalid")
@@ -576,6 +638,12 @@ def build_case_delivery(
         raise DeliveryError("delivery_blocked_data_quality")
     options = _delivery_options(include_evidence_files=include_evidence_files)
     case_audit_artifacts, case_audit_payloads = _case_audit_artifacts(root)
+    tax_cross_checks = _tax_cross_check_record(case_audit_artifacts, case_audit_payloads)
+    if (
+        isinstance(case_audit_payloads.get("tax_cross_checks"), dict)
+        and case_audit_payloads["tax_cross_checks"].get("status") == "blocked_data_quality"
+    ):
+        raise DeliveryError("delivery_blocked_data_quality")
     case_audit_digest = _case_audit_digest(case_audit_artifacts)
     entity_name, reviewed_findings = _report_context(root, case_audit_payloads)
     existing = _existing_delivery(root, snapshot, options, case_audit_digest)
@@ -603,6 +671,7 @@ def build_case_delivery(
             raise DeliveryError("delivery_pointer_invalid")
         manifest = _manifest_for_directory(final_directory)
         _verify_delivery_artifacts(final_directory, manifest)
+        _validate_tax_cross_check_record(manifest.get("tax_cross_checks"), tax_cross_checks)
         if (
             manifest.get("revision") != snapshot.revision
             or manifest.get("snapshot_digest") != _snapshot_digest(snapshot)
@@ -701,6 +770,7 @@ def build_case_delivery(
             "snapshot_revision": snapshot.revision,
             "snapshot_digest": snapshot_digest,
             "case_audit_digest": case_audit_digest,
+            **({"tax_cross_checks": tax_cross_checks} if tax_cross_checks is not None else {}),
             "delivery_options": options,
             "status": "verified",
             "pdf_status": "verified",

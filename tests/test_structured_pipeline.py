@@ -363,6 +363,10 @@ class StructuredPipelineTests(unittest.TestCase):
         self.assertFalse((case / "output" / "findings.json").exists())
         payload = json.loads((case / "work" / "structured-reconciliation.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["status"], "blocked_data_quality")
+        cross_checks = json.loads((case / "work/tax-cross-checks.json").read_text(encoding="utf-8"))
+        self.assertEqual(cross_checks["status"], "blocked_data_quality")
+        self.assertEqual(cross_checks["results"], [])
+        self.assertEqual(cross_checks["questions"], [])
 
     def test_period_mismatch_blocks_structured_run(self):
         case = self.root / "period-mismatch"
@@ -419,6 +423,9 @@ class StructuredPipelineTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(result["status"], "needs_professional_review")
         self.assertTrue((case / "work" / "structured-reconciliation.json").is_file())
+        cross_checks = json.loads((case / "work/tax-cross-checks.json").read_text(encoding="utf-8"))
+        self.assertEqual(cross_checks["status"], "completed")
+        self.assertEqual(len(cross_checks["results"]), 5)
 
     def test_combined_run_preserves_structured_documents_in_deep_case_path(self):
         case = (

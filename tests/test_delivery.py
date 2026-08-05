@@ -190,6 +190,18 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
         json.dumps({"passed": True, "checks": []}),
         encoding="utf-8",
     )
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps({
+            "schema_version": "tax-cross-checks/v1",
+            "status": "completed",
+            "results": [],
+            "questions": [],
+            "source_manifest_sha256": "a" * 64,
+            "audit_events": [],
+            "blocking_issue_refs": [],
+        }),
+        encoding="utf-8",
+    )
     (case / "work/coverage_matrix.json").write_text(
         json.dumps({"items": []}),
         encoding="utf-8",
@@ -207,9 +219,13 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
             "case-audit/structured-documents/bs.financial-statement.json",
             "case-audit/reconciliation.json",
             "case-audit/structured-reconciliation.json",
+            "case-audit/tax-cross-checks.json",
             "case-audit/coverage-matrix.json",
             "case-audit/reviews/mapping-review.json",
         }.issubset(archive.namelist())
+    delivery_manifest = json.loads((case / result["manifest_path"]).read_text(encoding="utf-8"))
+    assert delivery_manifest["tax_cross_checks"]["source_manifest_sha256"] == "a" * 64
+    assert len(delivery_manifest["tax_cross_checks"]["sha256"]) == 64
 
 
 def test_case_delivery_is_idempotent_for_same_snapshot(tmp_path: Path):

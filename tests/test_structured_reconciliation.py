@@ -111,7 +111,11 @@ def test_balanced_documents_reconcile_without_guessing():
     assert result.status == "reconciled"
     assert result.passed is True
     assert result.issues == ()
-    assert any(item["check"] == "tax_fact" and item["status"] == "passed" for item in result.checks)
+    assert any(
+        item["check"] == "tax_fact"
+        and item["status"] == "deferred_to_tax_cross_checks"
+        for item in result.checks
+    )
 
 
 def test_balance_sheet_imbalance_blocks_data_quality():
@@ -165,14 +169,15 @@ def test_period_mismatch_blocks_before_cross_document_checks():
     assert any(issue.code == "period_mismatch" for issue in result.issues)
 
 
-def test_tax_fact_mismatch_is_blocking_and_missing_fact_is_not_performed():
+def test_tax_fact_mismatch_is_deferred_and_does_not_block_quality():
     statements, returns = _balanced_documents()
     returns = (_tax(value="999.00"),)
 
     result = reconcile_structured_documents(statements, returns)
 
-    assert any(issue.code == "tax_fact_mismatch" for issue in result.issues)
-    assert any(item.get("status") == "not_performed_missing_fact" for item in result.checks)
+    assert result.status == "reconciled"
+    assert not any(issue.code == "tax_fact_mismatch" for issue in result.issues)
+    assert any(item.get("status") == "deferred_to_tax_cross_checks" for item in result.checks)
 
 
 def test_existing_document_issue_blocks_reconciliation():

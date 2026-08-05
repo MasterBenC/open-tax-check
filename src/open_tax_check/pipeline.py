@@ -42,6 +42,7 @@ from .reconciliation import (
     reconcile_trial_balance,
 )
 from .reviews import load_active_mappings, load_valid_sheet_selections
+from .account_classification import load_active_account_classifications
 from .rules import business_entertainment_adjustment
 from .schemas import SCHEMA_VERSION, SheetRecord, SourceRecord, to_dict
 from .semantic import detect_semantic_candidates
@@ -64,6 +65,11 @@ from .structured_reconciliation import (
     DocumentReconciliationIssue,
     DocumentReconciliationResult,
     reconcile_structured_documents,
+)
+from .tax_cross_checks import (
+    CrossCheckContext,
+    run_tax_cross_checks,
+    tax_cross_check_payload,
 )
 from .workbooks import (
     WORKBOOK_ADAPTER_VERSION,
@@ -1813,6 +1819,25 @@ def _write_review_outputs(
     )
 
 
+def _cross_check_period(state: dict, journal: list[dict]) -> tuple[str, str]:
+    review_period = state.get("review_period")
+    if isinstance(review_period, dict):
+        start = review_period.get("start")
+        end = review_period.get("end")
+        if isinstance(start, str) and isinstance(end, str):
+            return start, end
+    years = sorted(
+        str(row["tax_year"])
+        for row in journal
+        if isinstance(row.get("tax_year"), (str, int))
+        and len(str(row["tax_year"])) == 4
+        and str(row["tax_year"]).isdigit()
+    )
+    if years:
+        return f"{years[0]}-01-01", f"{years[-1]}-12-31"
+    return "1970-01-01", "1970-12-31"
+
+
 def _complete_normalized_run(
     context: _CaseRun,
     normalized: dict[str, list[dict]],
@@ -1825,6 +1850,8 @@ def _complete_normalized_run(
     trial_balance = normalized["trial_balance"]
     journal_quality = validate_journal_quality(journal)
     structured_result: DocumentReconciliationResult | None = None
+    statements: tuple[FinancialStatement, ...] = ()
+    tax_returns: tuple[TaxReturn, ...] = ()
     structured_coverage: tuple[ProcedureCoverage, ...] = ()
     structured_loader_issues: tuple[str, ...] = ()
     structured_root = context.case_dir / "work" / "structured-documents"
@@ -1880,6 +1907,56 @@ def _complete_normalized_run(
         journal, trial_balance
     )
     _write_json(context.work_dir / "reconciliation.json", reconciliation)
+    manifest_path = context.work_dir / "input_manifest.json"
+    manifest_bytes = _read_bounded_file(
+        manifest_path,
+        STRUCTURED_DOCUMENT_INDEX_MAX_BYTES,
+    )
+    source_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    try:
+        classifications = load_active_account_classifications(
+            context.case_dir,
+            source_manifest_sha256,
+        )
+    except ValueError as error:
+        classifications = None
+        quality_payload.append({"code": str(error) or "invalid_account_classification"})
+        _write_json(context.work_dir / "data_quality.json", quality_payload)
+    state = load_case_state(context.case_dir)
+    period_start, period_end = _cross_check_period(state, journal)
+    document = (statements + tax_returns)[0] if statements or tax_returns else None
+    blocking_refs = [
+        str(item.get("code"))
+        for item in quality_payload
+        if isinstance(item, dict) and isinstance(item.get("code"), str)
+    ]
+    for result in (trial_result, journal_result):
+        if result is not None and not result.passed:
+            blocking_refs.extend(issue.code for issue in result.issues)
+    cross_check_run = run_tax_cross_checks(
+        journal,
+        classifications,
+        statements,
+        tax_returns,
+        CrossCheckContext(
+            period_start=period_start,
+            period_end=period_end,
+            entity_name=str(state["entity_name"]),
+            currency=document.currency if document is not None else "CNY",
+            unit_multiplier=document.unit_multiplier if document is not None else "1",
+            blocked_issue_refs=tuple(dict.fromkeys(blocking_refs)),
+        ),
+        source_manifest_sha256,
+    )
+    if _read_bounded_file(
+        manifest_path,
+        STRUCTURED_DOCUMENT_INDEX_MAX_BYTES,
+    ) != manifest_bytes:
+        raise InputChangedError
+    _write_json(
+        context.work_dir / "tax-cross-checks.json",
+        tax_cross_check_payload(cross_check_run),
+    )
     if journal_quality:
         role_issues["journal"].append("journal_quality_failed")
     coverage = _procedure_coverage(
@@ -1945,6 +2022,14 @@ def _run_csv_case(context: _CaseRun) -> tuple[int, dict]:
         for item in context.input_entries
         if item["entry_type"] == "regular_file"
     ]
+    _write_json(
+        context.work_dir / "input_manifest.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "sources": context.input_entries,
+            "issues": [],
+        },
+    )
     if source_file is None:
         return context.finish(
             4,
@@ -2233,6 +2318,42 @@ def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
     )
     quality = [{"code": issue.code} for issue in result.issues]
     _write_json(context.work_dir / "data_quality.json", quality)
+    manifest_path = context.work_dir / "input_manifest.json"
+    try:
+        manifest_bytes = _read_bounded_file(
+            manifest_path,
+            STRUCTURED_DOCUMENT_INDEX_MAX_BYTES,
+        )
+    except ValueError:
+        manifest_bytes = b""
+    source_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    state = load_case_state(context.case_dir)
+    review_period = state.get("review_period", {})
+    document = (statements + tax_returns)[0] if statements or tax_returns else None
+    cross_check_run = run_tax_cross_checks(
+        (),
+        None,
+        statements,
+        tax_returns,
+        CrossCheckContext(
+            period_start=review_period["start"],
+            period_end=review_period["end"],
+            entity_name=state["entity_name"],
+            currency=document.currency if document is not None else "CNY",
+            unit_multiplier=document.unit_multiplier if document is not None else "1",
+            blocked_issue_refs=tuple(item["code"] for item in quality),
+        ),
+        source_manifest_sha256,
+    )
+    if manifest_bytes and _read_bounded_file(
+        manifest_path,
+        STRUCTURED_DOCUMENT_INDEX_MAX_BYTES,
+    ) != manifest_bytes:
+        raise InputChangedError
+    _write_json(
+        context.work_dir / "tax-cross-checks.json",
+        tax_cross_check_payload(cross_check_run),
+    )
     coverage = _structured_coverage(statements, tax_returns, result)
     _write_json(
         context.work_dir / "coverage_matrix.json",

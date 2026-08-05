@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 
-from .numeric import exact_add, exact_subtract, parse_decimal
+from .numeric import exact_subtract, parse_decimal
 from .structured_documents import FinancialStatement, TaxReturn, TaxReturnLine
 
 
@@ -25,14 +24,6 @@ class DocumentReconciliationResult:
     passed: bool
     checks: tuple[dict, ...]
     issues: tuple[DocumentReconciliationIssue, ...]
-
-
-_ZERO = Decimal("0.00")
-_FACT_BINDINGS = {
-    "vat.taxable_sales": ("income_statement", "revenue"),
-    "cit.revenue": ("income_statement", "revenue"),
-    "cit.net_profit": ("income_statement", "net_profit"),
-}
 
 
 def _statement_totals(statement: FinancialStatement) -> dict[str, str]:
@@ -177,7 +168,6 @@ def _tax_checks(
     checks: list[dict],
     issues: list[DocumentReconciliationIssue],
 ) -> None:
-    by_type = {statement.statement_type: statement for statement in statements}
     for tax_return in tax_returns:
         seen_pairs: set[tuple[str, str]] = set()
         facts: dict[str, list[TaxReturnLine]] = {}
@@ -190,24 +180,12 @@ def _tax_checks(
                 issues.append(_issue("missing_tax_value", tax_return, line_codes=(line.line_number,)))
             if line.fact_key:
                 facts.setdefault(line.fact_key, []).append(line)
-        for fact_key, (statement_type, total_key) in _FACT_BINDINGS.items():
-            statement = by_type.get(statement_type)
-            matching = facts.get(fact_key, ())
-            if not matching or statement is None or total_key not in _statement_totals(statement):
-                checks.append({"check": "tax_fact", "fact_key": fact_key, "status": "not_performed_missing_fact"})
-                continue
-            values = [_decimal(line.value) for line in matching if line.value is not None]
-            if len(values) != len(matching):
-                issues.append(_issue("missing_tax_value", tax_return, line_codes=tuple(line.line_number for line in matching)))
-                continue
-            total = _ZERO
-            for value in values:
-                total = exact_add(total, value)
-            expected = _decimal(_statement_totals(statement)[total_key])
-            passed = total == expected
-            checks.append({"check": "tax_fact", "fact_key": fact_key, "status": "passed" if passed else "blocked"})
-            if not passed:
-                issues.append(_issue("tax_fact_mismatch", tax_return, statement, line_codes=(fact_key,)))
+        for fact_key in sorted(facts):
+            checks.append({
+                "check": "tax_fact",
+                "fact_key": fact_key,
+                "status": "deferred_to_tax_cross_checks",
+            })
 
 
 def reconcile_structured_documents(
