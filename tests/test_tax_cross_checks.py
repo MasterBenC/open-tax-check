@@ -22,6 +22,7 @@ from open_tax_check.tax_cross_checks import (
     classified_ledger_total,
     compare_amounts,
     run_tax_cross_checks,
+    rerun_tax_cross_check,
     parse_tax_cross_check_payload,
     statement_total,
     tax_fact_total,
@@ -227,6 +228,80 @@ def test_text_only_explanation_cannot_close_difference():
     assert updated.results[1].resolution_status == "explained_pending_verification"
     assert updated.results[1].status is CrossCheckStatus.DIFFERENCE_FOUND
     assert updated.results[1].difference_amount == Decimal("100.00")
+
+
+def test_rerun_preserves_prior_explanation_history(monkeypatch):
+    import open_tax_check.tax_cross_checks as cross_checks
+
+    pending = apply_cross_check_explanation(
+        difference_run(), explanation(), bridge=(), verified_evidence_refs=("source-1",)
+    )
+    fresh = replace(
+        pending.results[1],
+        question=question(CHECK_ORDER[1]),
+        audit_refs=(),
+        resolution_status="unresolved",
+        explanations=(),
+    )
+    monkeypatch.setattr(cross_checks, "_execute_cross_check", lambda *args: fresh)
+
+    rerun = rerun_tax_cross_check(
+        pending,
+        CHECK_ORDER[1],
+        (),
+        None,
+        (),
+        (),
+        CrossCheckContext(
+            "2025-01-01", "2025-12-31", "虚构科技有限公司", "CNY"
+        ),
+        pending.source_manifest_sha256,
+    )
+    target = rerun.results[1]
+    assert target.explanations == pending.results[1].explanations
+    assert target.audit_refs == pending.results[1].audit_refs
+    assert target.resolution_status == "explained_pending_verification"
+
+
+def test_rerun_preserves_closed_explanation_without_reopening_question(monkeypatch):
+    import open_tax_check.tax_cross_checks as cross_checks
+
+    bridge = AmountBridgeItem(
+        amount=Decimal("100.00"),
+        label_zh="申报确认期间差异",
+        evidence_refs=("source-1",),
+    )
+    closed = apply_cross_check_explanation(
+        difference_run(),
+        explanation(),
+        bridge=(bridge,),
+        verified_evidence_refs=("source-1",),
+    )
+    fresh = replace(
+        closed.results[1],
+        question=question(CHECK_ORDER[1]),
+        audit_refs=(),
+        resolution_status="unresolved",
+        explanations=(),
+    )
+    monkeypatch.setattr(cross_checks, "_execute_cross_check", lambda *args: fresh)
+
+    rerun = rerun_tax_cross_check(
+        closed,
+        CHECK_ORDER[1],
+        (),
+        None,
+        (),
+        (),
+        CrossCheckContext(
+            "2025-01-01", "2025-12-31", "虚构科技有限公司", "CNY"
+        ),
+        closed.source_manifest_sha256,
+    )
+    target = rerun.results[1]
+    assert target.resolution_status == "closed"
+    assert target.question is None
+    assert not any(item.check_id == CHECK_ORDER[1] for item in rerun.questions)
 
 
 def test_complete_verified_bridge_can_close_difference():

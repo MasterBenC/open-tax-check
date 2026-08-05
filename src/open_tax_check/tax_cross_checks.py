@@ -851,7 +851,11 @@ def _attach_questions(
     candidates = tuple(
         item
         for item in results
-        if item.status in {CrossCheckStatus.NOT_PERFORMED, CrossCheckStatus.DIFFERENCE_FOUND}
+        if item.status is CrossCheckStatus.NOT_PERFORMED
+        or (
+            item.status is CrossCheckStatus.DIFFERENCE_FOUND
+            and item.resolution_status != "closed"
+        )
     )
     ordered = sorted(
         candidates,
@@ -1078,6 +1082,32 @@ def rerun_tax_cross_check(
         tax_returns,
         context,
     )
+    previous = next(
+        (item for item in run.results if item.check_id == check_id),
+        None,
+    )
+    if previous is not None and (previous.audit_refs or previous.explanations):
+        if replacement.status is CrossCheckStatus.DIFFERENCE_FOUND and previous.explanations:
+            # Preserve prior human evidence, but re-evaluate closure against the
+            # newly calculated amounts before exposing the result as closed.
+            resolution = (
+                "closed"
+                if _bridge_closes_result(replacement, previous.explanations[-1].bridge_items)
+                else "explained_pending_verification"
+            )
+            replacement = replace(
+                replacement,
+                question=None if resolution == "closed" else replacement.question,
+                audit_refs=previous.audit_refs,
+                resolution_status=resolution,
+                explanations=previous.explanations,
+            )
+        else:
+            replacement = replace(
+                replacement,
+                audit_refs=previous.audit_refs,
+                explanations=previous.explanations,
+            )
     results = tuple(
         replacement if item.check_id == check_id else item for item in run.results
     )
