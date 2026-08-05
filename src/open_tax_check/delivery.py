@@ -131,6 +131,43 @@ def _atomic_json(path: Path, payload: object) -> None:
                 pass
 
 
+def _atomic_bytes(path: Path, content: bytes) -> None:
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None and temporary.exists():
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
+def _publish_pointer_and_handoff(root: Path, pointer: dict[str, object]) -> None:
+    pointer_path = root / "work" / DELIVERY_POINTER_NAME
+    previous = pointer_path.read_bytes() if pointer_path.is_file() else None
+    _atomic_json(pointer_path, pointer)
+    try:
+        build_case_customer_handoff(root)
+    except Exception:
+        if previous is None:
+            try:
+                pointer_path.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            _atomic_bytes(pointer_path, previous)
+        raise
+
+
 def _case_root(case_dir: Path) -> Path:
     root = resolve_safe_case_path(Path(case_dir))
     if not (root / "state.json").is_file():
@@ -546,7 +583,7 @@ def build_case_delivery(
         build_case_customer_handoff(root)
         return existing
 
-    work_root = _managed_directory(root, ("work",), create=False)
+    _managed_directory(root, ("work",), create=False)
     delivery_root = _managed_directory(
         root,
         ("work", DELIVERY_DIR_NAME),
@@ -574,8 +611,7 @@ def build_case_delivery(
         ):
             raise DeliveryError("delivery_revision_conflict")
         pointer = _pointer_payload(root, manifest, final_directory)
-        _atomic_json(work_root / DELIVERY_POINTER_NAME, pointer)
-        build_case_customer_handoff(root)
+        _publish_pointer_and_handoff(root, pointer)
         return pointer
 
     temporary_directory = Path(tempfile.mkdtemp(prefix=".otcd-", dir=delivery_root))
@@ -680,8 +716,7 @@ def build_case_delivery(
         published_directory = True
         temporary_directory = None  # type: ignore[assignment]
         pointer = _pointer_payload(root, manifest, final_directory)
-        _atomic_json(work_root / DELIVERY_POINTER_NAME, pointer)
-        build_case_customer_handoff(root)
+        _publish_pointer_and_handoff(root, pointer)
         return pointer
     except PdfExportUnavailable as error:
         raise DeliveryError(str(error)) from None

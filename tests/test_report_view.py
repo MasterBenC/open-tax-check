@@ -102,6 +102,23 @@ def test_v3_separates_risk_severity_from_received_material_state():
     assert view.risk_overview.high_count == 1
     assert view.materials[0].status_zh == "已收到待处理"
     assert "未提供" not in view.materials[0].status_zh
+    assert view.risk_overview.material_pending_count == 0
+
+
+def test_v3_deduplicates_missing_material_linked_to_existing_question():
+    view = build_report_view_v3(
+        _snapshot(),
+        entity_name="甲公司",
+        material_statuses=({
+            "source_id": "cit-return",
+            "display_name_zh": "企业所得税申报表",
+            "status": "not_provided",
+            "question_id": "q-cit",
+        },),
+    )
+
+    assert view.executive_summary.material_gap_count == 1
+    assert view.risk_overview.material_pending_count == 1
 
 
 def test_v3_metadata_coverage_and_ordering_are_deterministic():

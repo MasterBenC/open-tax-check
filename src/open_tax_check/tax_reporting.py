@@ -7,9 +7,7 @@ from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
-import re
 import tempfile
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .schemas import to_dict
 from .pdf_report import PdfExportUnavailable, write_report_pdf
@@ -19,7 +17,6 @@ from .report_view import (
     build_report_view_v3,
     effective_limitations,
 )
-from .docx_report import build_docx_parts
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
 
@@ -362,107 +359,6 @@ def write_tax_health_snapshot(snapshot: TaxCheckSnapshot, path: Path) -> Path:
         tax_snapshot_payload(snapshot), ensure_ascii=False, sort_keys=True
     ) + "\n"
     return _write_text_atomic(Path(path), content)
-
-
-def _docx_xml_text(value: str) -> str:
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
-
-
-def _docx_paragraphs(markdown: str) -> str:
-    paragraphs: list[str] = []
-    for line in markdown.splitlines():
-        if not line.strip():
-            continue
-        style = "Normal"
-        text = line
-        if line.startswith("### "):
-            style, text = "Heading3", line[4:]
-        elif line.startswith("## "):
-            style, text = "Heading2", line[3:]
-        elif line.startswith("# "):
-            style, text = "Title", line[2:]
-        elif line.startswith("- "):
-            style, text = "ListParagraph", line[2:]
-        text = re.sub(r"\[([^]]+)\]\([^)]*\)", r"\1", text)
-        num_pr = '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>' if style == "ListParagraph" else ""
-        paragraphs.append(
-            f'<w:p><w:pPr><w:pStyle w:val="{style}"/>{num_pr}</w:pPr>'
-            f'<w:r><w:t xml:space="preserve">{_docx_xml_text(text)}</w:t></w:r></w:p>'
-        )
-    return "".join(paragraphs)
-
-
-def _docx_parts(markdown: str) -> dict[str, str]:
-    content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
-<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
-</Types>'''
-    root_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>'''
-    document_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
-<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-</Relationships>'''
-    styles = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
-<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
-<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:pPr><w:spacing w:before="0" w:after="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="40"/><w:color w:val="0B2545"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:pPr><w:spacing w:before="320" w:after="120"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="32"/><w:color w:val="2E74B5"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="280" w:after="100"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="26"/><w:color w:val="2E74B5"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Heading 3"/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="240" w:after="80"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="24"/><w:color w:val="1F4D78"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:pPr><w:ind w:left="720" w:hanging="360"/><w:spacing w:after="80"/></w:pPr></w:style>
-</w:styles>'''
-    numbering = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr></w:lvl></w:abstractNum>
-<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
-</w:numbering>'''
-    document = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{_docx_paragraphs(markdown)}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708"/></w:sectPr></w:body></w:document>'''
-    return {"[Content_Types].xml": content_types, "_rels/.rels": root_rels, "word/_rels/document.xml.rels": document_rels, "word/styles.xml": styles, "word/numbering.xml": numbering, "word/document.xml": document}
-
-
-def write_tax_health_report_docx(
-    snapshot: TaxCheckSnapshot,
-    path: Path,
-    *,
-    entity_name: str | None = None,
-    reviewed_findings: Sequence[Mapping[str, object]] = (),
-) -> Path:
-    """Write a deterministic, styled DOCX rendition of the customer report."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile("wb", dir=path.parent, suffix=".tmp", delete=False) as handle:
-            temporary_path = Path(handle.name)
-        with ZipFile(temporary_path, "w", compression=ZIP_DEFLATED) as archive:
-            for name, content in build_docx_parts(build_report_view(
-                snapshot,
-                entity_name=entity_name,
-                reviewed_findings=reviewed_findings,
-            )).items():
-                info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = ZIP_DEFLATED
-                archive.writestr(info, content)
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
-    return path
 
 
 def write_tax_health_report_pdf(

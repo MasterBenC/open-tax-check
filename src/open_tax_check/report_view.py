@@ -299,6 +299,7 @@ def build_report_view_v3(
     ))
 
     materials: list[MaterialStatusItem] = []
+    missing_material_keys: set[tuple[str, str]] = set()
     for item in material_statuses:
         status = item.get("status")
         if status not in MATERIAL_STATUS_ZH:
@@ -312,9 +313,20 @@ def build_report_view_v3(
             tax_ids=_v3_tax_ids(item),
             impact_zh=_v3_text(item, "impact_zh", "该资料状态会限制相关检查程序或结论。"),
         ))
+        if status == "not_provided":
+            linked_question = item.get("question_id")
+            missing_material_keys.add(
+                ("question", linked_question.strip())
+                if isinstance(linked_question, str) and linked_question.strip()
+                else ("source", source_id)
+            )
     ordered_materials = tuple(sorted(materials, key=lambda item: (item.source_id, item.display_name_zh)))
-    pending_materials = tuple(
+    limiting_materials = tuple(
         item for item in ordered_materials if item.status != "imported_reconciled"
+    )
+    missing_material_count = len(
+        {("question", question.question_id) for question in snapshot.questions}
+        | missing_material_keys
     )
 
     action_sources = [
@@ -330,7 +342,7 @@ def build_report_view_v3(
     )
     results_by_tax = {result.tax_id: result for result in snapshot.results}
     material_limitations = {
-        tax_id: tuple(item.status_zh for item in pending_materials if tax_id in item.tax_ids)
+        tax_id: tuple(item.status_zh for item in limiting_materials if tax_id in item.tax_ids)
         for tax_id in _TAX_NAMES
     }
     tax_coverage = tuple(
@@ -371,7 +383,7 @@ def build_report_view_v3(
         for index, (finding_id, action_zh) in enumerate(action_sources, start=1)
     )
     report_status_zh = (
-        "初版报告已生成" if snapshot.questions or pending_materials
+        "初版报告已生成" if snapshot.questions or limiting_materials
         else "本次检查受限完成" if limitations
         else "本次可执行检查程序已完成"
     )
@@ -390,7 +402,7 @@ def build_report_view_v3(
             entity_name=entity_name,
             status_zh=report_status_zh,
             issue_count=len(ordered_risks),
-            material_gap_count=len(snapshot.questions),
+            material_gap_count=missing_material_count,
             trial_amount_count=trial_amount_count,
             amount_disclaimer_zh=AMOUNT_DISCLAIMER_ZH,
         ),
@@ -398,7 +410,7 @@ def build_report_view_v3(
             high_count=sum(risk.severity == "high" for risk in ordered_risks),
             medium_count=sum(risk.severity == "medium" for risk in ordered_risks),
             notice_count=sum(risk.severity == "notice" for risk in ordered_risks),
-            material_pending_count=len(snapshot.questions) + len(pending_materials),
+            material_pending_count=missing_material_count,
         ),
         risks=ordered_risks,
         materials=ordered_materials,

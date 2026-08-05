@@ -3,9 +3,9 @@
 from datetime import date
 from dataclasses import replace
 import json
-from zipfile import ZipFile
 import unittest
 
+import open_tax_check.tax_reporting as tax_reporting
 from open_tax_check.tax_models import (
     AuditEvent,
     CalculationRecord,
@@ -28,9 +28,12 @@ from open_tax_check.tax_reporting import (
     tax_snapshot_payload,
     write_tax_health_report,
     write_tax_health_snapshot,
-    write_tax_health_report_docx,
     write_tax_health_report_pdf,
 )
+
+
+def test_pdf_only_reporting_module_does_not_expose_docx_writer() -> None:
+    assert not hasattr(tax_reporting, "write_tax_health_report_docx")
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
@@ -416,26 +419,6 @@ class TaxHealthReportingTests(unittest.TestCase):
             self.assertEqual(calculation["rate_selector"], "sale_contract")
             self.assertEqual(calculation["rate_selector_label_zh"], "\u4e70\u5356\u5408\u540c")
             self.assertEqual(list(root.glob("*.tmp")), [])
-
-    def test_report_docx_export_contains_explicit_styles_and_report_title(self) -> None:
-        import tempfile
-        from pathlib import Path
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "report.docx"
-            self.assertEqual(write_tax_health_report_docx(snapshot_with_every_status(), path), path)
-            with ZipFile(path) as archive:
-                document = archive.read("word/document.xml").decode("utf-8")
-                styles = archive.read("word/styles.xml").decode("utf-8")
-                self.assertIn("税务健康检查报告", document)
-                self.assertIn('w:styleId="Heading1"', styles)
-                self.assertIn('w:sz w:val="32"', styles)
-                for style_id in ("Heading2", "Heading3"):
-                    style = styles.split(
-                        f'<w:style w:type="paragraph" w:styleId="{style_id}">',
-                        1,
-                    )[1].split("</w:style>", 1)[0]
-                    self.assertIn("<w:keepNext/>", style)
 
     def test_pdf_export_builds_v3_view_and_delegates_to_chromium_renderer(self) -> None:
         import tempfile

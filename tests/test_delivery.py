@@ -441,6 +441,28 @@ def test_case_delivery_rolls_back_new_revision_when_pointer_write_fails(tmp_path
     assert retry["revision"] == 1
 
 
+def test_case_delivery_restores_previous_pointer_when_handoff_write_fails(tmp_path: Path):
+    case = _case(tmp_path)
+    first = build_case_delivery(case)
+    pointer_path = case / "work" / "delivery.json"
+    original_pointer = pointer_path.read_bytes()
+    private_snapshot = case / "work" / "tax-health-snapshot.private.json"
+    payload = json.loads(private_snapshot.read_text(encoding="utf-8"))
+    payload["revision"] = 2
+    private_snapshot.write_text(json.dumps(payload), encoding="utf-8")
+
+    with patch(
+        "open_tax_check.delivery.build_case_customer_handoff",
+        side_effect=ValueError("handoff_write_failed"),
+    ):
+        with pytest.raises(ValueError, match="^delivery_write_failed$"):
+            build_case_delivery(case)
+
+    assert pointer_path.read_bytes() == original_pointer
+    assert not (case / "work/deliveries/revision-0002-report-v3").exists()
+    assert first["revision"] == 1
+
+
 def test_case_delivery_rejects_stale_existing_revision_for_changed_snapshot(tmp_path: Path):
     case = _case(tmp_path)
     first = build_case_delivery(case)
