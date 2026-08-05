@@ -11,6 +11,7 @@ import json
 from .reporting import select_reportable_findings
 from .tax_models import Limitation, TaxCheckSnapshot, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
+from .tax_cross_checks import CrossCheckStatus, TaxCrossCheckRun
 
 
 AMOUNT_DISCLAIMER_ZH = "试算金额不代表应补税额、欠税金额或最终申报金额。"
@@ -263,12 +264,63 @@ def build_report_view_v3(
     entity_name: str,
     reviewed_findings: Sequence[Mapping[str, object]] = (),
     material_statuses: Sequence[Mapping[str, object]] = (),
+    tax_cross_checks: TaxCrossCheckRun | None = None,
 ) -> ReportViewV3:
     """Build the immutable, customer-safe tax-health-report/v3 view."""
 
     period = snapshot.request.period
     period_zh = f"{period.start.isoformat()}至{period.end.isoformat()}"
     risks: list[RiskItem] = []
+    cross_check_materials: list[MaterialStatusItem] = []
+    cross_check_appendix: list[str] = []
+    if tax_cross_checks is not None:
+        if not isinstance(tax_cross_checks, TaxCrossCheckRun):
+            raise ValueError("invalid_tax_cross_checks")
+        for result in tax_cross_checks.results:
+            if result.status is CrossCheckStatus.DIFFERENCE_FOUND:
+                assert result.ledger_amount is not None
+                assert result.comparison_amount is not None
+                assert result.difference_amount is not None
+                risks.append(RiskItem(
+                    finding_id=result.check_id,
+                    title_zh=result.title_zh,
+                    severity=("notice" if result.resolution_status == "closed" else "medium"),
+                    tax_ids=result.tax_ids,
+                    affected_period_zh=f"{result.period_start}至{result.period_end}",
+                    observed_zh=(
+                        "本次账套、财务报表与申报资料核对发现金额差异："
+                        f"账套或报表金额 {result.ledger_amount:f} 元，申报或对比金额 "
+                        f"{result.comparison_amount:f} 元，绝对差异 {result.difference_amount:f} 元。"
+                    ),
+                    why_it_matters_zh="该差异可能反映确认期间、含税口径、会计调整或申报口径不同，需要结合原始凭证核实。",
+                    can_conclude_zh="可以确认当前已导入的两组金额存在上述差异。",
+                    cannot_conclude_zh="不能仅凭该差异认定漏税、应补税、欠税或违法。",
+                    required_materials_zh=("相关账套、财务报表、纳税申报表及差异支持凭证",),
+                    next_action_zh="请按差异金额逐项提供桥接说明和可核验凭证，再重新执行该项核对。",
+                    evidence_refs=tuple(dict.fromkeys(ref.source_id for ref in result.source_refs)),
+                ))
+            if result.status is CrossCheckStatus.NOT_PERFORMED:
+                cross_check_materials.append(MaterialStatusItem(
+                    source_id=f"cross-check:{result.check_id}",
+                    display_name_zh=result.title_zh,
+                    status="not_provided",
+                    status_zh=MATERIAL_STATUS_ZH["not_provided"],
+                    tax_ids=result.tax_ids,
+                    impact_zh="资料不足，未执行该项核对，不能据此表示金额一致或不存在风险。",
+                ))
+                cross_check_appendix.append(
+                    f"{result.check_id}｜{result.title_zh}｜资料不足，未执行该项核对"
+                )
+                continue
+            status_zh = {
+                CrossCheckStatus.MATCHED: "金额一致",
+                CrossCheckStatus.WITHIN_TOLERANCE: "差异同时位于固定绝对值和相对值容差内",
+                CrossCheckStatus.DIFFERENCE_FOUND: "发现金额差异",
+            }[result.status]
+            cross_check_appendix.append(
+                f"{result.check_id}｜{result.title_zh}｜{status_zh}｜"
+                f"绝对容差 {result.absolute_tolerance:f} 元｜相对容差 {result.relative_tolerance:f}"
+            )
     for item in reviewed_findings:
         if not _v3_is_approved(item):
             continue
@@ -298,8 +350,10 @@ def build_report_view_v3(
         ),
     ))
 
-    materials: list[MaterialStatusItem] = []
-    missing_material_keys: set[tuple[str, str]] = set()
+    materials: list[MaterialStatusItem] = list(cross_check_materials)
+    missing_material_keys: set[tuple[str, str]] = {
+        ("source", item.source_id) for item in cross_check_materials
+    }
     for item in material_statuses:
         status = item.get("status")
         if status not in MATERIAL_STATUS_ZH:
@@ -419,7 +473,7 @@ def build_report_view_v3(
         appendix_executed_checks=tuple(
             f"{item.name_zh}：{check}"
             for item in tax_coverage for check in item.executed_checks_zh
-        ),
+        ) + tuple(cross_check_appendix),
         limitations_zh=tuple(item.message_zh for item in limitations),
     )
 

@@ -30,6 +30,7 @@ from .source_paths import resolve_safe_source
 from .html_report import write_report_html
 from .pdf_report import PdfExportUnavailable, write_report_pdf
 from .report_view import REPORT_SCHEMA_VERSION_V3, build_report_view_v3
+from .tax_cross_checks import parse_tax_cross_check_payload
 from .tax_reporting import tax_snapshot_payload, write_tax_health_snapshot
 from .tax_models import TaxCheckSnapshot, TaxStatus
 from .workpaper import WORKPAPER_NAME, write_tax_health_workpaper
@@ -693,11 +694,20 @@ def build_case_delivery(
         workpaper_path = temporary_directory / WORKPAPER_NAME
         snapshot_path = temporary_directory / "tax-health-snapshot.json"
         material_statuses = _material_statuses(manifest_payload, case_audit_payloads)
+        try:
+            cross_check_run = (
+                parse_tax_cross_check_payload(case_audit_payloads["tax_cross_checks"])
+                if "tax_cross_checks" in case_audit_payloads
+                else None
+            )
+        except ValueError:
+            raise DeliveryError("delivery_case_audit_invalid") from None
         report_view = build_report_view_v3(
             snapshot,
             entity_name=entity_name,
             reviewed_findings=reviewed_findings,
             material_statuses=material_statuses,
+            tax_cross_checks=cross_check_run,
         )
         write_report_html(report_view, html_path)
         write_report_pdf(report_view, pdf_path)

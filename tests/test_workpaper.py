@@ -10,6 +10,8 @@ from open_tax_check.tax_health import run_tax_health_check
 from open_tax_check.tax_models import DateRange, FactState, TaxCheckRequest, TaxFact
 from open_tax_check.workpaper import write_tax_health_workpaper
 from open_tax_check.workpaper import _FORMULA_LABELS_ZH
+from open_tax_check.tax_cross_checks import tax_cross_check_payload
+from test_tax_cross_checks import difference_run
 
 
 def _snapshot():
@@ -58,7 +60,7 @@ def test_workpaper_is_deterministic_redacted_and_structurally_complete(tmp_path:
     try:
         assert workbook.sheetnames == [
             "项目概览", "资料清单", "抽取与映射", "数据质量", "账务勾稽", "财报勾稽",
-            "申报勾稽", "税费筛查", "正式计算", "客户问题", "证据索引",
+            "申报勾稽", "账税交叉核对", "税费筛查", "正式计算", "客户问题", "证据索引",
             "规则版本", "报告选取", "运行记录",
         ]
         overview = workbook["项目概览"]
@@ -197,5 +199,28 @@ def test_workpaper_writes_case_and_contract_strings_as_text_not_formulas(tmp_pat
             "'@SUM(A1:A2)",
         }
         assert all(cell.data_type == "s" for cell in cells)
+    finally:
+        workbook.close()
+
+
+def test_workpaper_writes_persisted_cross_check_audit_rows_without_recalculation(tmp_path: Path):
+    path = tmp_path / "cross-checks.xlsx"
+    run = difference_run()
+
+    write_tax_health_workpaper(
+        _snapshot(),
+        path,
+        delivery_revision=7,
+        case_audit={"tax_cross_checks": tax_cross_check_payload(run)},
+    )
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=False)
+    try:
+        rows = list(workbook["账税交叉核对"].values)
+        target = next(row for row in rows if row[0] == "FS-VAT-SALES-001")
+        assert target[2:6] == ("1000.00", "1100.00", "100.00", "0.09090909090909090909090909091")
+        assert target[-2:] == (run.source_manifest_sha256, 7)
     finally:
         workbook.close()

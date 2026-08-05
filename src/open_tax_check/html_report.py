@@ -144,23 +144,31 @@ def _tax_coverage(view: ReportViewV3) -> str:
             f'<tr id="tax-{_e(item.tax_id)}"><td>{_e(item.name_zh)}</td><td>{_e(item.client_state)}</td>'
             f'<td>{checks}</td><td>{limits}</td><td>{amount}</td></tr>'
         )
-    content = (
-        '<table><thead><tr><th style="width:14%">税种</th><th style="width:14%">状态</th>'
+    header = (
+        '<thead><tr><th style="width:14%">税种</th><th style="width:14%">状态</th>'
         '<th>已执行程序</th><th>资料限制</th><th style="width:12%">试算金额</th></tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody></table>'
+    )
+    content = "".join(
+        f'<table class="report-table-group">{header}<tbody>{"".join(rows[index:index + 8])}</tbody></table>'
+        for index in range(0, len(rows), 8)
     )
     return _section("tax-coverage", "分税种检查结果", content)
 
 
 def _material_scope(view: ReportViewV3) -> str:
-    rows = "".join(
+    rows = [
         f'<tr><td>{_e(item.display_name_zh)}</td><td>{_e(item.status_zh)}</td><td>{_e(item.impact_zh)}</td></tr>'
         for item in view.materials
-    ) or '<tr><td colspan="3" class="empty">当前没有单独记录的资料处理状态。</td></tr>'
+    ]
+    if not rows:
+        rows = ['<tr><td colspan="3" class="empty">当前没有单独记录的资料处理状态。</td></tr>']
     limitations = "".join(f'<li>{_e(item)}</li>' for item in view.limitations_zh)
-    content = (
-        '<table><thead><tr><th style="width:25%">资料</th><th style="width:20%">处理状态</th><th>影响范围</th></tr></thead>'
-        f'<tbody>{rows}</tbody></table>'
+    header = '<thead><tr><th style="width:25%">资料</th><th style="width:20%">处理状态</th><th>影响范围</th></tr></thead>'
+    tables = "".join(
+        f'<table class="report-table-group">{header}<tbody>{"".join(rows[index:index + 4])}</tbody></table>'
+        for index in range(0, len(rows), 4)
+    )
+    content = tables + (
         f'<h3>检查边界</h3><ul>{limitations or "<li>本报告仅覆盖当前快照中已执行的检查程序。</li>"}</ul>'
     )
     return _section("material-scope", "资料范围与检查边界", content)

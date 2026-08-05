@@ -24,6 +24,8 @@ from open_tax_check.tax_models import (
     TaxStatus,
 )
 from open_tax_check.tax_registry import TAX_DEFINITIONS
+from open_tax_check.tax_cross_checks import CrossCheckStatus
+from test_tax_cross_checks import difference_run
 
 
 def _snapshot() -> TaxCheckSnapshot:
@@ -338,3 +340,42 @@ def test_material_gap_actions_also_address_independent_scope_limitations():
 
     assert any(item.action_zh.startswith("补充：") for item in view.actions)
     assert any("范围限制" in item.action_zh for item in view.actions)
+
+
+def test_cross_check_difference_is_customer_risk_without_tax_evasion_claim():
+    view = build_report_view_v3(
+        _snapshot(), entity_name="示例公司", tax_cross_checks=difference_run()
+    )
+
+    risk = next(item for item in view.risks if item.finding_id == "FS-VAT-SALES-001")
+    assert "账套" in risk.observed_zh and "申报" in risk.observed_zh
+    assert "差异" in risk.observed_zh
+    assert "漏税" not in risk.observed_zh
+    assert "应补税" not in risk.can_conclude_zh
+
+
+def test_cross_check_not_performed_is_material_gap_not_match():
+    run = difference_run()
+    missing = replace(
+        run.results[1],
+        status=CrossCheckStatus.NOT_PERFORMED,
+        ledger_amount=None,
+        comparison_amount=None,
+        difference_amount=None,
+        difference_ratio=None,
+        source_refs=(),
+        reason_codes=("missing_income_statement_or_vat_sales",),
+        question=run.questions[0],
+    )
+    results = list(run.results)
+    results[1] = missing
+    run = replace(run, results=tuple(results))
+
+    view = build_report_view_v3(_snapshot(), entity_name="示例公司", tax_cross_checks=run)
+
+    assert any("资料不足" in item.impact_zh for item in view.materials)
+    assert not any(
+        "金额一致" in text
+        for text in view.appendix_executed_checks
+        if "FS-VAT-SALES-001" in text
+    )

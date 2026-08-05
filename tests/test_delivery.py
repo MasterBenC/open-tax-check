@@ -22,6 +22,8 @@ from open_tax_check.tax_models import (
     TaxCheckRequest,
     TaxFact,
 )
+from open_tax_check.tax_cross_checks import tax_cross_check_payload
+from test_tax_cross_checks import completed_run, difference_run
 
 
 @pytest.fixture(autouse=True)
@@ -131,6 +133,19 @@ def test_case_delivery_renders_bound_entity_and_approved_findings(tmp_path: Path
     assert (revision_dir / "税务健康检查报告.pdf").is_file()
 
 
+def test_case_delivery_renders_persisted_cross_check_difference(tmp_path: Path):
+    case = _case(tmp_path)
+    run = difference_run()
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run), ensure_ascii=False), encoding="utf-8"
+    )
+
+    result = build_case_delivery(case)
+    html = (case / result["revision_path"] / "report.html").read_text(encoding="utf-8")
+
+    assert run.results[1].title_zh in html
+
+
 def test_handoff_lists_only_existing_hashed_artifacts(tmp_path: Path):
     case = _case(tmp_path)
     build_case_delivery(case)
@@ -191,15 +206,7 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
         encoding="utf-8",
     )
     (case / "work/tax-cross-checks.json").write_text(
-        json.dumps({
-            "schema_version": "tax-cross-checks/v1",
-            "status": "completed",
-            "results": [],
-            "questions": [],
-            "source_manifest_sha256": "a" * 64,
-            "audit_events": [],
-            "blocking_issue_refs": [],
-        }),
+        json.dumps(tax_cross_check_payload(completed_run())),
         encoding="utf-8",
     )
     (case / "work/coverage_matrix.json").write_text(

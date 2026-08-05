@@ -85,6 +85,13 @@ def test_html_embeds_fonts_and_defines_stable_a4_print_layout():
     assert "watermark" not in html.casefold()
 
 
+def test_long_tables_are_chunked_with_repeated_headers():
+    html = render_report_html(_view())
+
+    assert html.count("已执行程序") >= 3
+    assert html.count('class="report-table-group"') >= 3
+
+
 def test_write_report_html_creates_utf8_document(tmp_path: Path):
     output = tmp_path / "nested" / "report.html"
 

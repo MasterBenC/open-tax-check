@@ -84,6 +84,7 @@ thead { display: table-header-group; }
 th, td { border: 1px solid #c7cdd2; padding: 2.2mm; vertical-align: top; overflow-wrap: anywhere; }
 th { background: #edf1f2; text-align: left; font-weight: 700; }
 tr, .risk-heading, .summary-block { break-inside: avoid; }
+.report-table-group { break-inside: avoid; margin-bottom: 4mm; }
 
 .risk-item { margin: 0 0 10mm; }
 .risk-heading { border-left: 3px solid #64727d; padding-left: 3mm; }

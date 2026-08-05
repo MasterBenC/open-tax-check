@@ -13,6 +13,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .tax_models import TaxCheckSnapshot, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
+from .tax_cross_checks import CrossCheckStatus, parse_tax_cross_check_payload
 
 
 WORKPAPER_SCHEMA_VERSION = "tax-workpaper/v1"
@@ -20,7 +21,7 @@ WORKPAPER_NAME = "税务健康检查工作底稿.xlsx"
 
 _SHEETS = (
     "项目概览", "资料清单", "抽取与映射", "数据质量", "账务勾稽", "财报勾稽", "申报勾稽",
-    "税费筛查", "正式计算", "客户问题", "证据索引", "规则版本", "报告选取", "运行记录",
+    "账税交叉核对", "税费筛查", "正式计算", "客户问题", "证据索引", "规则版本", "报告选取", "运行记录",
 )
 _HEADER_FILL = "1F4E78"
 _HEADER_FONT = "FFFFFF"
@@ -290,6 +291,50 @@ def _structured_reconciliation_rows(
     return [(label, "", "未提供")]
 
 
+def _tax_cross_check_rows(
+    case_audit: Mapping[str, object] | None,
+    delivery_revision: int | None,
+) -> list[tuple[object, ...]]:
+    payload = _audit_mapping(case_audit, "tax_cross_checks")
+    if payload is None:
+        return []
+    try:
+        run = parse_tax_cross_check_payload(payload)
+    except ValueError:
+        raise WorkpaperError("invalid_workpaper_case_audit") from None
+    status_zh = {
+        CrossCheckStatus.MATCHED: "金额一致",
+        CrossCheckStatus.WITHIN_TOLERANCE: "容差内",
+        CrossCheckStatus.DIFFERENCE_FOUND: "发现金额差异",
+        CrossCheckStatus.NOT_PERFORMED: "资料不足，未执行",
+    }
+    rows: list[tuple[object, ...]] = []
+    for result in run.results:
+        components = result.components or (None,)
+        for component in components:
+            ledger = component.ledger_amount if component is not None else result.ledger_amount
+            comparison = component.comparison_amount if component is not None else result.comparison_amount
+            difference = component.difference_amount if component is not None else result.difference_amount
+            ratio = component.difference_ratio if component is not None else result.difference_ratio
+            refs = component.source_refs if component is not None else result.source_refs
+            rows.append((
+                result.check_id,
+                component.component_id if component is not None else "整体",
+                "" if ledger is None else format(ledger, "f"),
+                "" if comparison is None else format(comparison, "f"),
+                "" if difference is None else format(difference, "f"),
+                "" if ratio is None else format(ratio, "f"),
+                format(result.absolute_tolerance, "f"),
+                format(result.relative_tolerance, "f"),
+                status_zh[result.status],
+                "；".join(f"{ref.source_id}:{ref.locator}" for ref in refs),
+                "；".join(result.audit_refs),
+                run.source_manifest_sha256,
+                "" if delivery_revision is None else delivery_revision,
+            ))
+    return rows
+
+
 def _build_workbook(
     snapshot: TaxCheckSnapshot,
     *,
@@ -393,6 +438,16 @@ def _build_workbook(
         workbook["申报勾稽"],
         ("检查项目", "文档或事实", "状态"),
         _structured_reconciliation_rows(case_audit, tax_checks=True),
+    )
+
+    _write_table(
+        workbook["账税交叉核对"],
+        (
+            "检查编号", "组成项目", "账套或报表金额", "申报或对比金额", "差异金额",
+            "差异比例", "绝对容差", "相对容差", "状态", "来源引用", "解释及审计引用",
+            "来源清单SHA-256", "交付修订号",
+        ),
+        _tax_cross_check_rows(case_audit, delivery_revision),
     )
 
     _write_table(
