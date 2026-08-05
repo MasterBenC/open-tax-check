@@ -2,7 +2,9 @@
 
 验证日期：2026-08-05
 
-验证提交：`main@f881f07`
+本地样本验证提交：`main@f881f07`
+
+远端矩阵验证提交：`main@8c723ec`
 
 报告结构版本：`tax-health-report/v3`
 
@@ -10,7 +12,7 @@
 
 正式客户报告固定为 `税务健康检查报告.pdf`。本轮在 Windows 11、Python 3.12.13、Playwright 1.62.0、Chromium 149.0.7827.55 环境生成四类真实 PDF，并用 pypdf 6.14.2、pypdfium2 5.12.1 和逐页联系表完成结构与视觉检查。
 
-本记录不把未执行的跨平台运行视为通过。Windows 已完成 Python 3.12.13 和 3.13 的真实 Chromium 验证；macOS、Linux 以及 Python 3.11 的结构测试和 Chromium smoke 由 CI 矩阵配置覆盖，但本地未实际执行，状态为待远端验证。
+Windows 已完成 Python 3.12.13 和 3.13 的本地真实 Chromium 验证。GitHub Actions 随后在 Windows、macOS、Linux 与 Python 3.11–3.13 的九组矩阵中完成 Chromium 安装、完整测试、虚构案例、构建、隔离 wheel 安装和发行校验；真实 OCR smoke 也已通过。
 
 ## Windows / Python 3.13 验证
 
@@ -41,6 +43,17 @@ Python 3.13 构建、隔离 wheel 安装和严格发行校验均通过：
 - sdist：`open_tax_check-1.1.0.tar.gz`，SHA-256 `5c52adf4804b5b5272821901e31b4aaa6bb6853976fde78f97b3858e7d6584e4`；
 - `validate_installed_wheel.py` 另建临时环境；安装模块来自该环境的 `site-packages`，报告结构版本为 `tax-health-report/v3`，状态为 `verified`；
 - `validate_release.py --strict` 返回 `release validation passed`。
+
+## 跨平台 CI 验证
+
+GitHub Actions 运行 [`30974537001`](https://github.com/MasterBenC/open-tax-check/actions/runs/30974537001) 验证提交 `8c723ec71cdb2a94c60406a7d914ae44f029ff20`，总状态为 `completed/success`。以下 10 个 job 均为 `success`：
+
+- `ocr-smoke`；
+- Ubuntu + Python 3.11、3.12、3.13；
+- Windows + Python 3.11、3.12、3.13；
+- macOS + Python 3.11、3.12、3.13。
+
+每个系统/Python job 均成功执行依赖安装、`python -m playwright install chromium`、完整 `pytest`、虚构案例、构建、隔离 wheel 安装验证和要求发行包的严格校验。该证据证明 CI 所选运行器和 Chromium 版本上的运行兼容性，不等于任意未来系统或浏览器版本均像素级一致。
 
 ## PDF 样本
 
@@ -101,6 +114,6 @@ python -m pytest tests/test_pdf_report.py::test_real_chromium_pdf_is_valid_and_c
 
 ## 证据边界
 
-- Playwright 1.62 对应的默认 Chromium 下载曾因 CDN 连接重置而未完成；本轮真实渲染使用已安装的 Playwright Chromium 1228 路径。该限制不影响本轮 Windows 样本结论，但默认浏览器安装仍需在干净环境和 CI 中继续验证。
-- macOS、Linux 和 Python 3.11 未在本机运行，不记录为通过。
+- Playwright 1.62 对应的默认 Chromium 下载曾在本机因 CDN 连接重置而未完成；本地真实渲染因此使用已安装的 Playwright Chromium 1228 路径。GitHub Actions 的九组矩阵均已成功执行默认 Chromium 安装。
+- macOS、Linux 和 Python 3.11 未在本机运行；其通过结论仅来自上述 GitHub Actions 远端证据。
 - 本记录验证固定 HTML/Chromium/PDF 交付路径，不证明任意浏览器版本的像素级完全一致。

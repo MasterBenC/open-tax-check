@@ -19,7 +19,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目�
 
 Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经结构化导入的资料仍标记为 `present_unparsed`。AI 智能体优先使用自身 OCR/视觉能力，本地离线 OCR 为可选后备；真实联网 provider 仍需宿主环境单独验证。
 
-当前 `main` 另含未发布的客户报告 v3：正式客户报告只提供固定版式中文 PDF，HTML、Markdown、工作底稿、机器快照和证据包仅作为内部审计产物，不提供 Word。v3 已在 Windows 与 Python 3.12、3.13 完成本地 Chromium、完整回归、构建和隔离 wheel 验证；Windows、macOS、Linux 与 Python 3.11–3.13 的远端 CI 验证仍 pending。公开路线不代表已经交付的能力，详见 [docs/roadmap.md](docs/roadmap.md)。
+当前 `main` 另含未发布的客户报告 v3：正式客户报告只提供固定版式中文 PDF，HTML、Markdown、工作底稿、机器快照和证据包仅作为内部审计产物，不提供 Word。v3 已在 Windows 与 Python 3.12、3.13 完成本地 Chromium、完整回归、构建和隔离 wheel 验证；Windows、macOS、Linux 与 Python 3.11–3.13 的远端 CI 验证已通过。公开路线不代表已经交付的能力，详见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 工作方式
 
@@ -220,7 +220,7 @@ python scripts/replay_host_integrations.py
 
 两个命令只读取 `tests/fixtures/provider-replays/` 和 `tests/fixtures/host-replays/` 中的虚构 JSON，输出机器可读状态；它们不证明真实第三方服务可用，也不上传任何资料。
 
-CI 已配置在 Python 3.11、3.12、3.13 矩阵中运行 `python scripts/validate_installed_wheel.py --dist dist`：脚本创建隔离环境、安装刚构建的 `wheel[excel,report]` 和 Chromium，从不含仓库 `src` 的临时目录运行 `--complete`，并核对 `open_tax_check` 来自该环境的 `site-packages`。未发布的客户报告 v3 尚未推送，因此这部分远端矩阵仍待执行；当前证据仅包括 Windows 上 Python 3.12、3.13 的本地验证。完整案例 runner 与虚构 fixture 是仓库验收驱动，按设计不放入 wheel；因此安装 wheel 的普通用户应使用 `opentaxcheck` 入口，只有仓库维护者运行上述验收脚本。
+CI 在 Python 3.11、3.12、3.13 矩阵中运行 `python scripts/validate_installed_wheel.py --dist dist`：脚本创建隔离环境、安装刚构建的 `wheel[excel,report]` 和 Chromium，从不含仓库 `src` 的临时目录运行 `--complete`，并核对 `open_tax_check` 来自该环境的 `site-packages`。客户报告 v3 已在 Windows、macOS、Linux 的完整矩阵通过该验证。完整案例 runner 与虚构 fixture 是仓库验收驱动，按设计不放入 wheel；因此安装 wheel 的普通用户应使用 `opentaxcheck` 入口，只有仓库维护者运行上述验收脚本。
 
 先运行 `pip install "open-tax-check[report]"`，再运行 `python -m playwright install chromium`。随后可用 `opentaxcheck tax-health-check --request request.json --output-dir output/` 生成正式报告。正式客户报告只提供中文 PDF，不提供 Word；HTML、工作底稿、机器快照和证据包属于内部审计产物。
 

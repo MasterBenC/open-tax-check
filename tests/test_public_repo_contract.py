@@ -10,7 +10,7 @@ ROADMAP_MILESTONES = (
     "4. 阶段 3：PDF、图片 OCR 与版本化税务规则包 — 本地 OCR、20 项全国筛查及每项至少一条受控正式计算路径已完成，优惠、复合计税、预征清算及其他特殊路径仍在进行",
     "5. 阶段 4：AI assist/deep 编排、证据验证与专业交付物 — 财务报表/纳税申报表合同、常见模板解析、跨文档勾稽、可恢复案件状态、宿主 Agent 中文补件、仅 PDF《税务健康检查报告》、可验证证据包、Excel 工作底稿和 `tax-delivery/v1` 统一交付快照已完成",
     "6. 阶段 5：联网企业数据适配、隐私加固与完整虚构案例 — 安全压缩包、provider 合同离线回放和完整虚构案例已完成；七宿主仅完成 host-neutral 合同回放及宿主专属目标布局/发现标记校验，真实宿主运行时验证仍 pending",
-    "7. 阶段 6：公开 v1 发布 — v1.0.0 与 v1.1.0 已发布并通过 Windows、macOS、Linux 与 Python 3.11–3.13 的远端 CI；未发布的客户报告 v3 待远端 CI 验证",
+    "7. 阶段 6：公开 v1 发布 — v1.0.0 与 v1.1.0 已发布；未发布的客户报告 v3 已通过 Windows、macOS、Linux 与 Python 3.11–3.13 的远端 CI",
 )
 LOCAL_OCR_SCOPE_SENTENCE = "AI 智能体优先使用自身 OCR/视觉能力，本地离线 OCR 为可选后备"
 
@@ -54,7 +54,7 @@ def assert_readme_phase_scope(test_case, text):
     test_case.assertIn("v1.0.0", scope)
     test_case.assertIn("Windows、macOS、Linux", scope)
     test_case.assertIn("未发布的客户报告 v3", scope)
-    test_case.assertIn("远端 CI 验证仍 pending", scope)
+    test_case.assertIn("远端 CI 验证已通过", scope)
     test_case.assertIn("`.xlsx`、`.xlsm`、`.xls`", scope)
     test_case.assertIn("CSV 和已确认映射的 Excel", scope)
     test_case.assertIn("confirm-mapping", scope)
@@ -129,7 +129,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn(LOCAL_OCR_SCOPE_SENTENCE, current_scope)
         self.assertIn("正式客户报告", current_scope)
         self.assertIn("未发布的客户报告 v3", current_scope)
-        self.assertIn("远端 CI 验证仍 pending", current_scope)
+        self.assertIn("远端 CI 验证已通过", current_scope)
         self.assertIn("公开路线不代表已经交付的能力", current_scope)
         self.assertIn("replay_external_providers.py", text)
         self.assertIn("replay_host_integrations.py", text)
