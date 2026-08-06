@@ -10,7 +10,7 @@ import os
 import shutil
 import stat
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -90,6 +90,30 @@ STATUS_PRIORITY = (
     "needs_sheet_selection",
     "partial_scope_ready",
 )
+_CROSS_CHECK_INPUT_BINDING_PREFIX = "cross-check-input-binding:"
+
+
+def _cross_check_input_binding_event(work_dir: Path) -> str:
+    journal_path = work_dir / "normalized_journal.jsonl"
+    journal_sha256 = (
+        hashlib.sha256(journal_path.read_bytes()).hexdigest()
+        if journal_path.is_file()
+        else None
+    )
+    structured_hashes: dict[str, str] = {}
+    structured_root = work_dir / "structured-documents"
+    if structured_root.is_dir():
+        for path in sorted(structured_root.rglob("*")):
+            if path.is_file():
+                relative = path.relative_to(work_dir).as_posix()
+                structured_hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    payload = {
+        "normalized_journal_sha256": journal_sha256,
+        "structured_document_sha256": structured_hashes,
+    }
+    return _CROSS_CHECK_INPUT_BINDING_PREFIX + json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1957,6 +1981,11 @@ def _complete_normalized_run(
         ),
         source_manifest_sha256,
     )
+    cross_check_run = replace(
+        cross_check_run,
+        audit_events=cross_check_run.audit_events
+        + (_cross_check_input_binding_event(context.work_dir),),
+    )
     if _read_bounded_file(
         manifest_path,
         STRUCTURED_DOCUMENT_INDEX_MAX_BYTES,
@@ -2356,6 +2385,11 @@ def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
             blocked_issue_refs=tuple(item["code"] for item in quality),
         ),
         source_manifest_sha256,
+    )
+    cross_check_run = replace(
+        cross_check_run,
+        audit_events=cross_check_run.audit_events
+        + (_cross_check_input_binding_event(context.work_dir),),
     )
     if manifest_bytes and _read_bounded_file(
         manifest_path,

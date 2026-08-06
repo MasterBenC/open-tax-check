@@ -52,25 +52,10 @@ _RESOLUTION_STATUSES = frozenset(
 )
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _DECIMAL_CONTEXT = Context(prec=28)
-_AI_IDENTITIES = frozenset(
-    {
-        "ai",
-        "agent",
-        "host_ai",
-        "model",
-        "openai",
-        "chatgpt",
-        "gpt",
-        "claude",
-        "deepseek",
-        "qwen",
-        "hermes",
-        "copilot",
-        "qoder",
-        "luna",
-        "glm",
-        "seed",
-    }
+_NON_HUMAN_IDENTITY_RE = re.compile(
+    r"(?:openai|chatgpt|deepseek|qwen|gemini|doubao|kimi|claude|hermes|"
+    r"workbuddy|coze|qodor|qoder|openclaw|copilot|luna|glm|gpt|seed|"
+    r"(?:^|[\s:_-])(?:ai|agent|host_ai|model)(?:$|[\s:_-]))"
 )
 
 
@@ -294,8 +279,8 @@ class CrossCheckExplanation:
         confirmer = _text(self.confirmed_by)
         if not confirmer.casefold().startswith("human:"):
             raise _invalid()
-        identity = confirmer.split(":", 1)[1].strip()
-        if not identity or any(token in _AI_IDENTITIES for token in re.split(r"[^a-z0-9_]+", identity.casefold())):
+        identity = unicodedata.normalize("NFKC", confirmer.split(":", 1)[1]).strip()
+        if not identity or _NON_HUMAN_IDENTITY_RE.search(identity.casefold()) is not None:
             raise _invalid()
         if (
             not _CJK_RE.search(_text(self.explanation_zh))
@@ -1091,7 +1076,7 @@ def rerun_tax_cross_check(
         None,
     )
     history_event = None
-    if previous is not None and (previous.audit_refs or previous.explanations):
+    if previous is not None:
         history_event = "cross-check-rerun-before:" + json.dumps(
             _json_value(previous), ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )

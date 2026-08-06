@@ -60,6 +60,7 @@ REPORT_NAME = "税务健康检查报告.md"
 HANDOFF_NAME = "税务健康检查交付说明.json"
 _INPUT_MANIFEST_LIMIT = 2 * 1024 * 1024
 _CROSS_CHECK_LIMIT = 4 * 1024 * 1024
+_CROSS_CHECK_INPUT_BINDING_PREFIX = "cross-check-input-binding:"
 _CROSS_CHECK_CONFIRMATION_FIELDS = frozenset(
     {
         "question_id",
@@ -581,6 +582,45 @@ def _cross_check_rerun_inputs(
     from .account_classification import load_active_account_classifications
     from .pipeline import load_case_structured_documents
     from .tax_cross_checks import CrossCheckContext
+
+    binding_events = tuple(
+        event[len(_CROSS_CHECK_INPUT_BINDING_PREFIX):]
+        for event in run.audit_events
+        if event.startswith(_CROSS_CHECK_INPUT_BINDING_PREFIX)
+    )
+    if len(binding_events) > 1:
+        raise ValueError("cross_check_rerun_inputs_invalid")
+    if binding_events:
+        try:
+            binding = json.loads(binding_events[0])
+        except (TypeError, ValueError):
+            raise ValueError("cross_check_rerun_inputs_invalid") from None
+        if not isinstance(binding, Mapping) or set(binding) != {
+            "normalized_journal_sha256", "structured_document_sha256"
+        } or not isinstance(binding["structured_document_sha256"], Mapping):
+            raise ValueError("cross_check_rerun_inputs_invalid")
+        expected_journal = binding["normalized_journal_sha256"]
+        journal_path = root / "work" / "normalized_journal.jsonl"
+        if expected_journal is not None:
+            if not isinstance(expected_journal, str) or not journal_path.is_file():
+                raise ValueError("cross_check_rerun_inputs_invalid")
+            journal_raw = resolve_safe_source(journal_path, root / "work").read_bytes()
+            if hashlib.sha256(journal_raw).hexdigest() != expected_journal:
+                raise ValueError("cross_check_rerun_inputs_invalid")
+        for relative, expected_digest in binding["structured_document_sha256"].items():
+            if not isinstance(relative, str) or not isinstance(expected_digest, str):
+                raise ValueError("cross_check_rerun_inputs_invalid")
+            try:
+                path = resolve_safe_source(root / "work" / relative, root / "work")
+                actual_digest = (
+                    hashlib.sha256(path.read_bytes()).hexdigest()
+                    if path.is_file()
+                    else None
+                )
+            except (OSError, ValueError):
+                raise ValueError("cross_check_rerun_inputs_invalid") from None
+            if actual_digest != expected_digest:
+                raise ValueError("cross_check_rerun_inputs_invalid")
 
     journal_path = root / "work" / "normalized_journal.jsonl"
     rows: tuple[Mapping[str, object], ...] = ()

@@ -206,6 +206,68 @@ class CaseOrchestrationTests(unittest.TestCase):
 
       self.assertEqual(cross_path.read_text(encoding="utf-8"), original)
 
+  def test_cross_check_confirmation_rejects_changed_original_rerun_inputs(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2025-01-01", "2025-12-31")
+      _bind_source(case_dir, source_id="source-1")
+      _write_cross_check_documents(case_dir)
+      journal = case_dir / "work/normalized_journal.jsonl"
+      journal.write_text('{"account_code":"6001"}\n', encoding="utf-8")
+      manifest_sha256 = hashlib.sha256(
+        (case_dir / "work/input_manifest.json").read_bytes()
+      ).hexdigest()
+      structured = {
+        path.relative_to(case_dir / "work").as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((case_dir / "work/structured-documents").rglob("*"))
+        if path.is_file()
+      }
+      binding = {
+        "normalized_journal_sha256": hashlib.sha256(journal.read_bytes()).hexdigest(),
+        "structured_document_sha256": structured,
+      }
+      run = __import__("dataclasses").replace(
+        difference_run(),
+        source_manifest_sha256=manifest_sha256,
+        audit_events=(
+          "cross-check-input-binding:" + json.dumps(binding, sort_keys=True, separators=(",", ":")),
+        ),
+      )
+      cross_path = case_dir / "work/tax-cross-checks.json"
+      original = json.dumps(tax_cross_check_payload(run), ensure_ascii=False)
+      cross_path.write_text(original, encoding="utf-8")
+      journal.write_text('{"account_code":"6002"}\n', encoding="utf-8")
+      (case_dir / "work/normalized_journal.sha256").write_text(
+        hashlib.sha256(journal.read_bytes()).hexdigest(), encoding="utf-8"
+      )
+      payload = {
+        "question_id": run.questions[0].question_id,
+        "check_id": run.questions[0].check_id,
+        "source_manifest_sha256": manifest_sha256,
+        "category": "timing_difference",
+        "explanation_zh": "该差异已经人工核对确认。",
+        "confirmed_by": "human:Chen Li",
+        "confirmed_at": "2026-08-05T10:00:00+08:00",
+        "evidence_refs": ["source-1"],
+        "bridge": [],
+      }
+
+      with self.assertRaisesRegex(ValueError, "cross_check_rerun_inputs_invalid"):
+        confirm_cross_check_explanation(case_dir, payload)
+
+      self.assertEqual(cross_path.read_text(encoding="utf-8"), original)
+      journal.write_text('{"account_code":"6001"}\n', encoding="utf-8")
+      (case_dir / "work/normalized_journal.sha256").write_text(
+        hashlib.sha256(journal.read_bytes()).hexdigest(), encoding="utf-8"
+      )
+      first_structured_path = case_dir / "work" / next(iter(structured))
+      first_structured_path.unlink()
+
+      with self.assertRaisesRegex(ValueError, "cross_check_rerun_inputs_invalid"):
+        confirm_cross_check_explanation(case_dir, payload)
+
+      self.assertEqual(cross_path.read_text(encoding="utf-8"), original)
+
   def test_pending_text_explanation_can_be_completed_only_with_consistent_bridge(self):
     with __import__("tempfile").TemporaryDirectory() as temp_dir:
       case_dir = __import__("pathlib").Path(temp_dir) / "case"

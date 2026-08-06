@@ -204,6 +204,10 @@ def test_compare_amounts_is_independent_of_ambient_decimal_precision():
         "human:DeepSeek",
         "human:Qwen",
         "human:Hermes Agent",
+        "human:GPT5",
+        "human:Claude4.8",
+        "human:DeepSeekV4",
+        "human:ＧＰＴ５",
     ),
 )
 def test_cross_check_explanation_requires_explicit_non_ai_human_attestation(
@@ -262,6 +266,44 @@ def test_rerun_preserves_prior_explanation_history(monkeypatch):
     assert target.audit_refs == pending.results[1].audit_refs
     assert target.resolution_status == "explained_pending_verification"
     assert any(event.startswith("cross-check-rerun-before:") for event in rerun.audit_events)
+
+
+def test_rerun_always_preserves_original_result_without_prior_explanation(monkeypatch):
+    import open_tax_check.tax_cross_checks as cross_checks
+
+    original = difference_run()
+    fresh = replace(
+        original.results[1],
+        status=CrossCheckStatus.NOT_PERFORMED,
+        ledger_amount=None,
+        comparison_amount=None,
+        difference_amount=None,
+        difference_ratio=None,
+        source_refs=(),
+        reason_codes=("missing_source",),
+        question=question(CHECK_ORDER[1]),
+    )
+    monkeypatch.setattr(cross_checks, "_execute_cross_check", lambda *args: fresh)
+
+    rerun = rerun_tax_cross_check(
+        original,
+        CHECK_ORDER[1],
+        (),
+        None,
+        (),
+        (),
+        CrossCheckContext("2025-01-01", "2025-12-31", "虚构科技有限公司", "CNY"),
+        original.source_manifest_sha256,
+    )
+
+    history = [
+        event for event in rerun.audit_events
+        if event.startswith("cross-check-rerun-before:")
+    ]
+    assert len(history) == 1
+    prior = json.loads(history[0].split(":", 1)[1])
+    assert prior["status"] == "difference_found"
+    assert prior["difference_amount"] == "100.00"
 
 
 def test_rerun_preserves_closed_explanation_without_reopening_question(monkeypatch):
