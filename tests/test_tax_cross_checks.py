@@ -208,6 +208,9 @@ def test_compare_amounts_is_independent_of_ambient_decimal_precision():
         "human:Claude4.8",
         "human:DeepSeekV4",
         "human:ＧＰＴ５",
+        "human:通义千问",
+        "human:Clаude4",
+        "human:G P T 5",
     ),
 )
 def test_cross_check_explanation_requires_explicit_non_ai_human_attestation(

@@ -17,6 +17,7 @@ from typing import Any
 from .account_classification import (
     AccountClassificationReview,
     aggregate_classified_amount,
+    is_human_confirmation_identity,
 )
 from .rules import business_entertainment_adjustment
 from .structured_documents import FinancialStatement, TaxReturn
@@ -52,13 +53,6 @@ _RESOLUTION_STATUSES = frozenset(
 )
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _DECIMAL_CONTEXT = Context(prec=28)
-_NON_HUMAN_IDENTITY_RE = re.compile(
-    r"(?:openai|chatgpt|deepseek|qwen|gemini|doubao|kimi|claude|hermes|"
-    r"workbuddy|coze|qodor|qoder|openclaw|copilot|luna|glm|gpt|seed|"
-    r"(?:^|[\s:_-])(?:ai|agent|host_ai|model)(?:$|[\s:_-]))"
-)
-
-
 class CrossCheckStatus(StrEnum):
     MATCHED = "matched"
     WITHIN_TOLERANCE = "within_tolerance"
@@ -277,10 +271,7 @@ class CrossCheckExplanation:
         if self.check_id not in CHECK_ORDER or self.category not in _EXPLANATION_CATEGORIES:
             raise _invalid()
         confirmer = _text(self.confirmed_by)
-        if not confirmer.casefold().startswith("human:"):
-            raise _invalid()
-        identity = unicodedata.normalize("NFKC", confirmer.split(":", 1)[1]).strip()
-        if not identity or _NON_HUMAN_IDENTITY_RE.search(identity.casefold()) is not None:
+        if not is_human_confirmation_identity(confirmer):
             raise _invalid()
         if (
             not _CJK_RE.search(_text(self.explanation_zh))
@@ -411,6 +402,30 @@ class CrossCheckResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CrossCheckInputBinding:
+    normalized_journal_sha256: str | None
+    structured_document_sha256: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        if (
+            self.normalized_journal_sha256 is not None
+            and _SHA256_RE.fullmatch(self.normalized_journal_sha256) is None
+        ) or any(
+            not isinstance(path, str)
+            or not (
+                path == "structured-document-index.json"
+                or path.startswith("structured-documents/")
+            )
+            or _SHA256_RE.fullmatch(digest) is None
+            for path, digest in self.structured_document_sha256
+        ) or tuple(sorted(self.structured_document_sha256)) != self.structured_document_sha256:
+            raise _invalid()
+        paths = tuple(path for path, _ in self.structured_document_sha256)
+        if len(paths) != len(set(paths)):
+            raise _invalid()
+
+
+@dataclass(frozen=True, slots=True)
 class TaxCrossCheckRun:
     schema_version: str
     status: str
@@ -419,6 +434,7 @@ class TaxCrossCheckRun:
     source_manifest_sha256: str
     audit_events: tuple[str, ...]
     blocking_issue_refs: tuple[str, ...]
+    input_binding: CrossCheckInputBinding | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -432,6 +448,10 @@ class TaxCrossCheckRun:
             or any(
                 not isinstance(item, str) or not item.strip()
                 for item in self.blocking_issue_refs
+            )
+            or (
+                self.input_binding is not None
+                and not isinstance(self.input_binding, CrossCheckInputBinding)
             )
         ):
             raise _invalid()
@@ -1368,10 +1388,13 @@ def _result_from_payload(value: object) -> CrossCheckResult:
 def parse_tax_cross_check_payload(payload: object) -> TaxCrossCheckRun:
     """Parse a persisted run back into the strict immutable contract."""
 
-    if not isinstance(payload, Mapping) or set(payload) != {
+    if not isinstance(payload, Mapping) or set(payload) not in ({
         "schema_version", "status", "results", "questions", "source_manifest_sha256",
         "audit_events", "blocking_issue_refs"
-    }:
+    }, {
+        "schema_version", "status", "results", "questions", "source_manifest_sha256",
+        "audit_events", "blocking_issue_refs", "input_binding"
+    }):
         raise _invalid()
     results = payload.get("results")
     questions = payload.get("questions")
@@ -1379,6 +1402,24 @@ def parse_tax_cross_check_payload(payload: object) -> TaxCrossCheckRun:
     issues = payload.get("blocking_issue_refs")
     if any(not isinstance(item, list) for item in (results, questions, events, issues)):
         raise _invalid()
+    binding_payload = payload.get("input_binding")
+    if binding_payload is not None and (
+        not isinstance(binding_payload, Mapping)
+        or set(binding_payload) != {
+            "normalized_journal_sha256", "structured_document_sha256"
+        }
+        or not isinstance(binding_payload["structured_document_sha256"], list)
+    ):
+        raise _invalid()
+    binding = None
+    if binding_payload is not None:
+        pairs = binding_payload["structured_document_sha256"]
+        if any(not isinstance(item, list) or len(item) != 2 for item in pairs):
+            raise _invalid()
+        binding = CrossCheckInputBinding(
+            binding_payload["normalized_journal_sha256"],
+            tuple((item[0], item[1]) for item in pairs),
+        )
     return TaxCrossCheckRun(
         schema_version=payload.get("schema_version"),
         status=payload.get("status"),
@@ -1387,6 +1428,7 @@ def parse_tax_cross_check_payload(payload: object) -> TaxCrossCheckRun:
         source_manifest_sha256=payload.get("source_manifest_sha256"),
         audit_events=tuple(events),
         blocking_issue_refs=tuple(issues),
+        input_binding=binding,
     )
 
 
@@ -1398,6 +1440,7 @@ __all__ = [
     "CrossCheckComponent",
     "CrossCheckExplanation",
     "CrossCheckContext",
+    "CrossCheckInputBinding",
     "CrossCheckQuestion",
     "CrossCheckResult",
     "CrossCheckSourceRef",

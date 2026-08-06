@@ -68,6 +68,7 @@ from .structured_reconciliation import (
 )
 from .tax_cross_checks import (
     CrossCheckContext,
+    CrossCheckInputBinding,
     run_tax_cross_checks,
     tax_cross_check_payload,
 )
@@ -90,29 +91,46 @@ STATUS_PRIORITY = (
     "needs_sheet_selection",
     "partial_scope_ready",
 )
-_CROSS_CHECK_INPUT_BINDING_PREFIX = "cross-check-input-binding:"
-
-
-def _cross_check_input_binding_event(work_dir: Path) -> str:
+def _cross_check_input_binding(work_dir: Path) -> CrossCheckInputBinding:
     journal_path = work_dir / "normalized_journal.jsonl"
-    journal_sha256 = (
-        hashlib.sha256(journal_path.read_bytes()).hexdigest()
-        if journal_path.is_file()
-        else None
-    )
+    journal_sha256 = None
+    if journal_path.exists():
+        journal_raw = _read_bounded_file(
+            resolve_safe_source(journal_path, work_dir), 4 * 1024 * 1024
+        )
+        journal_sha256 = hashlib.sha256(journal_raw).hexdigest()
     structured_hashes: dict[str, str] = {}
     structured_root = work_dir / "structured-documents"
-    if structured_root.is_dir():
-        for path in sorted(structured_root.rglob("*")):
-            if path.is_file():
-                relative = path.relative_to(work_dir).as_posix()
-                structured_hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-    payload = {
-        "normalized_journal_sha256": journal_sha256,
-        "structured_document_sha256": structured_hashes,
-    }
-    return _CROSS_CHECK_INPUT_BINDING_PREFIX + json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    index_path = work_dir / STRUCTURED_DOCUMENT_INDEX_NAME
+    if index_path.exists():
+        index_raw = _read_bounded_file(
+            resolve_safe_source(index_path, work_dir),
+            STRUCTURED_DOCUMENT_INDEX_MAX_BYTES,
+        )
+        try:
+            index = json.loads(index_raw.decode("utf-8"))
+            documents = index["documents"]
+        except (KeyError, TypeError, UnicodeError, json.JSONDecodeError):
+            raise ValueError("structured_document_index_invalid") from None
+        if not isinstance(documents, list) or len(documents) > STRUCTURED_DOCUMENT_INDEX_MAX_DOCUMENTS:
+            raise ValueError("structured_document_index_invalid")
+        structured_hashes[STRUCTURED_DOCUMENT_INDEX_NAME] = hashlib.sha256(
+            index_raw
+        ).hexdigest()
+        for item in documents:
+            relative = item.get("relative_path") if isinstance(item, dict) else None
+            if not isinstance(relative, str):
+                raise ValueError("structured_document_index_invalid")
+            path = resolve_safe_source(structured_root / relative, structured_root)
+            raw = _read_bounded_file(path, STRUCTURED_DOCUMENT_MAX_BYTES)
+            structured_hashes[f"structured-documents/{relative}"] = hashlib.sha256(
+                raw
+            ).hexdigest()
+    elif structured_root.exists():
+        raise ValueError("structured_document_index_invalid")
+    return CrossCheckInputBinding(
+        journal_sha256,
+        tuple(sorted(structured_hashes.items())),
     )
 
 
@@ -1983,8 +2001,7 @@ def _complete_normalized_run(
     )
     cross_check_run = replace(
         cross_check_run,
-        audit_events=cross_check_run.audit_events
-        + (_cross_check_input_binding_event(context.work_dir),),
+        input_binding=_cross_check_input_binding(context.work_dir),
     )
     if _read_bounded_file(
         manifest_path,
@@ -2388,8 +2405,7 @@ def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
     )
     cross_check_run = replace(
         cross_check_run,
-        audit_events=cross_check_run.audit_events
-        + (_cross_check_input_binding_event(context.work_dir),),
+        input_binding=_cross_check_input_binding(context.work_dir),
     )
     if manifest_bytes and _read_bounded_file(
         manifest_path,

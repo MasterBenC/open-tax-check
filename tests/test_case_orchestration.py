@@ -19,6 +19,7 @@ from open_tax_check.case_orchestration import (
 )
 from open_tax_check.tax_cross_checks import (
     CrossCheckContext,
+    CrossCheckInputBinding,
     CrossCheckStatus,
     run_tax_cross_checks,
     tax_cross_check_payload,
@@ -119,6 +120,14 @@ def _write_cross_check_documents(case_dir, *, quarterly_sales="275.00"):
         persist_tax_return(case_dir, source_id, tax_return_to_dict(vat))
 
 
+def _with_input_binding(case_dir, run):
+    from open_tax_check.pipeline import _cross_check_input_binding
+
+    return __import__("dataclasses").replace(
+        run, input_binding=_cross_check_input_binding(case_dir / "work")
+    )
+
+
 class CaseOrchestrationTests(unittest.TestCase):
   def test_cross_check_confirmation_is_incremental_append_only_and_idempotent(self):
     with __import__("tempfile").TemporaryDirectory() as temp_dir:
@@ -141,6 +150,7 @@ class CaseOrchestrationTests(unittest.TestCase):
       run = __import__("dataclasses").replace(
         difference_run(), source_manifest_sha256=manifest_sha256
       )
+      run = _with_input_binding(case_dir, run)
       (case_dir / "work" / "tax-cross-checks.json").write_text(
         json.dumps(tax_cross_check_payload(run), ensure_ascii=False), encoding="utf-8"
       )
@@ -222,17 +232,11 @@ class CaseOrchestrationTests(unittest.TestCase):
         for path in sorted((case_dir / "work/structured-documents").rglob("*"))
         if path.is_file()
       }
-      binding = {
-        "normalized_journal_sha256": hashlib.sha256(journal.read_bytes()).hexdigest(),
-        "structured_document_sha256": structured,
-      }
       run = __import__("dataclasses").replace(
         difference_run(),
         source_manifest_sha256=manifest_sha256,
-        audit_events=(
-          "cross-check-input-binding:" + json.dumps(binding, sort_keys=True, separators=(",", ":")),
-        ),
       )
+      run = _with_input_binding(case_dir, run)
       cross_path = case_dir / "work/tax-cross-checks.json"
       original = json.dumps(tax_cross_check_payload(run), ensure_ascii=False)
       cross_path.write_text(original, encoding="utf-8")
@@ -268,6 +272,71 @@ class CaseOrchestrationTests(unittest.TestCase):
 
       self.assertEqual(cross_path.read_text(encoding="utf-8"), original)
 
+  def test_cross_check_confirmation_requires_input_binding_and_preserves_file(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2025-01-01", "2025-12-31")
+      _bind_source(case_dir, source_id="source-1")
+      manifest_sha256 = hashlib.sha256(
+        (case_dir / "work/input_manifest.json").read_bytes()
+      ).hexdigest()
+      run = __import__("dataclasses").replace(
+        difference_run(), source_manifest_sha256=manifest_sha256
+      )
+      cross_path = case_dir / "work/tax-cross-checks.json"
+      original = json.dumps(tax_cross_check_payload(run), ensure_ascii=False)
+      cross_path.write_text(original, encoding="utf-8")
+      payload = {
+        "question_id": run.questions[0].question_id,
+        "check_id": run.questions[0].check_id,
+        "source_manifest_sha256": manifest_sha256,
+        "category": "timing_difference",
+        "explanation_zh": "该差异已经人工核对确认。",
+        "confirmed_by": "human:Chen Li",
+        "confirmed_at": "2026-08-05T10:00:00+08:00",
+        "evidence_refs": ["source-1"],
+        "bridge": [],
+      }
+
+      with self.assertRaisesRegex(ValueError, "cross_check_rerun_inputs_invalid"):
+        confirm_cross_check_explanation(case_dir, payload)
+
+      self.assertEqual(cross_path.read_text(encoding="utf-8"), original)
+
+  def test_cross_check_confirmation_rejects_journal_added_after_absent_binding(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2025-01-01", "2025-12-31")
+      _bind_source(case_dir, source_id="source-1")
+      manifest_sha256 = hashlib.sha256(
+        (case_dir / "work/input_manifest.json").read_bytes()
+      ).hexdigest()
+      run = __import__("dataclasses").replace(
+        difference_run(),
+        source_manifest_sha256=manifest_sha256,
+        input_binding=CrossCheckInputBinding(None, ()),
+      )
+      cross_path = case_dir / "work/tax-cross-checks.json"
+      original = json.dumps(tax_cross_check_payload(run), ensure_ascii=False)
+      cross_path.write_text(original, encoding="utf-8")
+      (case_dir / "work/normalized_journal.jsonl").write_text("{}\n", encoding="utf-8")
+      payload = {
+        "question_id": run.questions[0].question_id,
+        "check_id": run.questions[0].check_id,
+        "source_manifest_sha256": manifest_sha256,
+        "category": "timing_difference",
+        "explanation_zh": "该差异已经人工核对确认。",
+        "confirmed_by": "human:Chen Li",
+        "confirmed_at": "2026-08-05T10:00:00+08:00",
+        "evidence_refs": ["source-1"],
+        "bridge": [],
+      }
+
+      with self.assertRaisesRegex(ValueError, "cross_check_rerun_inputs_invalid"):
+        confirm_cross_check_explanation(case_dir, payload)
+
+      self.assertEqual(cross_path.read_text(encoding="utf-8"), original)
+
   def test_pending_text_explanation_can_be_completed_only_with_consistent_bridge(self):
     with __import__("tempfile").TemporaryDirectory() as temp_dir:
       case_dir = __import__("pathlib").Path(temp_dir) / "case"
@@ -280,6 +349,7 @@ class CaseOrchestrationTests(unittest.TestCase):
       run = __import__("dataclasses").replace(
         difference_run(), source_manifest_sha256=manifest_sha256
       )
+      run = _with_input_binding(case_dir, run)
       (case_dir / "work/tax-cross-checks.json").write_text(
         json.dumps(tax_cross_check_payload(run)), encoding="utf-8"
       )
@@ -394,10 +464,11 @@ class CaseOrchestrationTests(unittest.TestCase):
       target_question = next(
         item for item in run.questions if item.check_id == "FS-VAT-SALES-001"
       )
+      _write_cross_check_documents(case_dir, quarterly_sales="250.00")
+      run = _with_input_binding(case_dir, run)
       (case_dir / "work/tax-cross-checks.json").write_text(
         json.dumps(tax_cross_check_payload(run)), encoding="utf-8"
       )
-      _write_cross_check_documents(case_dir, quarterly_sales="250.00")
 
       revised = confirm_cross_check_explanation(
         case_dir,

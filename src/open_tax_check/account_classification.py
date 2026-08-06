@@ -49,6 +49,13 @@ _NON_HUMAN_REVIEWER_RE = re.compile(
     r"workbuddy|coze|qodor|openclaw|glm|gpt|"
     r"(?:^|[\s:_-])(?:ai|agent|host_ai|model)(?:$|[\s:_-]))"
 )
+_NON_HUMAN_COLLAPSED_MARKERS = (
+    "ai", "agent", "model", "openai", "chatgpt", "gpt", "claude",
+    "deepseek", "qwen", "gemini", "doubao", "kimi", "hermes", "glm",
+    "seed", "copilot", "workbuddy", "coze", "qodor", "qoder", "openclaw",
+    "通义千问", "千问", "豆包", "智谱", "月之暗面", "文心", "混元",
+)
+_CYRILLIC_RE = re.compile(r"[\u0400-\u052f]")
 _COORDINATE_RE = re.compile(r"^([A-Z]{1,3})([1-9][0-9]*)$")
 _LINEAGE_FIELDS = frozenset(
     {
@@ -113,14 +120,21 @@ def _valid_confirmation_timestamp(value: object) -> bool:
     return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
-def _valid_human_reviewer(value: object) -> bool:
+def is_human_confirmation_identity(value: object) -> bool:
     if not isinstance(value, str):
         return False
-    reviewer = value.strip()
+    reviewer = unicodedata.normalize("NFKC", value).strip()
     if not reviewer.casefold().startswith("human:"):
         return False
     identity = reviewer.split(":", 1)[1].strip()
-    return bool(identity) and _NON_HUMAN_REVIEWER_RE.search(identity.casefold()) is None
+    folded = identity.casefold()
+    collapsed = re.sub(r"[^a-z0-9\u3400-\u9fff]+", "", folded)
+    return (
+        bool(identity)
+        and _CYRILLIC_RE.search(identity) is None
+        and _NON_HUMAN_REVIEWER_RE.search(folded) is None
+        and not any(marker in collapsed for marker in _NON_HUMAN_COLLAPSED_MARKERS)
+    )
 
 
 def parse_account_classification_review(payload: dict) -> AccountClassificationReview:
@@ -132,7 +146,7 @@ def parse_account_classification_review(payload: dict) -> AccountClassificationR
         or payload.get("schema_version") != ACCOUNT_CLASSIFICATION_SCHEMA_VERSION
         or not _valid_hash(payload.get("source_manifest_sha256"))
         or not _valid_hash(payload.get("mapping_fingerprint"))
-        or not _valid_human_reviewer(payload.get("reviewer"))
+        or not is_human_confirmation_identity(payload.get("reviewer"))
         or not _valid_confirmation_timestamp(payload.get("confirmed_at"))
         or not isinstance(payload.get("classifications"), list)
     ):
