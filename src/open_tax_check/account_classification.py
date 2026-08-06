@@ -50,7 +50,7 @@ _NON_HUMAN_REVIEWER_RE = re.compile(
     r"(?:^|[\s:_-])(?:ai|agent|host_ai|model)(?:$|[\s:_-]))"
 )
 _NON_HUMAN_COLLAPSED_MARKERS = (
-    "ai", "agent", "model", "openai", "chatgpt", "gpt", "claude",
+    "agent", "model", "openai", "chatgpt", "gpt", "claude",
     "deepseek", "qwen", "gemini", "doubao", "kimi", "hermes", "glm",
     "seed", "copilot", "workbuddy", "coze", "qodor", "qoder", "openclaw",
     "通义千问", "千问", "豆包", "智谱", "月之暗面", "文心", "混元",

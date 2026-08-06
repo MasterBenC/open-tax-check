@@ -670,7 +670,7 @@ def confirm_cross_check_explanation(
     root = _case_dir(case_dir)
     if not isinstance(payload, dict) or set(payload) != _CROSS_CHECK_CONFIRMATION_FIELDS:
         raise ValueError("invalid_cross_check_confirmation")
-    lock_path = root / "work" / ".cross-check-confirm.lock"
+    lock_path = root / ".cross-check-case.lock"
     try:
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
@@ -688,6 +688,8 @@ def confirm_cross_check_explanation(
             root / "work" / "input_manifest.json", root / "work"
         )
         manifest_raw = manifest_path.read_bytes()
+        state_path = root / "state.json"
+        state_raw = state_path.read_bytes()
         manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
         if (
             payload.get("source_manifest_sha256") != manifest_sha256
@@ -757,6 +759,13 @@ def confirm_cross_check_explanation(
                 if target.status.value == "difference_found"
                 else rerun
             )
+            if (
+                _cross_check_rerun_inputs(root, run, payload["check_id"]).input_binding
+                != run.input_binding
+                or manifest_path.read_bytes() != manifest_raw
+                or state_path.read_bytes() != state_raw
+            ):
+                raise ValueError("cross_check_rerun_inputs_invalid")
         except ValueError as error:
             if str(error) in {
                 "unverified_cross_check_evidence",

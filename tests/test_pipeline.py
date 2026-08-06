@@ -57,6 +57,18 @@ class PipelineTests(unittest.TestCase):
         args = build_parser().parse_args(["run", "--case", "case-a", "--ai-mode", "deep"])
         self.assertEqual(args.ai_mode, "deep")
 
+    def test_run_rejects_active_cross_check_case_lock_without_removing_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "case-a"
+            init_case(case_dir, "虚构企业", "2025-01-01", "2025-12-31")
+            lock_path = case_dir / ".cross-check-case.lock"
+            lock_path.write_text("confirmation", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "case_processing_locked"):
+                pipeline.run_case(case_dir, "off")
+
+            self.assertEqual(lock_path.read_text(encoding="utf-8"), "confirmation")
+
     def test_run_creates_deterministic_findings_and_resumable_state(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = Path(temp_dir) / "case-a"

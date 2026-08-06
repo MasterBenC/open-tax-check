@@ -227,6 +227,20 @@ def test_cross_check_explanation_requires_explicit_non_ai_human_attestation(
         )
 
 
+@pytest.mark.parametrize("confirmed_by", ("human:Kai Wang", "human:Mai Li", "human:Bai Ning"))
+def test_cross_check_explanation_accepts_common_human_names(confirmed_by):
+    value = CrossCheckExplanation(
+        check_id=CHECK_ORDER[1],
+        category="timing_difference",
+        explanation_zh="该差异已经人工复核确认。",
+        confirmed_by=confirmed_by,
+        confirmed_at="2026-08-05T10:00:00+08:00",
+        evidence_refs=("source-1",),
+    )
+
+    assert value.confirmed_by == confirmed_by
+
+
 def test_text_only_explanation_cannot_close_difference():
     updated = apply_cross_check_explanation(
         difference_run(), explanation(), bridge=(), verified_evidence_refs=("source-1",)

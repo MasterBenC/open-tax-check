@@ -2438,8 +2438,14 @@ def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
 
 
 def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
-    context = _start_case_run(case_dir, ai_mode)
+    lock_path = Path(case_dir) / ".cross-check-case.lock"
     try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise ValueError("case_processing_locked") from None
+    os.close(lock_fd)
+    try:
+        context = _start_case_run(case_dir, ai_mode)
         state = load_case_state(case_dir)
         has_excel = any(
             path.is_file()
@@ -2485,3 +2491,5 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
             if cause is None:
                 raise
             raise cause
+    finally:
+        lock_path.unlink(missing_ok=True)
