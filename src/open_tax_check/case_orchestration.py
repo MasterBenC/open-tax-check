@@ -671,10 +671,12 @@ def confirm_cross_check_explanation(
     if not isinstance(payload, dict) or set(payload) != _CROSS_CHECK_CONFIRMATION_FIELDS:
         raise ValueError("invalid_cross_check_confirmation")
     lock_path = root / ".cross-check-case.lock"
+    lock_token = os.urandom(16).hex()
     try:
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         raise ValueError("cross_check_confirmation_locked") from None
+    os.write(lock_fd, lock_token.encode("ascii"))
     os.close(lock_fd)
     try:
         cross_path = resolve_safe_source(
@@ -832,8 +834,9 @@ def confirm_cross_check_explanation(
         raise ValueError("invalid_cross_check_confirmation") from error
     finally:
         try:
-            lock_path.unlink()
-        except FileNotFoundError:
+            if lock_path.read_text(encoding="ascii") == lock_token:
+                lock_path.unlink(missing_ok=True)
+        except OSError:
             pass
 
 

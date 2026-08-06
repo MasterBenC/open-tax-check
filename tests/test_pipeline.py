@@ -69,6 +69,19 @@ class PipelineTests(unittest.TestCase):
 
             self.assertEqual(lock_path.read_text(encoding="utf-8"), "confirmation")
 
+    def test_run_preserves_startup_error_and_releases_owned_case_lock(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            case_dir = Path(temp_dir) / "case-a"
+            init_case(case_dir, "虚构企业", "2025-01-01", "2025-12-31")
+
+            with patch.object(
+                pipeline, "_start_case_run", side_effect=ValueError("startup_failed")
+            ):
+                with self.assertRaisesRegex(ValueError, "startup_failed"):
+                    pipeline.run_case(case_dir, "off")
+
+            self.assertFalse((case_dir / ".cross-check-case.lock").exists())
+
     def test_run_creates_deterministic_findings_and_resumable_state(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             case_dir = Path(temp_dir) / "case-a"

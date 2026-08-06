@@ -2001,7 +2001,11 @@ def _complete_normalized_run(
     )
     cross_check_run = replace(
         cross_check_run,
-        input_binding=_cross_check_input_binding(context.work_dir),
+        input_binding=(
+            _cross_check_input_binding(context.work_dir)
+            if cross_check_run.status == "completed"
+            else None
+        ),
     )
     if _read_bounded_file(
         manifest_path,
@@ -2405,7 +2409,11 @@ def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
     )
     cross_check_run = replace(
         cross_check_run,
-        input_binding=_cross_check_input_binding(context.work_dir),
+        input_binding=(
+            _cross_check_input_binding(context.work_dir)
+            if cross_check_run.status == "completed"
+            else None
+        ),
     )
     if manifest_bytes and _read_bounded_file(
         manifest_path,
@@ -2439,11 +2447,14 @@ def _run_structured_case(context: _CaseRun) -> tuple[int, dict]:
 
 def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
     lock_path = Path(case_dir) / ".cross-check-case.lock"
+    lock_token = os.urandom(16).hex()
     try:
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         raise ValueError("case_processing_locked") from None
+    os.write(lock_fd, lock_token.encode("ascii"))
     os.close(lock_fd)
+    context = None
     try:
         context = _start_case_run(case_dir, ai_mode)
         state = load_case_state(case_dir)
@@ -2467,6 +2478,8 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
             raise
         raise cause
     except Exception as error:
+        if context is None:
+            raise
         error_type = _safe_error_type(error)
         _write_json(
             context.work_dir / "processing_error.json",
@@ -2492,4 +2505,8 @@ def run_case(case_dir: Path, ai_mode: str) -> tuple[int, dict]:
                 raise
             raise cause
     finally:
-        lock_path.unlink(missing_ok=True)
+        try:
+            if lock_path.read_text(encoding="ascii") == lock_token:
+                lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
