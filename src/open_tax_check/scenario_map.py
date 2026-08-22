@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Iterable
 
 from .tax_registry import TAX_DEFINITIONS
@@ -10,12 +11,20 @@ from .tax_registry import TAX_DEFINITIONS
 
 SCENARIO_CATALOG_SCHEMA_VERSION = "tax-scenario-catalog/v1"
 _CAPABILITIES = frozenset({"deterministic", "question_candidate"})
+_CHINESE_RE = re.compile(r"[\u3400-\u9fff]")
 
 
 def _require_text(value: object, code: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(code)
     return value
+
+
+def _require_chinese_text(value: object, code: str) -> str:
+    text = _require_text(value, code)
+    if _CHINESE_RE.search(text) is None:
+        raise ValueError(code)
+    return text
 
 
 def _require_text_items(values: Iterable[object], code: str) -> tuple[str, ...]:
@@ -26,6 +35,13 @@ def _require_text_items(values: Iterable[object], code: str) -> tuple[str, ...]:
     except TypeError as error:
         raise ValueError(code) from error
     if any(not isinstance(item, str) or not item.strip() for item in items):
+        raise ValueError(code)
+    return items
+
+
+def _require_chinese_items(values: Iterable[object], code: str) -> tuple[str, ...]:
+    items = _require_text_items(values, code)
+    if any(_CHINESE_RE.search(item) is None for item in items):
         raise ValueError(code)
     return items
 
@@ -43,8 +59,8 @@ class ScenarioDefinition:
 
     def __post_init__(self) -> None:
         _require_text(self.scenario_id, "invalid_scenario_id")
-        _require_text(self.name_zh, "invalid_scenario_name")
-        _require_text(self.description_zh, "invalid_scenario_description")
+        _require_chinese_text(self.name_zh, "invalid_scenario_name")
+        _require_chinese_text(self.description_zh, "invalid_scenario_description")
         object.__setattr__(self, "tax_ids", _require_text_items(self.tax_ids, "invalid_tax_ids"))
         object.__setattr__(self, "check_ids", _require_text_items(self.check_ids, "invalid_check_ids"))
         object.__setattr__(
@@ -55,7 +71,7 @@ class ScenarioDefinition:
         object.__setattr__(
             self,
             "material_items_zh",
-            _require_text_items(self.material_items_zh, "invalid_material_items"),
+            _require_chinese_items(self.material_items_zh, "invalid_material_items"),
         )
         if self.capability not in _CAPABILITIES:
             raise ValueError("invalid_scenario_capability")
@@ -94,8 +110,7 @@ _SCENARIO_CATALOG = (
         "成本与费用",
         "围绕成本费用归集、税前扣除及纳税调整识别账税差异和证据不足风险。",
         (
-            "individual_income_tax", "resource_tax", "environmental_protection_tax",
-            "customs_duty", "stamp_tax",
+            "resource_tax", "environmental_protection_tax",
         ),
         ("BOOK-CIT-BE-001",),
         ("cost_expense_deduction", "business_entertainment", "tax_adjustment"),
@@ -120,7 +135,7 @@ _SCENARIO_CATALOG = (
         "contracts_and_special_transactions",
         "合同与特殊交易",
         "围绕重大合同、跨境及特殊交易识别印花税、关税和交易环节税费适用风险。",
-        ("tobacco_tax",),
+        ("tobacco_tax", "customs_duty", "stamp_tax"),
         (),
         ("major_contract", "cross_border_transaction", "special_transaction"),
         ("重大合同", "报关及物流单证", "特殊交易审批或备案资料"),
@@ -130,7 +145,7 @@ _SCENARIO_CATALOG = (
         "people_shareholders_and_related_parties",
         "人员、股东与关联方",
         "围绕人员薪酬、股东及关联方交易识别个人所得税和关联交易资料完整性风险。",
-        (),
+        ("individual_income_tax",),
         (),
         ("employee_compensation", "shareholder_transaction", "related_party"),
         ("工资薪金及个税申报", "股东和关联方清单", "关联交易合同及定价资料"),

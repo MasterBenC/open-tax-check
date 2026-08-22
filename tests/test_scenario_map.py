@@ -1,4 +1,6 @@
+import json
 from dataclasses import FrozenInstanceError, is_dataclass
+import re
 
 import pytest
 
@@ -73,13 +75,38 @@ def test_scenario_definition_rejects_invalid_identity_labels_and_capability():
     with pytest.raises(ValueError):
         ScenarioDefinition(**{**kwargs, "description_zh": ""})
     with pytest.raises(ValueError):
+        ScenarioDefinition(**{**kwargs, "name_zh": "English label"})
+    with pytest.raises(ValueError):
+        ScenarioDefinition(**{**kwargs, "description_zh": "English description"})
+    with pytest.raises(ValueError):
         ScenarioDefinition(**{**kwargs, "capability": "unknown"})
+
+
+def test_catalog_scenario_descriptions_match_their_tax_ids():
+    catalog = {item.scenario_id: item for item in scenario_catalog()}
+    assert "individual_income_tax" in catalog["people_shareholders_and_related_parties"].tax_ids
+    assert "individual_income_tax" not in catalog["costs_and_expenses"].tax_ids
+    assert {"stamp_tax", "customs_duty"} <= set(
+        catalog["contracts_and_special_transactions"].tax_ids
+    )
 
 
 def test_catalog_payload_is_versioned_and_serializable():
     payload = scenario_catalog_payload()
     assert payload["schema_version"] == SCENARIO_CATALOG_SCHEMA_VERSION
-    assert tuple(item["scenario_id"] for item in payload["scenarios"]) == tuple(
+    scenarios = payload["scenarios"]
+    assert tuple(item["scenario_id"] for item in scenarios) == tuple(
         item.scenario_id for item in scenario_catalog()
     )
-    assert all(isinstance(item["tax_ids"], list) for item in payload["scenarios"])
+    assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
+    for item in scenarios:
+        for field in ("tax_ids", "check_ids", "trigger_fact_keys", "material_items_zh"):
+            assert isinstance(item[field], list)
+
+
+def test_catalog_chinese_labels_contain_chinese_characters():
+    chinese = re.compile(r"[\u3400-\u9fff]")
+    for item in scenario_catalog():
+        assert chinese.search(item.name_zh)
+        assert chinese.search(item.description_zh)
+        assert all(chinese.search(material) for material in item.material_items_zh)
