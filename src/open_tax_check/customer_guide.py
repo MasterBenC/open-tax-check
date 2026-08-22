@@ -220,15 +220,17 @@ def _confirmed_scenario_facts(root: Path) -> dict[str, bool]:
         if isinstance(raw_value, Mapping):
             value = raw_value.get("value")
             confirmer = raw_value.get("confirmed_by", top_level_confirmer)
-        if isinstance(value, bool) and (
-            confirmer is _MISSING or _is_human_confirmer(confirmer)
-        ):
+        if isinstance(value, bool) and confirmer is not _MISSING and _is_human_confirmer(confirmer):
             confirmed[str(fact_key)] = value
     return confirmed
 
 
 def _is_human_confirmer(value: object) -> bool:
-    return value == "customer" or (isinstance(value, str) and value.startswith("human:"))
+    return value == "customer" or (
+        isinstance(value, str)
+        and value.startswith("human:")
+        and bool(value.removeprefix("human:").strip())
+    )
 
 
 def _guide(

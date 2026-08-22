@@ -295,7 +295,12 @@ def test_every_guide_stage_contains_privacy_and_disclaimer(tmp_path: Path) -> No
 def test_confirmed_false_scenario_does_not_emit_conditional_materials(case_with_profile: Path) -> None:
     write_json(case_with_profile / "work" / "scenario-facts.json", {
         "schema_version": "tax-scenario-facts/v1",
-        "facts": {"has_real_estate_activity": False},
+        "facts": {
+            "has_real_estate_activity": {
+                "value": False,
+                "confirmed_by": "customer",
+            },
+        },
     })
 
     guide = build_case_guide(case_with_profile)
@@ -304,6 +309,10 @@ def test_confirmed_false_scenario_does_not_emit_conditional_materials(case_with_
     assert all(
         group.get("scenario_id") != "assets_and_real_estate"
         for group in guide["document_groups"]
+    )
+    assert not any(
+        question["fact_key"] == "has_real_estate_activity"
+        for question in guide["scenario_questions"]
     )
 
 
@@ -317,3 +326,68 @@ def test_unknown_fact_is_asked_but_not_treated_as_not_applicable(case_with_profi
 
     assert question["answer_type"] == "boolean"
     assert question["question_zh"]
+
+
+def _scenario_guide_for_fact(case_dir: Path, value: bool, **envelope: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "tax-scenario-facts/v1",
+        "facts": {"has_real_estate_activity": {"value": value, **envelope}},
+    }
+    write_json(case_dir / "work" / "scenario-facts.json", payload)
+    return build_case_guide(case_dir)
+
+
+def test_missing_confirmation_keeps_false_fact_unknown(case_with_profile: Path) -> None:
+    guide = _scenario_guide_for_fact(case_with_profile, False)
+
+    assert "assets_and_real_estate" not in guide["active_scenarios"]
+    assert any(
+        question["fact_key"] == "has_real_estate_activity"
+        for question in guide["scenario_questions"]
+    )
+
+
+@pytest.mark.parametrize("confirmed_by", ["ai", "agent", "model", "host:codex", "", "human:"])
+@pytest.mark.parametrize("value", [True, False])
+def test_non_customer_or_named_human_confirmation_keeps_fact_unknown(
+    case_with_profile: Path, confirmed_by: str, value: bool
+) -> None:
+    guide = _scenario_guide_for_fact(case_with_profile, value, confirmed_by=confirmed_by)
+
+    assert "assets_and_real_estate" not in guide["active_scenarios"]
+    assert any(
+        question["fact_key"] == "has_real_estate_activity"
+        for question in guide["scenario_questions"]
+    )
+
+
+def test_customer_confirmation_activates_or_resolves_fact_question(case_with_profile: Path) -> None:
+    active = _scenario_guide_for_fact(case_with_profile, True, confirmed_by="customer")
+    assert "assets_and_real_estate" in active["active_scenarios"]
+    assert not any(
+        question["fact_key"] == "has_real_estate_activity"
+        for question in active["scenario_questions"]
+    )
+
+    inactive = _scenario_guide_for_fact(case_with_profile, False, confirmed_by="customer")
+    assert "assets_and_real_estate" not in inactive["active_scenarios"]
+    assert not any(
+        question["fact_key"] == "has_real_estate_activity"
+        for question in inactive["scenario_questions"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("confirmed_by", "value", "active"),
+    [("human:张三", True, True), ("human:授权标识", False, False)],
+)
+def test_named_human_confirmation_is_accepted(
+    case_with_profile: Path, confirmed_by: str, value: bool, active: bool
+) -> None:
+    guide = _scenario_guide_for_fact(case_with_profile, value, confirmed_by=confirmed_by)
+
+    assert ("assets_and_real_estate" in guide["active_scenarios"]) is active
+    assert not any(
+        question["fact_key"] == "has_real_estate_activity"
+        for question in guide["scenario_questions"]
+    )
