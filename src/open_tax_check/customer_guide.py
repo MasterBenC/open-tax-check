@@ -9,10 +9,18 @@ from typing import Literal, Mapping
 
 from .case import init_case, resolve_safe_case_path, write_json
 from . import source_paths
+from .scenario_map import scenario_catalog_payload
 
 
 CUSTOMER_PROFILE_SCHEMA_VERSION = "customer-profile/v1"
-CASE_GUIDE_SCHEMA_VERSION = "case-guide/v1"
+CASE_GUIDE_SCHEMA_VERSION = "case-guide/v2"
+SCENARIO_FACTS_SCHEMA_VERSION = "tax-scenario-facts/v1"
+SCENARIO_FACT_KEYS = (
+    "has_real_estate_activity",
+    "has_taxable_contracts",
+    "has_employees_or_shareholder_flows",
+    "has_related_party_or_restructuring_activity",
+)
 _FORMAL_PERIOD_START = date(2023, 1, 1)
 _FORMAL_PERIOD_END = date(2026, 12, 31)
 _VAT_TAXPAYER_TYPES = {"general", "small_scale", "unknown"}
@@ -104,16 +112,62 @@ def _profile_digest(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _document_groups(profile: Mapping[str, object]) -> list[dict[str, object]]:
-    business = str(profile.get("primary_business", "")).strip()
-    conditional = [
-        "如发生房屋、土地权属转移，请提供契税申报表、合同及完税凭证",
-        "如签订应税凭证，请提供印花税申报表及合同台账",
-        "如存在关联交易、跨境交易或特殊重组，请提供相关协议和说明",
-    ]
-    if business:
-        conditional.insert(0, f"与“{business}”特殊交易模式有关的合同、结算单和业务说明（如有）")
+_SCENARIO_QUESTION_TEXT = {
+    "has_real_estate_activity": "本检查期间是否发生房屋、土地、车辆或其他资产相关活动？",
+    "has_taxable_contracts": "本检查期间是否签订应税合同或发生跨境、特殊交易？",
+    "has_employees_or_shareholder_flows": "本检查期间是否有员工、股东或其他人员资金往来？",
+    "has_related_party_or_restructuring_activity": "本检查期间是否存在关联方交易、重组或其他特殊安排？",
+}
+_SCENARIO_FACT_SCENARIOS = {
+    "has_real_estate_activity": {"assets_and_real_estate"},
+    "has_taxable_contracts": {"contracts_and_special_transactions"},
+    "has_employees_or_shareholder_flows": {"people_shareholders_and_related_parties"},
+    "has_related_party_or_restructuring_activity": {
+        "contracts_and_special_transactions",
+        "people_shareholders_and_related_parties",
+    },
+}
+_BASELINE_SCENARIOS = ("revenue_and_turnover", "costs_and_expenses")
+_MISSING = object()
+
+
+def _scenario_catalog() -> tuple[Mapping[str, object], ...]:
+    payload = scenario_catalog_payload()
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("scenarios"), list):
+        raise ValueError("invalid_scenario_catalog")
+    scenarios = tuple(item for item in payload["scenarios"] if isinstance(item, Mapping))
+    if len(scenarios) != len(payload["scenarios"]):
+        raise ValueError("invalid_scenario_catalog")
+    required = {"scenario_id", "name_zh", "description_zh", "material_items_zh"}
+    if any(not required.issubset(item) for item in scenarios):
+        raise ValueError("invalid_scenario_catalog")
+    return scenarios
+
+
+def _scenario_questions(confirmed_facts: Mapping[str, bool]) -> list[dict[str, str]]:
     return [
+        {
+            "question_id": f"scenario-{fact_key}",
+            "fact_key": fact_key,
+            "question_zh": _SCENARIO_QUESTION_TEXT[fact_key],
+            "answer_type": "boolean",
+        }
+        for fact_key in SCENARIO_FACT_KEYS
+        if fact_key not in confirmed_facts
+    ]
+
+
+def _active_scenarios(confirmed_facts: Mapping[str, bool]) -> list[str]:
+    active = set(_BASELINE_SCENARIOS)
+    for fact_key, value in confirmed_facts.items():
+        if value is True:
+            active.update(_SCENARIO_FACT_SCENARIOS[fact_key])
+    catalog = _scenario_catalog()
+    return [str(item["scenario_id"]) for item in catalog if item["scenario_id"] in active]
+
+
+def _document_groups(active_scenarios: tuple[str, ...] | list[str]) -> list[dict[str, object]]:
+    groups: list[dict[str, object]] = [
         {
             "group_id": "minimum_to_start",
             "title_zh": "可以先提供的基础资料",
@@ -124,13 +178,57 @@ def _document_groups(profile: Mapping[str, object]) -> list[dict[str, object]]:
             "title_zh": "有的话建议一并提供",
             "items_zh": ["主要合同台账", "发票汇总资料", "固定资产和人员工资明细"],
         },
-        {
-            "group_id": "conditional_business_materials",
-            "title_zh": "发生相关业务时再补充",
-            "items_zh": conditional,
-            "applicability_note_zh": "本清单仅用于询问资料，不代表已认定相关税种或事项适用。",
-        },
     ]
+    active = set(active_scenarios)
+    for scenario in _scenario_catalog():
+        scenario_id = str(scenario["scenario_id"])
+        if scenario_id not in active:
+            continue
+        groups.append(
+            {
+                "group_id": scenario_id,
+                "scenario_id": scenario_id,
+                "title_zh": str(scenario["name_zh"]),
+                "items_zh": list(scenario["material_items_zh"]),
+                "applicability_note_zh": "本清单仅用于资料收集，不代表已认定相关税种或事项适用。",
+            }
+        )
+    return groups
+
+
+def _confirmed_scenario_facts(root: Path) -> dict[str, bool]:
+    facts_path = root / "work" / "scenario-facts.json"
+    try:
+        safe_facts_path = source_paths.resolve_safe_source(facts_path, root / "work")
+        payload = json.loads(safe_facts_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeError, ValueError):
+        return {}
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != SCENARIO_FACTS_SCHEMA_VERSION:
+        return {}
+    facts = payload.get("facts")
+    if not isinstance(facts, Mapping):
+        return {}
+    top_level_confirmer = payload.get("confirmed_by", _MISSING)
+    if top_level_confirmer is not _MISSING and not _is_human_confirmer(top_level_confirmer):
+        return {}
+    confirmed: dict[str, bool] = {}
+    for fact_key, raw_value in facts.items():
+        if fact_key not in SCENARIO_FACT_KEYS:
+            continue
+        value: object = raw_value
+        confirmer: object = top_level_confirmer
+        if isinstance(raw_value, Mapping):
+            value = raw_value.get("value")
+            confirmer = raw_value.get("confirmed_by", top_level_confirmer)
+        if isinstance(value, bool) and (
+            confirmer is _MISSING or _is_human_confirmer(confirmer)
+        ):
+            confirmed[str(fact_key)] = value
+    return confirmed
+
+
+def _is_human_confirmer(value: object) -> bool:
+    return value == "customer" or (isinstance(value, str) and value.startswith("human:"))
 
 
 def _guide(
@@ -138,12 +236,17 @@ def _guide(
     message_zh: str,
     *,
     profile: Mapping[str, object] | None = None,
+    confirmed_facts: Mapping[str, bool] | None = None,
 ) -> dict[str, object]:
+    facts = dict(confirmed_facts or {})
+    active_scenarios = _active_scenarios(facts)
     result: dict[str, object] = {
         "schema_version": CASE_GUIDE_SCHEMA_VERSION,
         "stage": stage,
         "message_zh": message_zh,
         "profile_questions": _profile_questions(),
+        "scenario_questions": _scenario_questions(facts),
+        "active_scenarios": active_scenarios,
         "privacy_zh": "请只提供本次税务健康检查所需资料，并在上传前妥善处理无关个人敏感信息。",
         "disclaimer_zh": "本工具提供资料核对和税务健康检查提示，不代表税务机关认定、法律意见或最终申报结论。",
         "profile_digest": None,
@@ -151,7 +254,7 @@ def _guide(
     }
     if profile is not None:
         result["profile_digest"] = _profile_digest(profile)
-        result["document_groups"] = _document_groups(profile)
+        result["document_groups"] = _document_groups(active_scenarios)
     return result
 
 
@@ -226,4 +329,9 @@ def build_case_guide(case_dir: Path) -> dict[str, object]:
         "completed": "税务健康检查交付已完成。",
         "blocked": "当前资料存在阻断项，请先按提示处理。",
     }
-    return _guide(stage, messages[stage], profile=payload)
+    return _guide(
+        stage,
+        messages[stage],
+        profile=payload,
+        confirmed_facts=_confirmed_scenario_facts(root),
+    )

@@ -7,7 +7,14 @@ import pytest
 from unittest.mock import patch
 
 from open_tax_check.customer_guide import build_case_guide, start_case_from_profile
-from open_tax_check.case import init_case
+from open_tax_check.case import init_case, write_json
+
+
+@pytest.fixture
+def case_with_profile(tmp_path: Path) -> Path:
+    case_dir = tmp_path / "case"
+    start_case_from_profile(case_dir, _profile())
+    return case_dir
 
 
 def _profile(**overrides: object) -> dict[str, object]:
@@ -26,7 +33,7 @@ def _profile(**overrides: object) -> dict[str, object]:
 def test_missing_case_returns_approved_opening(tmp_path: Path) -> None:
     guide = build_case_guide(tmp_path / "case")
 
-    assert guide["schema_version"] == "case-guide/v1"
+    assert guide["schema_version"] == "case-guide/v2"
     assert guide["stage"] == "welcome"
     assert "税务健康检查 AI 智能体" in guide["message_zh"]
     assert "资料不需要一次准备齐" in guide["message_zh"]
@@ -97,7 +104,7 @@ def test_initialized_case_without_a_valid_profile_awaits_business_profile(tmp_pa
 
     guide = build_case_guide(case_dir)
 
-    assert guide["schema_version"] == "case-guide/v1"
+    assert guide["schema_version"] == "case-guide/v2"
     assert guide["stage"] == "awaiting_business_profile"
     assert guide["profile_questions"]
 
@@ -220,10 +227,13 @@ def test_profile_creates_progressive_material_groups(tmp_path: Path) -> None:
     assert [item["group_id"] for item in guide["document_groups"]] == [
         "minimum_to_start",
         "recommended_if_available",
-        "conditional_business_materials",
+        "revenue_and_turnover",
+        "costs_and_expenses",
     ]
     assert "序时账或明细账" in guide["document_groups"][0]["items_zh"]
-    assert "契税" not in guide["document_groups"][0]["items_zh"]
+    assert "契税" not in " ".join(
+        item for group in guide["document_groups"] for item in group["items_zh"]
+    )
     assert guide["privacy_zh"]
     assert guide["disclaimer_zh"]
     assert len(guide["profile_digest"]) == 64
@@ -280,3 +290,30 @@ def test_every_guide_stage_contains_privacy_and_disclaimer(tmp_path: Path) -> No
     for guide in (welcome, awaiting_profile):
         assert guide["privacy_zh"]
         assert "不代表" in guide["disclaimer_zh"]
+
+
+def test_confirmed_false_scenario_does_not_emit_conditional_materials(case_with_profile: Path) -> None:
+    write_json(case_with_profile / "work" / "scenario-facts.json", {
+        "schema_version": "tax-scenario-facts/v1",
+        "facts": {"has_real_estate_activity": False},
+    })
+
+    guide = build_case_guide(case_with_profile)
+
+    assert "assets_and_real_estate" not in guide["active_scenarios"]
+    assert all(
+        group.get("scenario_id") != "assets_and_real_estate"
+        for group in guide["document_groups"]
+    )
+
+
+def test_unknown_fact_is_asked_but_not_treated_as_not_applicable(case_with_profile: Path) -> None:
+    guide = build_case_guide(case_with_profile)
+
+    question = next(
+        item for item in guide["scenario_questions"]
+        if item["fact_key"] == "has_real_estate_activity"
+    )
+
+    assert question["answer_type"] == "boolean"
+    assert question["question_zh"]
