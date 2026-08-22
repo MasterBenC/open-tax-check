@@ -11,6 +11,8 @@ from open_tax_check.report_view import (
     build_report_view,
     build_report_view_v3,
 )
+from open_tax_check.scenario_map import scenario_coverage_payload
+from open_tax_check.tax_reporting import tax_snapshot_payload
 from open_tax_check.tax_models import (
     AuditEvent,
     CalculationRecord,
@@ -82,6 +84,113 @@ def _customer_text(value: object) -> str:
     if isinstance(value, tuple | list):
         return " ".join(_customer_text(item) for item in value)
     return value if isinstance(value, str) else ""
+
+
+def test_report_view_and_machine_snapshot_share_scenario_counts():
+    snapshot = _snapshot_with_every_status()
+    cross_checks = difference_run()
+
+    view = build_report_view_v3(
+        snapshot,
+        entity_name="虚构科技有限公司",
+        tax_cross_checks=cross_checks,
+        revision=4,
+    )
+    payload = tax_snapshot_payload(snapshot, tax_cross_checks=cross_checks, revision=4)
+
+    assert payload["scenario_coverage"] == scenario_coverage_payload(view.scenario_coverage)
+    assert view.scenario_coverage.revision == 4
+    revenue = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "revenue_and_turnover"
+    )
+    assert revenue.executed_clear_count == 3
+    assert revenue.executed_risk_count == 1
+
+
+def test_scenario_coverage_uses_material_state_for_linked_cross_check():
+    view = build_report_view_v3(
+        _snapshot(),
+        entity_name="虚构科技有限公司",
+        tax_cross_checks=difference_run(),
+        material_statuses=({
+            "source_id": "cit-return",
+            "check_id": "BOOK-CIT-BE-001",
+            "status": "received_pending",
+        },),
+    )
+
+    costs = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "costs_and_expenses"
+    )
+    assert costs.awaiting_evidence_count == 0
+    assert costs.received_unparsed_count == 1
+    assert costs.executed_clear_count == 0
+
+
+def test_not_performed_cross_check_uses_current_tax_status_conservatively():
+    snapshot = _snapshot()
+    snapshot = replace(
+        snapshot,
+        results=(
+            TaxResult("vat", TaxStatus.BLOCKED),
+            *tuple(result for result in snapshot.results if result.tax_id != "vat"),
+        ),
+    )
+    run = difference_run()
+    missing = replace(
+        run.results[1],
+        status=CrossCheckStatus.NOT_PERFORMED,
+        ledger_amount=None,
+        comparison_amount=None,
+        difference_amount=None,
+        difference_ratio=None,
+        source_refs=(),
+        reason_codes=("missing_income_statement_or_vat_sales",),
+        question=run.questions[0],
+    )
+    run = replace(run, results=(*run.results[:1], missing, *run.results[2:]))
+
+    view = build_report_view_v3(
+        snapshot,
+        entity_name="虚构科技有限公司",
+        tax_cross_checks=run,
+    )
+
+    revenue = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "revenue_and_turnover"
+    )
+    assert revenue.awaiting_evidence_count == 1
+    assert revenue.not_performed_count == 0
+
+
+def test_conflicting_scenario_states_prevent_view_and_machine_delivery():
+    snapshot = _snapshot()
+    cross_checks = difference_run()
+    material_statuses = ({
+        "source_id": "vat-sales-return",
+        "check_id": "FS-VAT-SALES-001",
+        "status": "not_provided",
+    },)
+
+    with pytest.raises(ValueError, match="conflicting_scenario_state"):
+        build_report_view_v3(
+            snapshot,
+            entity_name="虚构科技有限公司",
+            tax_cross_checks=cross_checks,
+            material_statuses=material_statuses,
+        )
+    with pytest.raises(ValueError, match="conflicting_scenario_state"):
+        tax_snapshot_payload(
+            snapshot,
+            tax_cross_checks=cross_checks,
+            material_statuses=material_statuses,
+        )
 
 
 def test_v3_separates_risk_severity_from_received_material_state():

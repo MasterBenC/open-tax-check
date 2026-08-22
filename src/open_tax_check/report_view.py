@@ -9,6 +9,7 @@ from hashlib import sha256
 import json
 
 from .reporting import select_reportable_findings
+from .scenario_map import ScenarioCoverageSnapshot, build_scenario_coverage
 from .tax_models import Limitation, TaxCheckSnapshot, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
 from .tax_cross_checks import CrossCheckStatus, TaxCrossCheckRun, compare_amounts
@@ -206,8 +207,83 @@ class ReportViewV3:
     materials: tuple[MaterialStatusItem, ...]
     actions: tuple[PriorityActionItem, ...]
     tax_coverage: tuple[TaxCoverageItem, ...]
+    scenario_coverage: ScenarioCoverageSnapshot
     appendix_executed_checks: tuple[str, ...]
     limitations_zh: tuple[str, ...]
+
+
+def _build_scenario_coverage(
+    snapshot: TaxCheckSnapshot,
+    *,
+    revision: int,
+    material_statuses: Sequence[Mapping[str, object]] = (),
+    tax_cross_checks: TaxCrossCheckRun | None = None,
+    confirmed_facts: Mapping[str, object] | None = None,
+) -> ScenarioCoverageSnapshot:
+    tax_statuses = {result.tax_id: result.status for result in snapshot.results}
+    if "enterprise_income_tax" in tax_statuses:
+        tax_statuses.setdefault("cit", tax_statuses["enterprise_income_tax"])
+    check_states: dict[str, str] = {}
+    if tax_cross_checks is not None:
+        if not isinstance(tax_cross_checks, TaxCrossCheckRun):
+            raise ValueError("invalid_tax_cross_checks")
+        status_mapping = {
+            CrossCheckStatus.MATCHED: "matched",
+            CrossCheckStatus.WITHIN_TOLERANCE: "within_tolerance",
+            CrossCheckStatus.DIFFERENCE_FOUND: "difference_found",
+            CrossCheckStatus.NOT_PERFORMED: "not_performed",
+        }
+        for result in tax_cross_checks.results:
+            if result.resolution_status not in {
+                "unresolved", "explained_pending_verification", "closed",
+            }:
+                raise ValueError("unknown_scenario_resolution_status")
+            try:
+                state = status_mapping[result.status]
+            except (KeyError, TypeError) as error:
+                raise ValueError("unknown_scenario_cross_check_status") from error
+            if result.status is CrossCheckStatus.NOT_PERFORMED:
+                relevant_statuses = tuple(
+                    tax_statuses[tax_id]
+                    for tax_id in result.tax_ids
+                    if tax_id in tax_statuses
+                )
+                if TaxStatus.BLOCKED in relevant_statuses:
+                    state = "blocked"
+                elif TaxStatus.NEEDS_EVIDENCE in relevant_statuses:
+                    state = "needs_evidence"
+                elif TaxStatus.NEEDS_LOCAL_POLICY in relevant_statuses:
+                    state = "needs_local_policy"
+                elif relevant_statuses and all(
+                    status is TaxStatus.NOT_APPLICABLE
+                    for status in relevant_statuses
+                ):
+                    state = "not_applicable"
+            if result.status is CrossCheckStatus.DIFFERENCE_FOUND:
+                state = "confirmed" if result.resolution_status == "closed" else state
+            previous = check_states.setdefault(result.check_id, state)
+            if previous != state:
+                raise ValueError("conflicting_scenario_state")
+    material_states: dict[str, str] = {}
+    for item in material_statuses:
+        status = item.get("status")
+        if status not in MATERIAL_STATUS_ZH:
+            raise ValueError("unknown_material_status")
+        check_id = item.get("check_id")
+        if check_id is None:
+            continue
+        if not isinstance(check_id, str) or not check_id.strip():
+            raise ValueError("invalid_scenario_material_check_id")
+        assert isinstance(status, str)
+        previous = material_states.setdefault(check_id.strip(), status)
+        if previous != status:
+            raise ValueError("conflicting_scenario_state")
+    return build_scenario_coverage(
+        revision=revision,
+        check_states=check_states,
+        material_states=material_states,
+        confirmed_facts={} if confirmed_facts is None else confirmed_facts,
+    )
 
 
 def effective_limitations(snapshot: TaxCheckSnapshot) -> tuple[Limitation, ...]:
@@ -314,9 +390,19 @@ def build_report_view_v3(
     reviewed_findings: Sequence[Mapping[str, object]] = (),
     material_statuses: Sequence[Mapping[str, object]] = (),
     tax_cross_checks: TaxCrossCheckRun | None = None,
+    confirmed_facts: Mapping[str, object] | None = None,
+    revision: int | None = None,
 ) -> ReportViewV3:
     """Build the immutable, customer-safe tax-health-report/v3 view."""
 
+    current_revision = snapshot.revision if revision is None else revision
+    scenario_coverage = _build_scenario_coverage(
+        snapshot,
+        revision=current_revision,
+        material_statuses=material_statuses,
+        tax_cross_checks=tax_cross_checks,
+        confirmed_facts=confirmed_facts,
+    )
     period = snapshot.request.period
     period_zh = f"{period.start.isoformat()}至{period.end.isoformat()}"
     risks: list[RiskItem] = []
@@ -490,8 +576,8 @@ def build_report_view_v3(
     return ReportViewV3(
         meta=ReportMeta(
             schema_version=REPORT_SCHEMA_VERSION_V3,
-            report_id=f"THR-{period.start:%Y%m%d}-{period.end:%Y%m%d}-R{snapshot.revision:04d}",
-            revision=snapshot.revision,
+            report_id=f"THR-{period.start:%Y%m%d}-{period.end:%Y%m%d}-R{current_revision:04d}",
+            revision=current_revision,
             period_start=period.start,
             period_end=period.end,
             period_zh=period_zh,
@@ -515,6 +601,7 @@ def build_report_view_v3(
         materials=ordered_materials,
         actions=actions,
         tax_coverage=tax_coverage,
+        scenario_coverage=scenario_coverage,
         appendix_executed_checks=tuple(
             f"{item.name_zh}：{check}"
             for item in tax_coverage for check in item.executed_checks_zh

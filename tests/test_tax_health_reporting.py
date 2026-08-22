@@ -6,6 +6,7 @@ import json
 import unittest
 
 import open_tax_check.tax_reporting as tax_reporting
+import pytest
 from open_tax_check.tax_models import (
     AuditEvent,
     CalculationRecord,
@@ -34,6 +35,17 @@ from open_tax_check.tax_reporting import (
 
 def test_pdf_only_reporting_module_does_not_expose_docx_writer() -> None:
     assert not hasattr(tax_reporting, "write_tax_health_report_docx")
+
+
+def test_machine_snapshot_rejects_unknown_material_state():
+    with pytest.raises(ValueError, match="unknown_material_status"):
+        tax_snapshot_payload(
+            snapshot_with_every_status(),
+            material_statuses=({
+                "source_id": "unlinked-document",
+                "status": "unknown",
+            },),
+        )
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))
@@ -403,7 +415,14 @@ class TaxHealthReportingTests(unittest.TestCase):
             payload = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 set(payload),
-                {"schema_version", "revision", "request", "results", "questions", "audit_events", "limitations"},
+                {
+                    "schema_version", "revision", "request", "results", "questions",
+                    "audit_events", "limitations", "scenario_coverage",
+                },
+            )
+            self.assertEqual(
+                payload["scenario_coverage"]["schema_version"],
+                "tax-scenario-coverage/v1",
             )
             self.assertEqual(
                 {item["code"] for item in payload["limitations"]},
