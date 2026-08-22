@@ -24,12 +24,8 @@ ScenarioCheckState: TypeAlias = Literal[
 ]
 
 _CHECK_STATE_CONVERSION: dict[str, ScenarioCheckState] = {
-    "executed_clear": "executed_clear",
-    "executed_risk": "executed_risk",
-    "awaiting_evidence": "awaiting_evidence",
     "received_unparsed": "received_unparsed",
     "not_applicable": "not_applicable",
-    "not_performed": "not_performed",
     "matched": "executed_clear",
     "within_tolerance": "executed_clear",
     "not_triggered": "executed_clear",
@@ -42,9 +38,19 @@ _CHECK_STATE_CONVERSION: dict[str, ScenarioCheckState] = {
     "received_pending": "received_unparsed",
     "extraction_partial": "received_unparsed",
     "present_unparsed": "received_unparsed",
-    "not_applicable": "not_applicable",
     "skipped": "not_performed",
     "not_performed": "not_performed",
+}
+
+_MATERIAL_STATE_CONVERSION: dict[str, ScenarioCheckState | None] = {
+    "not_provided": "awaiting_evidence",
+    "needs_evidence": "awaiting_evidence",
+    "needs_local_policy": "awaiting_evidence",
+    "blocked": "awaiting_evidence",
+    "received_pending": "received_unparsed",
+    "extraction_partial": "received_unparsed",
+    "present_unparsed": "received_unparsed",
+    "imported_reconciled": None,
 }
 
 
@@ -278,6 +284,13 @@ def _scenario_check_state(value: object) -> ScenarioCheckState:
         raise ValueError("unknown_scenario_check_state") from error
 
 
+def _scenario_material_state(value: object) -> ScenarioCheckState | None:
+    try:
+        return _MATERIAL_STATE_CONVERSION[value]
+    except (KeyError, TypeError) as error:
+        raise ValueError("unknown_scenario_material_state") from error
+
+
 def build_scenario_coverage(
     *,
     revision: int,
@@ -289,15 +302,33 @@ def build_scenario_coverage(
 
     if not isinstance(revision, int) or isinstance(revision, bool) or revision <= 0:
         raise ValueError("invalid_scenario_coverage_revision")
+    catalog = scenario_catalog()
     converted_check_states = {
         check_id: _scenario_check_state(state)
         for check_id, state in check_states.items()
     }
-    del material_states, confirmed_facts
+    converted_material_states = {
+        check_id: _scenario_material_state(state)
+        for check_id, state in material_states.items()
+    }
+    known_fact_keys = {fact_key for scenario in catalog for fact_key in scenario.trigger_fact_keys}
+    for fact_key, fact_value in confirmed_facts.items():
+        if not isinstance(fact_key, str) or fact_key not in known_fact_keys:
+            raise ValueError("unknown_scenario_fact")
+        if not isinstance(fact_value, bool):
+            raise ValueError("invalid_scenario_fact_value")
     items = []
-    for scenario in scenario_catalog():
+    for scenario in catalog:
+        scenario_is_not_applicable = bool(scenario.trigger_fact_keys) and all(
+            confirmed_facts.get(fact_key) is False
+            for fact_key in scenario.trigger_fact_keys
+        )
         states = tuple(
-            converted_check_states.get(check_id, "not_performed")
+            _effective_scenario_check_state(
+                check_state=converted_check_states.get(check_id, "not_performed"),
+                material_state=converted_material_states.get(check_id),
+                scenario_is_not_applicable=scenario_is_not_applicable,
+            )
             for check_id in scenario.check_ids
         )
         items.append(
@@ -321,6 +352,19 @@ def build_scenario_coverage(
         items=tuple(items),
         unique_check_count=len({check_id for item in items for check_id in item.check_ids}),
     )
+
+
+def _effective_scenario_check_state(
+    *,
+    check_state: ScenarioCheckState,
+    material_state: ScenarioCheckState | None,
+    scenario_is_not_applicable: bool,
+) -> ScenarioCheckState:
+    if material_state in {"awaiting_evidence", "received_unparsed"}:
+        return material_state
+    if scenario_is_not_applicable:
+        return "not_applicable"
+    return check_state
 
 
 def scenario_coverage_payload(snapshot: ScenarioCoverageSnapshot) -> dict[str, object]:

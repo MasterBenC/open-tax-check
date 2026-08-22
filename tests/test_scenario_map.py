@@ -219,6 +219,160 @@ def test_coverage_rejects_unknown_check_state():
         )
 
 
+@pytest.mark.parametrize(
+    "check_state",
+    ["executed_clear", "executed_risk", "awaiting_evidence"],
+)
+def test_coverage_rejects_derived_check_states(check_state):
+    with pytest.raises(ValueError, match="unknown_scenario_check_state"):
+        build_scenario_coverage(
+            revision=1,
+            check_states={"BOOK-FS-REV-001": check_state},
+            material_states={},
+            confirmed_facts={},
+        )
+
+
+@pytest.mark.parametrize(
+    ("material_state", "count_name"),
+    [
+        ("not_provided", "awaiting_evidence_count"),
+        ("needs_evidence", "awaiting_evidence_count"),
+        ("needs_local_policy", "awaiting_evidence_count"),
+        ("blocked", "awaiting_evidence_count"),
+        ("received_pending", "received_unparsed_count"),
+        ("extraction_partial", "received_unparsed_count"),
+        ("present_unparsed", "received_unparsed_count"),
+        ("imported_reconciled", "executed_clear_count"),
+    ],
+)
+def test_material_state_overrides_or_preserves_matching_check(material_state, count_name):
+    coverage = build_scenario_coverage(
+        revision=1,
+        check_states={"BOOK-FS-REV-001": "matched"},
+        material_states={"BOOK-FS-REV-001": material_state},
+        confirmed_facts={},
+    )
+
+    revenue = next(item for item in coverage.items if item.scenario_id == "revenue_and_turnover")
+    assert getattr(revenue, count_name) == 1
+    assert revenue.total_count == 4
+
+
+def test_coverage_rejects_unknown_material_state():
+    with pytest.raises(ValueError, match="unknown_scenario_material_state"):
+        build_scenario_coverage(
+            revision=1,
+            check_states={},
+            material_states={"BOOK-FS-REV-001": "unknown"},
+            confirmed_facts={},
+        )
+
+
+def test_all_false_confirmed_facts_make_scenario_checks_not_applicable():
+    coverage = build_scenario_coverage(
+        revision=1,
+        check_states={"BOOK-FS-REV-001": "matched"},
+        material_states={},
+        confirmed_facts={
+            "revenue_recognition": False,
+            "turnover_scope": False,
+            "tax_return_sales": False,
+        },
+    )
+
+    revenue = next(item for item in coverage.items if item.scenario_id == "revenue_and_turnover")
+    assert revenue.not_applicable_count == 4
+    assert revenue.executed_clear_count == 0
+
+
+def test_missing_confirmed_fact_does_not_infer_not_applicable():
+    coverage = build_scenario_coverage(
+        revision=1,
+        check_states={"BOOK-FS-REV-001": "matched"},
+        material_states={},
+        confirmed_facts={
+            "revenue_recognition": False,
+            "turnover_scope": False,
+        },
+    )
+
+    revenue = next(item for item in coverage.items if item.scenario_id == "revenue_and_turnover")
+    assert revenue.executed_clear_count == 1
+    assert revenue.not_applicable_count == 0
+
+
+@pytest.mark.parametrize(
+    ("confirmed_facts", "error"),
+    [
+        ({"unknown": False}, "unknown_scenario_fact"),
+        ({"revenue_recognition": 0}, "invalid_scenario_fact_value"),
+    ],
+)
+def test_coverage_rejects_unknown_or_non_boolean_confirmed_facts(confirmed_facts, error):
+    with pytest.raises(ValueError, match=error):
+        build_scenario_coverage(
+            revision=1,
+            check_states={},
+            material_states={},
+            confirmed_facts=confirmed_facts,
+        )
+
+
+def test_material_gap_takes_priority_over_all_false_confirmed_facts():
+    coverage = build_scenario_coverage(
+        revision=1,
+        check_states={"BOOK-FS-REV-001": "matched"},
+        material_states={"BOOK-FS-REV-001": "not_provided"},
+        confirmed_facts={
+            "revenue_recognition": False,
+            "turnover_scope": False,
+            "tax_return_sales": False,
+        },
+    )
+
+    revenue = next(item for item in coverage.items if item.scenario_id == "revenue_and_turnover")
+    assert revenue.awaiting_evidence_count == 1
+    assert revenue.not_applicable_count == 3
+
+
+def test_global_check_total_deduplicates_shared_check_across_scenarios(monkeypatch):
+    shared_check_id = "SHARED-CHECK-001"
+    scenarios = (
+        ScenarioDefinition(
+            "first",
+            "场景一",
+            "第一个场景。",
+            (),
+            (shared_check_id,),
+            ("first_fact",),
+            ("资料一",),
+            "deterministic",
+        ),
+        ScenarioDefinition(
+            "second",
+            "场景二",
+            "第二个场景。",
+            (),
+            (shared_check_id,),
+            ("second_fact",),
+            ("资料二",),
+            "deterministic",
+        ),
+    )
+    monkeypatch.setattr("open_tax_check.scenario_map.scenario_catalog", lambda: scenarios)
+
+    coverage = build_scenario_coverage(
+        revision=1,
+        check_states={shared_check_id: "matched"},
+        material_states={},
+        confirmed_facts={},
+    )
+
+    assert coverage.unique_check_count == 1
+    assert [item.executed_clear_count for item in coverage.items] == [1, 1]
+
+
 def test_coverage_payload_is_versioned_serializable_snapshot():
     snapshot = build_scenario_coverage(
         revision=2,
