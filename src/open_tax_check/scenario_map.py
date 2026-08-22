@@ -47,6 +47,8 @@ _MATERIAL_STATE_CONVERSION: dict[str, ScenarioCheckState | None] = {
     "needs_evidence": "awaiting_evidence",
     "needs_local_policy": "awaiting_evidence",
     "blocked": "awaiting_evidence",
+    "contract_invalid": "awaiting_evidence",
+    "imported_pending_confirmation": "awaiting_evidence",
     "received_pending": "received_unparsed",
     "extraction_partial": "received_unparsed",
     "present_unparsed": "received_unparsed",
@@ -307,6 +309,9 @@ def build_scenario_coverage(
         check_id: _scenario_check_state(state)
         for check_id, state in check_states.items()
     }
+    known_check_ids = {check_id for scenario in catalog for check_id in scenario.check_ids}
+    if any(check_id not in known_check_ids for check_id in material_states):
+        raise ValueError("unknown_scenario_material_check_id")
     converted_material_states = {
         check_id: _scenario_material_state(state)
         for check_id, state in material_states.items()
@@ -360,6 +365,11 @@ def _effective_scenario_check_state(
     material_state: ScenarioCheckState | None,
     scenario_is_not_applicable: bool,
 ) -> ScenarioCheckState:
+    if check_state == "executed_risk" and (
+        material_state in {"awaiting_evidence", "received_unparsed"}
+        or scenario_is_not_applicable
+    ):
+        raise ValueError("conflicting_scenario_state")
     if material_state in {"awaiting_evidence", "received_unparsed"}:
         return material_state
     if scenario_is_not_applicable:

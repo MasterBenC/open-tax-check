@@ -240,6 +240,8 @@ def test_coverage_rejects_derived_check_states(check_state):
         ("needs_evidence", "awaiting_evidence_count"),
         ("needs_local_policy", "awaiting_evidence_count"),
         ("blocked", "awaiting_evidence_count"),
+        ("contract_invalid", "awaiting_evidence_count"),
+        ("imported_pending_confirmation", "awaiting_evidence_count"),
         ("received_pending", "received_unparsed_count"),
         ("extraction_partial", "received_unparsed_count"),
         ("present_unparsed", "received_unparsed_count"),
@@ -266,6 +268,41 @@ def test_coverage_rejects_unknown_material_state():
             check_states={},
             material_states={"BOOK-FS-REV-001": "unknown"},
             confirmed_facts={},
+        )
+
+
+def test_coverage_rejects_unknown_material_check_id():
+    with pytest.raises(ValueError, match="unknown_scenario_material_check_id"):
+        build_scenario_coverage(
+            revision=1,
+            check_states={},
+            material_states={"misspelled-check-id": "not_provided"},
+            confirmed_facts={},
+        )
+
+
+@pytest.mark.parametrize("material_state", ["not_provided", "received_pending"])
+def test_coverage_rejects_risk_material_state_conflict(material_state):
+    with pytest.raises(ValueError, match="conflicting_scenario_state"):
+        build_scenario_coverage(
+            revision=1,
+            check_states={"BOOK-FS-REV-001": "difference_found"},
+            material_states={"BOOK-FS-REV-001": material_state},
+            confirmed_facts={},
+        )
+
+
+def test_coverage_rejects_risk_not_applicable_conflict():
+    with pytest.raises(ValueError, match="conflicting_scenario_state"):
+        build_scenario_coverage(
+            revision=1,
+            check_states={"BOOK-FS-REV-001": "confirmed"},
+            material_states={},
+            confirmed_facts={
+                "revenue_recognition": False,
+                "turnover_scope": False,
+                "tax_return_sales": False,
+            },
         )
 
 
