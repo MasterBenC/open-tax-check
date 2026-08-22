@@ -4,14 +4,48 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Iterable
+from typing import Iterable, Literal, Mapping, TypeAlias
 
 from .tax_registry import TAX_DEFINITIONS
 
 
 SCENARIO_CATALOG_SCHEMA_VERSION = "tax-scenario-catalog/v1"
+SCENARIO_COVERAGE_SCHEMA_VERSION = "tax-scenario-coverage/v1"
 _CAPABILITIES = frozenset({"deterministic", "question_candidate"})
 _CHINESE_RE = re.compile(r"[\u3400-\u9fff]")
+
+ScenarioCheckState: TypeAlias = Literal[
+    "executed_clear",
+    "executed_risk",
+    "awaiting_evidence",
+    "received_unparsed",
+    "not_applicable",
+    "not_performed",
+]
+
+_CHECK_STATE_CONVERSION: dict[str, ScenarioCheckState] = {
+    "executed_clear": "executed_clear",
+    "executed_risk": "executed_risk",
+    "awaiting_evidence": "awaiting_evidence",
+    "received_unparsed": "received_unparsed",
+    "not_applicable": "not_applicable",
+    "not_performed": "not_performed",
+    "matched": "executed_clear",
+    "within_tolerance": "executed_clear",
+    "not_triggered": "executed_clear",
+    "difference_found": "executed_risk",
+    "suspected": "executed_risk",
+    "confirmed": "executed_risk",
+    "needs_evidence": "awaiting_evidence",
+    "needs_local_policy": "awaiting_evidence",
+    "blocked": "awaiting_evidence",
+    "received_pending": "received_unparsed",
+    "extraction_partial": "received_unparsed",
+    "present_unparsed": "received_unparsed",
+    "not_applicable": "not_applicable",
+    "skipped": "not_performed",
+    "not_performed": "not_performed",
+}
 
 
 def _require_text(value: object, code: str) -> str:
@@ -75,6 +109,60 @@ class ScenarioDefinition:
         )
         if self.capability not in _CAPABILITIES:
             raise ValueError("invalid_scenario_capability")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioCoverageItem:
+    scenario_id: str
+    name_zh: str
+    total_count: int
+    executed_clear_count: int
+    executed_risk_count: int
+    awaiting_evidence_count: int
+    received_unparsed_count: int
+    not_applicable_count: int
+    not_performed_count: int
+    check_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.scenario_id, "invalid_scenario_id")
+        _require_chinese_text(self.name_zh, "invalid_scenario_name")
+        object.__setattr__(self, "check_ids", _require_text_items(self.check_ids, "invalid_check_ids"))
+        counts = (
+            self.total_count,
+            self.executed_clear_count,
+            self.executed_risk_count,
+            self.awaiting_evidence_count,
+            self.received_unparsed_count,
+            self.not_applicable_count,
+            self.not_performed_count,
+        )
+        if any(not isinstance(count, int) or isinstance(count, bool) or count < 0 for count in counts):
+            raise ValueError("invalid_scenario_coverage_count")
+        if sum(counts[1:]) != self.total_count:
+            raise ValueError("invalid_scenario_coverage_counts")
+        if self.total_count != len(self.check_ids):
+            raise ValueError("invalid_scenario_coverage_counts")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioCoverageSnapshot:
+    schema_version: str
+    catalog_version: str
+    revision: int
+    items: tuple[ScenarioCoverageItem, ...]
+    unique_check_count: int
+
+    def __post_init__(self) -> None:
+        _require_text(self.schema_version, "invalid_scenario_coverage_schema_version")
+        _require_text(self.catalog_version, "invalid_scenario_catalog_version")
+        if not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision <= 0:
+            raise ValueError("invalid_scenario_coverage_revision")
+        if not isinstance(self.unique_check_count, int) or isinstance(self.unique_check_count, bool):
+            raise ValueError("invalid_scenario_unique_check_count")
+        object.__setattr__(self, "items", tuple(self.items))
+        if self.unique_check_count != len({check_id for item in self.items for check_id in item.check_ids}):
+            raise ValueError("invalid_scenario_unique_check_count")
 
 
 def _validate_catalog(catalog: tuple[ScenarioDefinition, ...]) -> None:
@@ -183,9 +271,93 @@ def scenario_catalog_payload() -> dict[str, object]:
     }
 
 
+def _scenario_check_state(value: object) -> ScenarioCheckState:
+    try:
+        return _CHECK_STATE_CONVERSION[value]
+    except (KeyError, TypeError) as error:
+        raise ValueError("unknown_scenario_check_state") from error
+
+
+def build_scenario_coverage(
+    *,
+    revision: int,
+    check_states: Mapping[str, str],
+    material_states: Mapping[str, str],
+    confirmed_facts: Mapping[str, object],
+) -> ScenarioCoverageSnapshot:
+    """Build a deterministic, non-assurance coverage snapshot by scenario."""
+
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision <= 0:
+        raise ValueError("invalid_scenario_coverage_revision")
+    converted_check_states = {
+        check_id: _scenario_check_state(state)
+        for check_id, state in check_states.items()
+    }
+    del material_states, confirmed_facts
+    items = []
+    for scenario in scenario_catalog():
+        states = tuple(
+            converted_check_states.get(check_id, "not_performed")
+            for check_id in scenario.check_ids
+        )
+        items.append(
+            ScenarioCoverageItem(
+                scenario_id=scenario.scenario_id,
+                name_zh=scenario.name_zh,
+                total_count=len(scenario.check_ids),
+                executed_clear_count=states.count("executed_clear"),
+                executed_risk_count=states.count("executed_risk"),
+                awaiting_evidence_count=states.count("awaiting_evidence"),
+                received_unparsed_count=states.count("received_unparsed"),
+                not_applicable_count=states.count("not_applicable"),
+                not_performed_count=states.count("not_performed"),
+                check_ids=scenario.check_ids,
+            )
+        )
+    return ScenarioCoverageSnapshot(
+        schema_version=SCENARIO_COVERAGE_SCHEMA_VERSION,
+        catalog_version=SCENARIO_CATALOG_SCHEMA_VERSION,
+        revision=revision,
+        items=tuple(items),
+        unique_check_count=len({check_id for item in items for check_id in item.check_ids}),
+    )
+
+
+def scenario_coverage_payload(snapshot: ScenarioCoverageSnapshot) -> dict[str, object]:
+    """Return a JSON-compatible scenario coverage snapshot."""
+
+    return {
+        "schema_version": snapshot.schema_version,
+        "catalog_version": snapshot.catalog_version,
+        "revision": snapshot.revision,
+        "items": [
+            {
+                "scenario_id": item.scenario_id,
+                "name_zh": item.name_zh,
+                "total_count": item.total_count,
+                "executed_clear_count": item.executed_clear_count,
+                "executed_risk_count": item.executed_risk_count,
+                "awaiting_evidence_count": item.awaiting_evidence_count,
+                "received_unparsed_count": item.received_unparsed_count,
+                "not_applicable_count": item.not_applicable_count,
+                "not_performed_count": item.not_performed_count,
+                "check_ids": list(item.check_ids),
+            }
+            for item in snapshot.items
+        ],
+        "unique_check_count": snapshot.unique_check_count,
+    }
+
+
 __all__ = [
     "SCENARIO_CATALOG_SCHEMA_VERSION",
+    "SCENARIO_COVERAGE_SCHEMA_VERSION",
+    "ScenarioCheckState",
+    "ScenarioCoverageItem",
+    "ScenarioCoverageSnapshot",
     "ScenarioDefinition",
+    "build_scenario_coverage",
     "scenario_catalog",
     "scenario_catalog_payload",
+    "scenario_coverage_payload",
 ]
