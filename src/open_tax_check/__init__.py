@@ -172,3 +172,9 @@ from .structured_reconciliation import (
     DocumentReconciliationResult,
     reconcile_structured_documents,
 )
+from .scenario_map import (
+    SCENARIO_CATALOG_SCHEMA_VERSION,
+    ScenarioDefinition,
+    scenario_catalog,
+    scenario_catalog_payload,
+)
