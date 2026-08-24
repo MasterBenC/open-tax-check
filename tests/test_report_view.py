@@ -109,39 +109,45 @@ def test_report_view_and_machine_snapshot_share_scenario_counts():
     assert revenue.executed_risk_count == 1
 
 
-def test_injected_scenario_coverage_is_shared_without_rebuilding():
+def test_public_calls_cannot_inject_clear_coverage_over_difference_evidence():
     snapshot = _snapshot()
-    coverage = build_scenario_coverage(
+    clear_coverage = build_scenario_coverage(
         revision=4,
         check_states={"FS-VAT-SALES-001": "matched"},
         material_states={},
         confirmed_facts={},
     )
-    conflicting_inputs = {
-        "tax_cross_checks": difference_run(),
-        "material_statuses": ({
-            "source_id": "vat-sales-return",
-            "check_id": "FS-VAT-SALES-001",
-            "status": "not_provided",
-        },),
-    }
+    cross_checks = difference_run()
+
+    with pytest.raises(TypeError):
+        build_report_view_v3(
+            snapshot,
+            entity_name="虚构科技有限公司",
+            revision=4,
+            tax_cross_checks=cross_checks,
+            scenario_coverage=clear_coverage,
+        )
+    with pytest.raises(TypeError):
+        tax_snapshot_payload(
+            snapshot,
+            revision=4,
+            tax_cross_checks=cross_checks,
+            scenario_coverage=clear_coverage,
+        )
 
     view = build_report_view_v3(
         snapshot,
         entity_name="虚构科技有限公司",
         revision=4,
-        scenario_coverage=coverage,
-        **conflicting_inputs,
+        tax_cross_checks=cross_checks,
     )
-    payload = tax_snapshot_payload(
-        snapshot,
-        revision=4,
-        scenario_coverage=coverage,
-        **conflicting_inputs,
+    revenue = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "revenue_and_turnover"
     )
-
-    assert view.scenario_coverage is coverage
-    assert payload["scenario_coverage"] == scenario_coverage_payload(coverage)
+    assert revenue.executed_risk_count == 1
+    assert revenue.executed_clear_count == 3
 
 
 def test_scenario_coverage_uses_material_state_for_linked_cross_check():
@@ -166,26 +172,15 @@ def test_scenario_coverage_uses_material_state_for_linked_cross_check():
     assert costs.executed_clear_count == 0
 
 
-@pytest.mark.parametrize(
-    ("material_source_id", "ref_source_id", "ref_locator"),
-    [
-        ("unique-cit-material", "unique-cit-material", "cit-business-entertainment"),
-        ("cit-business-entertainment", "different-source", "cit-business-entertainment"),
-    ],
-)
-def test_scenario_coverage_binds_material_by_unique_cross_check_source_ref(
-    material_source_id,
-    ref_source_id,
-    ref_locator,
-):
+def test_scenario_coverage_binds_material_by_exact_cross_check_source_id():
     run = difference_run()
     costs_result = replace(
         run.results[-1],
         source_refs=(
             replace(
                 run.results[-1].source_refs[0],
-                source_id=ref_source_id,
-                locator=ref_locator,
+                source_id="unique-cit-material",
+                locator="cit-business-entertainment",
             ),
         ),
     )
@@ -196,7 +191,7 @@ def test_scenario_coverage_binds_material_by_unique_cross_check_source_ref(
         entity_name="虚构科技有限公司",
         tax_cross_checks=run,
         material_statuses=({
-            "source_id": material_source_id,
+            "source_id": "unique-cit-material",
             "status": "received_pending",
             "tax_ids": (),
         },),
@@ -211,21 +206,64 @@ def test_scenario_coverage_binds_material_by_unique_cross_check_source_ref(
     assert costs.executed_clear_count == 0
 
 
-@pytest.mark.parametrize("source_id", ["source-1", "unmatched-material"])
-def test_scenario_coverage_does_not_guess_non_unique_or_unmatched_material(
-    source_id,
-):
+def test_scenario_coverage_does_not_bind_material_by_locator_collision():
+    run = difference_run()
+    costs_result = replace(
+        run.results[-1],
+        source_refs=(
+            replace(
+                run.results[-1].source_refs[0],
+                source_id="different-source",
+                locator="cit-business-entertainment",
+            ),
+        ),
+    )
+    run = replace(run, results=(*run.results[:-1], costs_result))
     view = build_report_view_v3(
         _snapshot(),
         entity_name="虚构科技有限公司",
-        tax_cross_checks=difference_run(),
+        tax_cross_checks=run,
         material_statuses=({
-            "source_id": source_id,
+            "source_id": "cit-business-entertainment",
             "status": "received_pending",
             "tax_ids": (),
         },),
     )
 
+    costs = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "costs_and_expenses"
+    )
+    assert costs.executed_clear_count == 1
+    assert costs.received_unparsed_count == 0
+
+
+def test_scenario_coverage_binds_shared_source_to_all_checks_and_fails_closed():
+    with pytest.raises(ValueError, match="conflicting_scenario_state"):
+        build_report_view_v3(
+            _snapshot(),
+            entity_name="虚构科技有限公司",
+            tax_cross_checks=difference_run(),
+            material_statuses=({
+                "source_id": "source-1",
+                "status": "received_pending",
+                "tax_ids": (),
+            },),
+        )
+
+
+def test_scenario_coverage_ignores_unmatched_material_source_id():
+    view = build_report_view_v3(
+        _snapshot(),
+        entity_name="虚构科技有限公司",
+        tax_cross_checks=difference_run(),
+        material_statuses=({
+            "source_id": "unmatched-material",
+            "status": "received_pending",
+            "tax_ids": (),
+        },),
+    )
     costs = next(
         item
         for item in view.scenario_coverage.items

@@ -13,12 +13,13 @@ from .schemas import to_dict
 from .pdf_report import PdfExportUnavailable, write_report_pdf
 from .report_view import (
     ReportView,
+    ReportViewV3,
     _build_scenario_coverage,
     build_report_view,
     build_report_view_v3,
     effective_limitations,
 )
-from .scenario_map import ScenarioCoverageSnapshot, scenario_coverage_payload
+from .scenario_map import scenario_coverage_payload
 from .tax_cross_checks import TaxCrossCheckRun
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
@@ -57,11 +58,11 @@ def tax_snapshot_payload(
     tax_cross_checks: TaxCrossCheckRun | None = None,
     confirmed_facts: Mapping[str, object] | None = None,
     revision: int | None = None,
-    scenario_coverage: ScenarioCoverageSnapshot | None = None,
+    report_view: ReportViewV3 | None = None,
 ) -> dict[str, object]:
     """Return an allowlisted, JSON-friendly snapshot without customer facts."""
     current_revision = snapshot.revision if revision is None else revision
-    if scenario_coverage is None:
+    if report_view is None:
         scenario_coverage = _build_scenario_coverage(
             snapshot,
             revision=current_revision,
@@ -69,11 +70,26 @@ def tax_snapshot_payload(
             tax_cross_checks=tax_cross_checks,
             confirmed_facts=confirmed_facts,
         )
-    elif (
-        not isinstance(scenario_coverage, ScenarioCoverageSnapshot)
-        or scenario_coverage.revision != current_revision
-    ):
-        raise ValueError("invalid_scenario_coverage")
+    else:
+        if material_statuses or tax_cross_checks is not None or confirmed_facts is not None:
+            raise ValueError("report_view_evidence_conflict")
+        if not isinstance(report_view, ReportViewV3):
+            raise ValueError("report_view_snapshot_mismatch")
+        period = snapshot.request.period
+        expected_report_id = (
+            f"THR-{period.start:%Y%m%d}-{period.end:%Y%m%d}-R{current_revision:04d}"
+        )
+        if (
+            report_view.meta.schema_version != "tax-health-report/v3"
+            or report_view.meta.revision != current_revision
+            or report_view.meta.period_start != period.start
+            or report_view.meta.period_end != period.end
+            or report_view.meta.report_id != expected_report_id
+            or report_view.scenario_coverage.revision != current_revision
+            or not report_view.executive_summary.entity_name
+        ):
+            raise ValueError("report_view_snapshot_mismatch")
+        scenario_coverage = report_view.scenario_coverage
     result_payloads = []
     for result in snapshot.results:
         payload = to_dict(result)
@@ -384,14 +400,14 @@ def write_tax_health_snapshot(
     snapshot: TaxCheckSnapshot,
     path: Path,
     *,
-    scenario_coverage: ScenarioCoverageSnapshot | None = None,
+    report_view: ReportViewV3 | None = None,
 ) -> Path:
     """Atomically write the allowlisted machine snapshot payload as JSON."""
     content = json.dumps(
         tax_snapshot_payload(
             snapshot,
             revision=snapshot.revision,
-            scenario_coverage=scenario_coverage,
+            report_view=report_view,
         ),
         ensure_ascii=False,
         sort_keys=True,

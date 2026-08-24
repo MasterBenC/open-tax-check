@@ -272,11 +272,11 @@ def _build_scenario_coverage(
     if tax_cross_checks is not None:
         for result in tax_cross_checks.results:
             for source_ref in result.source_refs:
-                for source_key in (source_ref.source_id, source_ref.locator):
-                    if isinstance(source_key, str) and source_key.strip():
-                        source_check_ids.setdefault(source_key.strip(), set()).add(
-                            result.check_id
-                        )
+                source_key = source_ref.source_id
+                if isinstance(source_key, str) and source_key.strip():
+                    source_check_ids.setdefault(source_key.strip(), set()).add(
+                        result.check_id
+                    )
     material_states: dict[str, str] = {}
     for item in material_statuses:
         status = item.get("status")
@@ -290,15 +290,18 @@ def _build_scenario_coverage(
                 if isinstance(source_id, str) and source_id.strip()
                 else set()
             )
-            if len(candidates) != 1:
+            if not candidates:
                 continue
-            check_id = next(iter(candidates))
-        if not isinstance(check_id, str) or not check_id.strip():
+            check_ids = candidates
+        elif isinstance(check_id, str) and check_id.strip():
+            check_ids = {check_id.strip()}
+        else:
             raise ValueError("invalid_scenario_material_check_id")
         assert isinstance(status, str)
-        previous = material_states.setdefault(check_id.strip(), status)
-        if previous != status:
-            raise ValueError("conflicting_scenario_state")
+        for candidate_check_id in check_ids:
+            previous = material_states.setdefault(candidate_check_id, status)
+            if previous != status:
+                raise ValueError("conflicting_scenario_state")
     return build_scenario_coverage(
         revision=revision,
         check_states=check_states,
@@ -413,24 +416,17 @@ def build_report_view_v3(
     tax_cross_checks: TaxCrossCheckRun | None = None,
     confirmed_facts: Mapping[str, object] | None = None,
     revision: int | None = None,
-    scenario_coverage: ScenarioCoverageSnapshot | None = None,
 ) -> ReportViewV3:
     """Build the immutable, customer-safe tax-health-report/v3 view."""
 
     current_revision = snapshot.revision if revision is None else revision
-    if scenario_coverage is None:
-        scenario_coverage = _build_scenario_coverage(
-            snapshot,
-            revision=current_revision,
-            material_statuses=material_statuses,
-            tax_cross_checks=tax_cross_checks,
-            confirmed_facts=confirmed_facts,
-        )
-    elif (
-        not isinstance(scenario_coverage, ScenarioCoverageSnapshot)
-        or scenario_coverage.revision != current_revision
-    ):
-        raise ValueError("invalid_scenario_coverage")
+    scenario_coverage = _build_scenario_coverage(
+        snapshot,
+        revision=current_revision,
+        material_statuses=material_statuses,
+        tax_cross_checks=tax_cross_checks,
+        confirmed_facts=confirmed_facts,
+    )
     period = snapshot.request.period
     period_zh = f"{period.start.isoformat()}至{period.end.isoformat()}"
     risks: list[RiskItem] = []
