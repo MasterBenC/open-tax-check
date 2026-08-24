@@ -6,6 +6,7 @@ import subprocess
 import pytest
 from unittest.mock import patch
 
+import open_tax_check.customer_guide as customer_guide
 from open_tax_check.customer_guide import build_case_guide, start_case_from_profile
 from open_tax_check.case import init_case, write_json
 
@@ -314,6 +315,60 @@ def test_confirmed_false_scenario_does_not_emit_conditional_materials(case_with_
         question["fact_key"] == "has_real_estate_activity"
         for question in guide["scenario_questions"]
     )
+
+
+def test_confirmed_scenario_fact_loader_keeps_only_customer_or_named_human_booleans(
+    case_with_profile: Path,
+) -> None:
+    write_json(case_with_profile / "work" / "scenario-facts.json", {
+        "schema_version": "tax-scenario-facts/v1",
+        "facts": {
+            "has_real_estate_activity": {
+                "value": False,
+                "confirmed_by": "customer",
+            },
+            "has_taxable_contracts": {
+                "value": True,
+                "confirmed_by": "human:张三",
+            },
+            "revenue_recognition": {
+                "value": False,
+                "confirmed_by": "human:复核人",
+            },
+            "turnover_scope": {
+                "value": False,
+                "confirmed_by": "ai",
+            },
+            "tax_return_sales": {
+                "value": False,
+            },
+            "has_employees_or_shareholder_flows": {
+                "value": False,
+                "confirmed_by": "ai",
+            },
+            "has_related_party_or_restructuring_activity": {
+                "value": "false",
+                "confirmed_by": "customer",
+            },
+        },
+    })
+
+    assert customer_guide.load_confirmed_scenario_facts(case_with_profile) == {
+        "has_real_estate_activity": False,
+        "has_taxable_contracts": True,
+        "revenue_recognition": False,
+    }
+
+
+def test_confirmed_scenario_fact_loader_treats_invalid_file_as_unknown(
+    case_with_profile: Path,
+) -> None:
+    (case_with_profile / "work" / "scenario-facts.json").write_text(
+        "{invalid",
+        encoding="utf-8",
+    )
+
+    assert customer_guide.load_confirmed_scenario_facts(case_with_profile) == {}
 
 
 def test_unknown_fact_is_asked_but_not_treated_as_not_applicable(case_with_profile: Path) -> None:

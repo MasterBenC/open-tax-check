@@ -18,7 +18,7 @@ from .report_view import (
     build_report_view_v3,
     effective_limitations,
 )
-from .scenario_map import scenario_coverage_payload
+from .scenario_map import ScenarioCoverageSnapshot, scenario_coverage_payload
 from .tax_cross_checks import TaxCrossCheckRun
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
@@ -57,25 +57,23 @@ def tax_snapshot_payload(
     tax_cross_checks: TaxCrossCheckRun | None = None,
     confirmed_facts: Mapping[str, object] | None = None,
     revision: int | None = None,
+    scenario_coverage: ScenarioCoverageSnapshot | None = None,
 ) -> dict[str, object]:
     """Return an allowlisted, JSON-friendly snapshot without customer facts."""
     current_revision = snapshot.revision if revision is None else revision
-    include_scenario_coverage = bool(snapshot.results) or any((
-        revision is not None,
-        bool(material_statuses),
-        tax_cross_checks is not None,
-        confirmed_facts is not None,
-    ))
-    scenario_coverage = (
-        _build_scenario_coverage(
+    if scenario_coverage is None:
+        scenario_coverage = _build_scenario_coverage(
             snapshot,
             revision=current_revision,
             material_statuses=material_statuses,
             tax_cross_checks=tax_cross_checks,
             confirmed_facts=confirmed_facts,
         )
-        if include_scenario_coverage else None
-    )
+    elif (
+        not isinstance(scenario_coverage, ScenarioCoverageSnapshot)
+        or scenario_coverage.revision != current_revision
+    ):
+        raise ValueError("invalid_scenario_coverage")
     result_payloads = []
     for result in snapshot.results:
         payload = to_dict(result)
@@ -113,8 +111,7 @@ def tax_snapshot_payload(
         ],
         "limitations": [to_dict(item) for item in effective_limitations(snapshot)],
     }
-    if scenario_coverage is not None:
-        payload["scenario_coverage"] = scenario_coverage_payload(scenario_coverage)
+    payload["scenario_coverage"] = scenario_coverage_payload(scenario_coverage)
     return payload
 
 
@@ -383,10 +380,19 @@ def write_tax_health_report(
     ))
 
 
-def write_tax_health_snapshot(snapshot: TaxCheckSnapshot, path: Path) -> Path:
+def write_tax_health_snapshot(
+    snapshot: TaxCheckSnapshot,
+    path: Path,
+    *,
+    scenario_coverage: ScenarioCoverageSnapshot | None = None,
+) -> Path:
     """Atomically write the allowlisted machine snapshot payload as JSON."""
     content = json.dumps(
-        tax_snapshot_payload(snapshot, revision=snapshot.revision),
+        tax_snapshot_payload(
+            snapshot,
+            revision=snapshot.revision,
+            scenario_coverage=scenario_coverage,
+        ),
         ensure_ascii=False,
         sort_keys=True,
     ) + "\n"

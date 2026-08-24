@@ -212,7 +212,14 @@ class TaxHealthFacadeTests(unittest.TestCase):
 
         self.assertEqual(
             set(payload),
-            {"schema_version", "revision", "request", "results", "questions", "audit_events", "limitations"},
+            {
+                "schema_version", "revision", "request", "results", "questions",
+                "audit_events", "limitations", "scenario_coverage",
+            },
+        )
+        self.assertEqual(
+            payload["scenario_coverage"]["schema_version"],
+            "tax-scenario-coverage/v1",
         )
         self.assertEqual(
             payload["limitations"],

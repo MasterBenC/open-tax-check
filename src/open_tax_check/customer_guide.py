@@ -196,7 +196,10 @@ def _document_groups(active_scenarios: tuple[str, ...] | list[str]) -> list[dict
     return groups
 
 
-def _confirmed_scenario_facts(root: Path) -> dict[str, bool]:
+def load_confirmed_scenario_facts(case_dir: Path) -> dict[str, bool]:
+    """Load source-safe, human-confirmed boolean scenario facts."""
+
+    root = resolve_safe_case_path(case_dir)
     facts_path = root / "work" / "scenario-facts.json"
     try:
         safe_facts_path = source_paths.resolve_safe_source(facts_path, root / "work")
@@ -211,9 +214,16 @@ def _confirmed_scenario_facts(root: Path) -> dict[str, bool]:
     top_level_confirmer = payload.get("confirmed_by", _MISSING)
     if top_level_confirmer is not _MISSING and not _is_human_confirmer(top_level_confirmer):
         return {}
+    coverage_fact_keys = {
+        fact_key
+        for scenario in _scenario_catalog()
+        for fact_key in scenario.get("trigger_fact_keys", ())
+        if isinstance(fact_key, str)
+    }
+    known_fact_keys = set(SCENARIO_FACT_KEYS) | coverage_fact_keys
     confirmed: dict[str, bool] = {}
     for fact_key, raw_value in facts.items():
-        if fact_key not in SCENARIO_FACT_KEYS:
+        if fact_key not in known_fact_keys:
             continue
         value: object = raw_value
         confirmer: object = top_level_confirmer
@@ -331,9 +341,14 @@ def build_case_guide(case_dir: Path) -> dict[str, object]:
         "completed": "税务健康检查交付已完成。",
         "blocked": "当前资料存在阻断项，请先按提示处理。",
     }
+    confirmed_facts = {
+        fact_key: value
+        for fact_key, value in load_confirmed_scenario_facts(root).items()
+        if fact_key in SCENARIO_FACT_KEYS
+    }
     return _guide(
         stage,
         messages[stage],
         profile=payload,
-        confirmed_facts=_confirmed_scenario_facts(root),
+        confirmed_facts=confirmed_facts,
     )

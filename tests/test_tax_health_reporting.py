@@ -22,6 +22,7 @@ from open_tax_check.tax_models import (
 )
 from open_tax_check.tax_registry import TAX_DEFINITIONS
 from open_tax_check.report_view import build_report_view
+from open_tax_check.scenario_map import build_scenario_coverage, scenario_coverage_payload
 from open_tax_check.tax_reporting import (
     effective_limitations,
     render_tax_health_report,
@@ -46,6 +47,22 @@ def test_machine_snapshot_rejects_unknown_material_state():
                 "status": "unknown",
             },),
         )
+
+
+def test_machine_snapshot_writer_serializes_injected_scenario_coverage(tmp_path):
+    snapshot = snapshot_with_every_status()
+    coverage = build_scenario_coverage(
+        revision=snapshot.revision,
+        check_states={"FS-VAT-SALES-001": "matched"},
+        material_states={},
+        confirmed_facts={},
+    )
+    path = tmp_path / "snapshot.json"
+
+    write_tax_health_snapshot(snapshot, path, scenario_coverage=coverage)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["scenario_coverage"] == scenario_coverage_payload(coverage)
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))

@@ -11,7 +11,7 @@ from open_tax_check.report_view import (
     build_report_view,
     build_report_view_v3,
 )
-from open_tax_check.scenario_map import scenario_coverage_payload
+from open_tax_check.scenario_map import build_scenario_coverage, scenario_coverage_payload
 from open_tax_check.tax_reporting import tax_snapshot_payload
 from open_tax_check.tax_models import (
     AuditEvent,
@@ -109,6 +109,41 @@ def test_report_view_and_machine_snapshot_share_scenario_counts():
     assert revenue.executed_risk_count == 1
 
 
+def test_injected_scenario_coverage_is_shared_without_rebuilding():
+    snapshot = _snapshot()
+    coverage = build_scenario_coverage(
+        revision=4,
+        check_states={"FS-VAT-SALES-001": "matched"},
+        material_states={},
+        confirmed_facts={},
+    )
+    conflicting_inputs = {
+        "tax_cross_checks": difference_run(),
+        "material_statuses": ({
+            "source_id": "vat-sales-return",
+            "check_id": "FS-VAT-SALES-001",
+            "status": "not_provided",
+        },),
+    }
+
+    view = build_report_view_v3(
+        snapshot,
+        entity_name="虚构科技有限公司",
+        revision=4,
+        scenario_coverage=coverage,
+        **conflicting_inputs,
+    )
+    payload = tax_snapshot_payload(
+        snapshot,
+        revision=4,
+        scenario_coverage=coverage,
+        **conflicting_inputs,
+    )
+
+    assert view.scenario_coverage is coverage
+    assert payload["scenario_coverage"] == scenario_coverage_payload(coverage)
+
+
 def test_scenario_coverage_uses_material_state_for_linked_cross_check():
     view = build_report_view_v3(
         _snapshot(),
@@ -129,6 +164,75 @@ def test_scenario_coverage_uses_material_state_for_linked_cross_check():
     assert costs.awaiting_evidence_count == 0
     assert costs.received_unparsed_count == 1
     assert costs.executed_clear_count == 0
+
+
+@pytest.mark.parametrize(
+    ("material_source_id", "ref_source_id", "ref_locator"),
+    [
+        ("unique-cit-material", "unique-cit-material", "cit-business-entertainment"),
+        ("cit-business-entertainment", "different-source", "cit-business-entertainment"),
+    ],
+)
+def test_scenario_coverage_binds_material_by_unique_cross_check_source_ref(
+    material_source_id,
+    ref_source_id,
+    ref_locator,
+):
+    run = difference_run()
+    costs_result = replace(
+        run.results[-1],
+        source_refs=(
+            replace(
+                run.results[-1].source_refs[0],
+                source_id=ref_source_id,
+                locator=ref_locator,
+            ),
+        ),
+    )
+    run = replace(run, results=(*run.results[:-1], costs_result))
+
+    view = build_report_view_v3(
+        _snapshot(),
+        entity_name="虚构科技有限公司",
+        tax_cross_checks=run,
+        material_statuses=({
+            "source_id": material_source_id,
+            "status": "received_pending",
+            "tax_ids": (),
+        },),
+    )
+
+    costs = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "costs_and_expenses"
+    )
+    assert costs.received_unparsed_count == 1
+    assert costs.executed_clear_count == 0
+
+
+@pytest.mark.parametrize("source_id", ["source-1", "unmatched-material"])
+def test_scenario_coverage_does_not_guess_non_unique_or_unmatched_material(
+    source_id,
+):
+    view = build_report_view_v3(
+        _snapshot(),
+        entity_name="虚构科技有限公司",
+        tax_cross_checks=difference_run(),
+        material_statuses=({
+            "source_id": source_id,
+            "status": "received_pending",
+            "tax_ids": (),
+        },),
+    )
+
+    costs = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "costs_and_expenses"
+    )
+    assert costs.executed_clear_count == 1
+    assert costs.received_unparsed_count == 0
 
 
 def test_not_performed_cross_check_uses_current_tax_status_conservatively():
@@ -167,6 +271,49 @@ def test_not_performed_cross_check_uses_current_tax_status_conservatively():
     )
     assert revenue.awaiting_evidence_count == 1
     assert revenue.not_performed_count == 0
+
+
+def test_not_performed_check_requires_all_related_tax_results_for_not_applicable():
+    snapshot = replace(
+        _snapshot(),
+        results=(
+            TaxResult(
+                "vat",
+                TaxStatus.NOT_APPLICABLE,
+                evidence_refs=("vat-not-applicable-evidence",),
+            ),
+        ),
+        questions=(),
+    )
+    run = difference_run()
+    missing = replace(
+        run.results[1],
+        tax_ids=("vat", "cit"),
+        status=CrossCheckStatus.NOT_PERFORMED,
+        ledger_amount=None,
+        comparison_amount=None,
+        difference_amount=None,
+        difference_ratio=None,
+        source_refs=(),
+        reason_codes=("missing_income_statement_or_vat_sales",),
+        question=run.questions[0],
+    )
+    run = replace(run, results=(*run.results[:1], missing, *run.results[2:]))
+
+    view = build_report_view_v3(
+        snapshot,
+        entity_name="虚构科技有限公司",
+        tax_cross_checks=run,
+    )
+
+    revenue = next(
+        item
+        for item in view.scenario_coverage.items
+        if item.scenario_id == "revenue_and_turnover"
+    )
+    assert revenue.not_applicable_count == 0
+    assert revenue.not_performed_count == 1
+    assert revenue.executed_clear_count == 3
 
 
 def test_conflicting_scenario_states_prevent_view_and_machine_delivery():

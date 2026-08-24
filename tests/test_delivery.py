@@ -17,6 +17,7 @@ from open_tax_check.case_orchestration import (
 )
 from open_tax_check import cli
 from open_tax_check.delivery import DeliveryError, build_case_delivery, verified_delivery_artifacts
+from open_tax_check.scenario_map import scenario_coverage_payload
 from open_tax_check.tax_models import (
     Confirmation,
     DateRange,
@@ -46,6 +47,10 @@ def _fast_report_renderers(monkeypatch):
 
     monkeypatch.setattr(delivery, "write_report_html", write_html, raising=False)
     monkeypatch.setattr(delivery, "write_report_pdf", write_pdf, raising=False)
+    monkeypatch.setattr(
+        "open_tax_check.evidence_bundle.importlib.metadata.version",
+        lambda _name: "test",
+    )
 
 
 def _request():
@@ -151,6 +156,183 @@ def test_case_delivery_renders_persisted_cross_check_difference(tmp_path: Path):
     html = (case / result["revision_path"] / "report.html").read_text(encoding="utf-8")
 
     assert run.results[1].title_zh in html
+
+
+def test_case_delivery_uses_one_scenario_coverage_for_report_and_machine_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+):
+    case = _case(tmp_path)
+    manifest_payload = {"sources": []}
+    manifest_bytes = json.dumps(manifest_payload).encode("utf-8")
+    (case / "work/input_manifest.json").write_bytes(manifest_bytes)
+    run = replace(
+        difference_run(),
+        source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+    )
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    def write_html(view, path):
+        path.write_text(
+            "<!doctype html>\n" + json.dumps(
+                scenario_coverage_payload(view.scenario_coverage),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def write_pdf(view, path):
+        path.write_bytes(
+            b"%PDF-1.7\n% fictional delivery test\n"
+            + json.dumps(
+                scenario_coverage_payload(view.scenario_coverage),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        return path
+
+    monkeypatch.setattr("open_tax_check.delivery.write_report_html", write_html)
+    monkeypatch.setattr("open_tax_check.delivery.write_report_pdf", write_pdf)
+    from open_tax_check import report_view
+
+    coverage_builds = []
+    real_build_scenario_coverage = report_view.build_scenario_coverage
+
+    def count_coverage_builds(**kwargs):
+        coverage_builds.append(kwargs)
+        return real_build_scenario_coverage(**kwargs)
+
+    monkeypatch.setattr(
+        "open_tax_check.report_view.build_scenario_coverage",
+        count_coverage_builds,
+    )
+
+    result = build_case_delivery(case)
+    revision_dir = case / result["revision_path"]
+    html_coverage = json.loads(
+        (revision_dir / "report.html").read_text(encoding="utf-8").split("\n", 1)[1]
+    )
+    pdf_coverage = json.loads(
+        (revision_dir / "税务健康检查报告.pdf")
+        .read_bytes()
+        .split(b"\n", 2)[2]
+        .decode("utf-8")
+    )
+    machine = json.loads(
+        (revision_dir / "tax-health-snapshot.json").read_text(encoding="utf-8")
+    )
+
+    assert html_coverage == pdf_coverage == machine["scenario_coverage"]
+    assert html_coverage["revision"] == machine["revision"] == result["revision"]
+    assert len(coverage_builds) == 1
+
+
+def test_case_delivery_uses_only_human_confirmed_scenario_facts(tmp_path: Path):
+    case = _case(tmp_path)
+    (case / "work/scenario-facts.json").write_text(
+        json.dumps({
+            "schema_version": "tax-scenario-facts/v1",
+            "facts": {
+                "revenue_recognition": {
+                    "value": False,
+                    "confirmed_by": "customer",
+                },
+                "turnover_scope": {
+                    "value": False,
+                    "confirmed_by": "human:复核人",
+                },
+                "tax_return_sales": {
+                    "value": False,
+                    "confirmed_by": "customer",
+                },
+            },
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = build_case_delivery(case)
+    machine = json.loads(
+        (
+            case
+            / result["revision_path"]
+            / "tax-health-snapshot.json"
+        ).read_text(encoding="utf-8")
+    )
+    revenue = next(
+        item
+        for item in machine["scenario_coverage"]["items"]
+        if item["scenario_id"] == "revenue_and_turnover"
+    )
+
+    assert revenue["not_applicable_count"] == 4
+    assert revenue["not_performed_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("material_source_id", "bind_costs", "received_unparsed_count"),
+    [
+        ("unique-cit-material", True, 1),
+        ("unmatched-material", False, 0),
+    ],
+)
+def test_case_delivery_binds_material_only_by_unique_cross_check_source_ref(
+    tmp_path: Path,
+    material_source_id: str,
+    bind_costs: bool,
+    received_unparsed_count: int,
+):
+    case = _case(tmp_path)
+    manifest_payload = {
+        "sources": [{
+            "source_id": material_source_id,
+            "status": "present_unparsed",
+            "filename": "企业所得税资料.pdf",
+        }],
+    }
+    manifest_bytes = json.dumps(manifest_payload, ensure_ascii=False).encode("utf-8")
+    (case / "work/input_manifest.json").write_bytes(manifest_bytes)
+    run = difference_run()
+    if bind_costs:
+        costs_result = replace(
+            run.results[-1],
+            source_refs=(
+                replace(
+                    run.results[-1].source_refs[0],
+                    source_id=material_source_id,
+                    locator="cit-business-entertainment",
+                ),
+            ),
+        )
+        run = replace(run, results=(*run.results[:-1], costs_result))
+    run = replace(
+        run,
+        source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+    )
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = build_case_delivery(case)
+    machine = json.loads(
+        (
+            case
+            / result["revision_path"]
+            / "tax-health-snapshot.json"
+        ).read_text(encoding="utf-8")
+    )
+    costs = next(
+        item
+        for item in machine["scenario_coverage"]["items"]
+        if item["scenario_id"] == "costs_and_expenses"
+    )
+
+    assert costs["received_unparsed_count"] == received_unparsed_count
+    assert costs["executed_clear_count"] == 1 - received_unparsed_count
 
 
 def test_case_delivery_rejects_cross_check_bound_to_another_source_manifest(tmp_path: Path):

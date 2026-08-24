@@ -12,6 +12,7 @@ import tempfile
 import re
 
 from .case import resolve_safe_case_path
+from .customer_guide import load_confirmed_scenario_facts
 from .case_orchestration import (
     HANDOFF_NAME,
     build_case_customer_handoff,
@@ -29,7 +30,12 @@ from .evidence_bundle import (
 from .source_paths import resolve_safe_source
 from .html_report import write_report_html
 from .pdf_report import PdfExportUnavailable, write_report_pdf
-from .report_view import REPORT_SCHEMA_VERSION_V3, build_report_view_v3
+from .report_view import (
+    REPORT_SCHEMA_VERSION_V3,
+    _build_scenario_coverage,
+    build_report_view_v3,
+)
+from .scenario_map import ScenarioCoverageSnapshot, scenario_catalog
 from .tax_cross_checks import parse_tax_cross_check_payload
 from .tax_reporting import tax_snapshot_payload, write_tax_health_snapshot
 from .tax_models import TaxCheckSnapshot, TaxStatus
@@ -66,15 +72,36 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _snapshot_digest(snapshot: TaxCheckSnapshot) -> str:
+def _snapshot_digest(
+    snapshot: TaxCheckSnapshot,
+    scenario_coverage: ScenarioCoverageSnapshot,
+) -> str:
     return hashlib.sha256(
         json.dumps(
-            tax_snapshot_payload(snapshot),
+            tax_snapshot_payload(
+                snapshot,
+                revision=snapshot.revision,
+                scenario_coverage=scenario_coverage,
+            ),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _confirmed_coverage_facts(root: Path) -> dict[str, bool]:
+    confirmed = load_confirmed_scenario_facts(root)
+    coverage_fact_keys = {
+        fact_key
+        for scenario in scenario_catalog()
+        for fact_key in scenario.trigger_fact_keys
+    }
+    return {
+        fact_key: value
+        for fact_key, value in confirmed.items()
+        if fact_key in coverage_fact_keys
+    }
 
 
 def _is_reparse(metadata: os.stat_result) -> bool:
@@ -616,6 +643,7 @@ def _pointer_payload(root: Path, manifest: dict[str, object], revision_path: Pat
 def _existing_delivery(
     root: Path,
     snapshot: TaxCheckSnapshot,
+    snapshot_digest: str,
     options: dict[str, bool],
     case_audit_digest: str,
 ) -> dict[str, object] | None:
@@ -658,7 +686,7 @@ def _existing_delivery(
         return None
     if manifest_revision != snapshot.revision:
         raise DeliveryError("delivery_revision_conflict")
-    if manifest.get("snapshot_digest") != _snapshot_digest(snapshot):
+    if manifest.get("snapshot_digest") != snapshot_digest:
         raise DeliveryError("delivery_revision_conflict")
     if manifest.get("delivery_options") != options:
         raise DeliveryError("delivery_revision_conflict")
@@ -690,7 +718,31 @@ def build_case_delivery(
         raise DeliveryError("delivery_blocked_data_quality")
     case_audit_digest = _case_audit_digest(case_audit_artifacts)
     entity_name, reviewed_findings = _report_context(root, case_audit_payloads)
-    existing = _existing_delivery(root, snapshot, options, case_audit_digest)
+    manifest_payload = _read_manifest(root)
+    material_statuses = _material_statuses(manifest_payload, case_audit_payloads)
+    try:
+        cross_check_run = (
+            parse_tax_cross_check_payload(case_audit_payloads["tax_cross_checks"])
+            if "tax_cross_checks" in case_audit_payloads
+            else None
+        )
+    except ValueError:
+        raise DeliveryError("delivery_case_audit_invalid") from None
+    scenario_coverage = _build_scenario_coverage(
+        snapshot,
+        revision=snapshot.revision,
+        material_statuses=material_statuses,
+        tax_cross_checks=cross_check_run,
+        confirmed_facts=_confirmed_coverage_facts(root),
+    )
+    snapshot_digest = _snapshot_digest(snapshot, scenario_coverage)
+    existing = _existing_delivery(
+        root,
+        snapshot,
+        snapshot_digest,
+        options,
+        case_audit_digest,
+    )
     if existing is not None:
         build_case_customer_handoff(root)
         return existing
@@ -718,7 +770,7 @@ def build_case_delivery(
         _validate_tax_cross_check_record(manifest.get("tax_cross_checks"), tax_cross_checks)
         if (
             manifest.get("revision") != snapshot.revision
-            or manifest.get("snapshot_digest") != _snapshot_digest(snapshot)
+            or manifest.get("snapshot_digest") != snapshot_digest
             or manifest.get("delivery_options") != options
             or manifest.get("case_audit_digest") != case_audit_digest
         ):
@@ -737,26 +789,17 @@ def build_case_delivery(
     manifest: dict[str, object] | None = None
     published_directory = False
     try:
-        manifest_payload = _read_manifest(root)
         html_path = temporary_directory / "report.html"
         pdf_path = temporary_directory / "税务健康检查报告.pdf"
         workpaper_path = temporary_directory / WORKPAPER_NAME
         snapshot_path = temporary_directory / "tax-health-snapshot.json"
-        material_statuses = _material_statuses(manifest_payload, case_audit_payloads)
-        try:
-            cross_check_run = (
-                parse_tax_cross_check_payload(case_audit_payloads["tax_cross_checks"])
-                if "tax_cross_checks" in case_audit_payloads
-                else None
-            )
-        except ValueError:
-            raise DeliveryError("delivery_case_audit_invalid") from None
         report_view = build_report_view_v3(
             snapshot,
             entity_name=entity_name,
             reviewed_findings=reviewed_findings,
             material_statuses=material_statuses,
             tax_cross_checks=cross_check_run,
+            scenario_coverage=scenario_coverage,
         )
         write_report_html(report_view, html_path)
         write_report_pdf(report_view, pdf_path)
@@ -767,7 +810,11 @@ def build_case_delivery(
             delivery_revision=snapshot.revision,
             case_audit=case_audit_payloads,
         )
-        write_tax_health_snapshot(snapshot, snapshot_path)
+        write_tax_health_snapshot(
+            snapshot,
+            snapshot_path,
+            scenario_coverage=scenario_coverage,
+        )
 
         artifacts = [
             BundleArtifact("html_report", html_path, "report.html"),
@@ -810,7 +857,6 @@ def build_case_delivery(
             include_evidence_files=include_evidence_files,
         )
 
-        snapshot_digest = _snapshot_digest(snapshot)
         artifact_records = [
             _artifact_record(kind, path, temporary_directory, snapshot.revision)
             for kind, path in (

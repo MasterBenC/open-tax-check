@@ -254,9 +254,13 @@ def _build_scenario_coverage(
                     state = "needs_evidence"
                 elif TaxStatus.NEEDS_LOCAL_POLICY in relevant_statuses:
                     state = "needs_local_policy"
-                elif relevant_statuses and all(
-                    status is TaxStatus.NOT_APPLICABLE
-                    for status in relevant_statuses
+                elif (
+                    len(relevant_statuses) == len(result.tax_ids)
+                    and relevant_statuses
+                    and all(
+                        status is TaxStatus.NOT_APPLICABLE
+                        for status in relevant_statuses
+                    )
                 ):
                     state = "not_applicable"
             if result.status is CrossCheckStatus.DIFFERENCE_FOUND:
@@ -264,6 +268,15 @@ def _build_scenario_coverage(
             previous = check_states.setdefault(result.check_id, state)
             if previous != state:
                 raise ValueError("conflicting_scenario_state")
+    source_check_ids: dict[str, set[str]] = {}
+    if tax_cross_checks is not None:
+        for result in tax_cross_checks.results:
+            for source_ref in result.source_refs:
+                for source_key in (source_ref.source_id, source_ref.locator):
+                    if isinstance(source_key, str) and source_key.strip():
+                        source_check_ids.setdefault(source_key.strip(), set()).add(
+                            result.check_id
+                        )
     material_states: dict[str, str] = {}
     for item in material_statuses:
         status = item.get("status")
@@ -271,7 +284,15 @@ def _build_scenario_coverage(
             raise ValueError("unknown_material_status")
         check_id = item.get("check_id")
         if check_id is None:
-            continue
+            source_id = item.get("source_id")
+            candidates = (
+                source_check_ids.get(source_id.strip(), set())
+                if isinstance(source_id, str) and source_id.strip()
+                else set()
+            )
+            if len(candidates) != 1:
+                continue
+            check_id = next(iter(candidates))
         if not isinstance(check_id, str) or not check_id.strip():
             raise ValueError("invalid_scenario_material_check_id")
         assert isinstance(status, str)
@@ -392,17 +413,24 @@ def build_report_view_v3(
     tax_cross_checks: TaxCrossCheckRun | None = None,
     confirmed_facts: Mapping[str, object] | None = None,
     revision: int | None = None,
+    scenario_coverage: ScenarioCoverageSnapshot | None = None,
 ) -> ReportViewV3:
     """Build the immutable, customer-safe tax-health-report/v3 view."""
 
     current_revision = snapshot.revision if revision is None else revision
-    scenario_coverage = _build_scenario_coverage(
-        snapshot,
-        revision=current_revision,
-        material_statuses=material_statuses,
-        tax_cross_checks=tax_cross_checks,
-        confirmed_facts=confirmed_facts,
-    )
+    if scenario_coverage is None:
+        scenario_coverage = _build_scenario_coverage(
+            snapshot,
+            revision=current_revision,
+            material_statuses=material_statuses,
+            tax_cross_checks=tax_cross_checks,
+            confirmed_facts=confirmed_facts,
+        )
+    elif (
+        not isinstance(scenario_coverage, ScenarioCoverageSnapshot)
+        or scenario_coverage.revision != current_revision
+    ):
+        raise ValueError("invalid_scenario_coverage")
     period = snapshot.request.period
     period_zh = f"{period.start.isoformat()}至{period.end.isoformat()}"
     risks: list[RiskItem] = []
