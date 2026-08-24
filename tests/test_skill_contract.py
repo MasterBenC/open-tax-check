@@ -31,6 +31,37 @@ class SkillContractTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, host)
 
+    def test_case_guide_flow_reloads_dynamic_v2_after_case_start(self):
+        documents = {
+            "skill": (SKILL / "SKILL.md").read_text(encoding="utf-8"),
+            "host": (SKILL / "references" / "host-integrations.md").read_text(
+                encoding="utf-8"
+            ),
+            "readme": (ROOT / "README.md").read_text(encoding="utf-8"),
+        }
+        host = documents["host"]
+        self.assertIn("第一次 `case-guide` 的 `document_groups` 可为空", host)
+        self.assertIn("`case-start` 后必须再次调用 `case-guide`", host)
+        self.assertLess(
+            host.index("第一次 `case-guide`"),
+            host.index("`case-start` 后必须再次调用 `case-guide`"),
+        )
+        for name, text in documents.items():
+            with self.subTest(document=name):
+                self.assertNotIn("原样展示 `active_scenarios`", text)
+                self.assertNotIn("原样展示 `case-guide/v2`", text)
+                self.assertIn("仅供宿主控制，不向客户直接展示", text)
+                for field in (
+                    "message_zh",
+                    "question_zh",
+                    "title_zh",
+                    "items_zh",
+                    "applicability_note_zh",
+                    "privacy_zh",
+                    "disclaimer_zh",
+                ):
+                    self.assertIn(field, text)
+
     def test_skill_and_readme_describe_dynamic_document_groups(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

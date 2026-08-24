@@ -31,7 +31,7 @@ Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经�
 
 ### 经营场景税务风险地图（`case-guide/v2`）
 
-客户引导保留企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型五项基础档案，并通过 `scenario_questions`、`active_scenarios`、`document_groups` 按已确认经营事实动态追问和补充资料。五类导航场景是：收入与流转、成本费用、资产与不动产、合同及特殊交易、人员、股东及关联事项。
+客户引导先用第一次 `case-guide` 取得 `message_zh`、欢迎语和 `profile_questions`；第一次返回的 `document_groups` 可为空，不能当作动态资料清单。收齐五项基础档案后调用 `case-start`，随后必须再次调用 `case-guide` 取得第二次 `case-guide/v2` 动态引导。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。五类导航场景是：收入与流转、成本费用、资产与不动产、合同及特殊交易、人员、股东及关联事项。
 
 场景命中不等于税种适用；AI 智能体不得替客户确认经营事实，只能展示问题、整理客户原话和证据。六个英文内部值是接口状态码：`executed_clear`=已执行且未见异常、`executed_risk`=已执行需关注、`awaiting_evidence`=待补资料、`received_unparsed`=已收到待解析、`not_applicable`=不适用、`not_performed`=未执行；宿主只展示中文字段/文案，不直接展示代码。待补资料、已收到待解析和未执行均不计入已执行或已通过，当前资料下未发现异常也不表示无税务风险。
 
@@ -44,11 +44,12 @@ Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经�
 面向客户时，由 AI 智能体先说：“欢迎使用税务健康检查 AI 智能体。请先告诉我企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。”智能体把这五项写入 `customer-profile/v1`，然后调用：
 
 ```powershell
+opentaxcheck case-guide --case .\cases\demo
 opentaxcheck case-start --case .\cases\demo --profile .\customer-profile.json
 opentaxcheck case-guide --case .\cases\demo
 ```
 
-`case-guide/v2` 会返回 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。条件清单只是询问资料，不代表已经认定契税、印花税或其他税种适用。推荐模型为 DeepSeek V4、腾讯混元 3、GLM-5.2、GPT-5.6、Claude 4.8+、Qwen 3.7 Max 和 Doubao Seed 2.0 Pro，`qwen3.7-plus` 可作为成本均衡方案。模型只影响资料理解和对话辅助，不能改变税额计算、案件状态、证据要求或报告结论；缺少结构化 JSON 或工具能力时使用 `off`。
+第一次 `case-guide` 只用于欢迎和五项 profile questions；第一次 `document_groups` 可为空。`case-start` 后必须再次 `case-guide`，第二次才返回 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。条件清单只是询问资料，不代表已经认定契税、印花税或其他税种适用。推荐模型为 DeepSeek V4、腾讯混元 3、GLM-5.2、GPT-5.6、Claude 4.8+、Qwen 3.7 Max 和 Doubao Seed 2.0 Pro，`qwen3.7-plus` 可作为成本均衡方案。模型只影响资料理解和对话辅助，不能改变税额计算、案件状态、证据要求或报告结论；缺少结构化 JSON 或工具能力时使用 `off`。
 
 ```powershell
 python -m venv .venv

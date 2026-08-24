@@ -14,14 +14,14 @@ description: Use when checking Chinese enterprise tax materials from CSV or Exce
 把五项信息写入 `customer-profile/v1` JSON，再运行：
 
 ```text
+opentaxcheck case-guide --case <case-dir>
 opentaxcheck case-start --case <case-dir> --profile <profile.json>
 opentaxcheck case-guide --case <case-dir>
 ```
-
-逐项原样展示 `case-guide/v2` 的中文字段：`scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。不另写开场或自行判断税种适用性。客户回答待确认问题时只用 `case-confirm`；完成后原样展示 `tax-customer-handoff/v1`，不得把机器限制、待补资料或试算金额改写成更强结论。模型选择规则见 [references/model-recommendations.md](references/model-recommendations.md)。
+第一次 `case-guide` 只取得 `message_zh`、欢迎语和 `profile_questions`；其 `document_groups` 可为空，不能当作动态资料清单。收齐五项基础信息后运行 `case-start`，随后必须再次运行 `case-guide` 取得第二次 `case-guide/v2` 动态引导。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。不另写开场或自行判断税种适用性；模型选择规则见 [references/model-recommendations.md](references/model-recommendations.md)。
 
 ## 经营场景引导
-`case-guide/v2` 提供 `scenario_questions`、`active_scenarios` 和 `document_groups`：先保留五项基础档案，再只询问不动产、应税合同、雇员/股东往来及关联/重组等经营事实，明确确认后才展开条件资料。
+第二次 `case-guide/v2` 提供 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。`scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；先保留五项基础档案，再只询问不动产、应税合同、雇员/股东往来及关联/重组等经营事实，明确确认后才展开条件资料。
 五类导航场景为：收入与流转、成本费用、资产与不动产、合同及特殊交易、人员、股东及关联事项；场景命中不等于税种适用，AI 智能体不得替客户确认经营事实。
 六个英文内部值是接口状态码：`executed_clear`=已执行且未见异常、`executed_risk`=已执行需关注、`awaiting_evidence`=待补资料、`received_unparsed`=已收到待解析、`not_applicable`=不适用、`not_performed`=未执行；宿主只展示中文字段/文案，不直接展示代码。待补资料、已收到待解析和未执行均不计入已执行或已通过。
 当前五个固定交叉核对 ID 为 `BOOK-FS-REV-001`、`FS-VAT-SALES-001`、`BOOK-VAT-OUTPUT-001`、`FS-CIT-REV-PROFIT-001`、`BOOK-CIT-BE-001`；外部清单中的未核验条目只能作为询问型候选，100+ 清单不扩张为自动规则或客户结论。

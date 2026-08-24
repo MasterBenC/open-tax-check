@@ -11,14 +11,16 @@
 ## 固定顺序
 
 1. 验证 Python 3.11–3.13；安装 `open-tax-check[excel,report]`，再运行 `python -m playwright install chromium`。
-2. 首次对话调用 `case-guide`，原样展示 `case-guide/v2` 的 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。收齐五项企业信息后调用 `case-start`。宿主不得自行改写开场、场景问题、资料组或阶段状态。
-3. 为一个法律实体、一个地区和 2023–2026 检查期间构造 `TaxCheckRequest`。
-4. 不提供模型服务，调用 `case-self-check` 生成可恢复案件快照。
-5. 读取 `case-status` 和 `case-tasks`，只向客户展示 `question_zh`、`help_zh`、`evidence_help_zh`。
-6. 用带确认人、带时区时间戳和证据引用的结构化确认调用 `case-confirm`；不得传入或覆盖案件状态。
-7. Python 只重跑受影响税种，并重新生成同一修订版的任务、脱敏快照和中文报告。
-8. 只向客户输出中文《税务健康检查报告》PDF；HTML、工作底稿、快照和证据包仅用于内部审计，不提供 Word。
-9. 升级 OpenTaxCheck 包以接收新版官方规则包。
+2. 首次对话调用 `case-guide`，取得 `message_zh`、欢迎语和 `profile_questions`；第一次 `case-guide` 的 `document_groups` 可为空，不能当作动态资料清单。宿主不得自行改写开场或阶段状态。
+3. 收齐五项企业信息后调用 `case-start`。
+4. `case-start` 后必须再次调用 `case-guide`，读取第二次 `case-guide/v2` 的动态引导。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。第二次返回的 `document_groups` 按基础资料+已激活场景动态生成，数量不固定。宿主不得自行改写场景问题、资料组或阶段状态。
+5. 为一个法律实体、一个地区和 2023–2026 检查期间构造 `TaxCheckRequest`。
+6. 不提供模型服务，调用 `case-self-check` 生成可恢复案件快照。
+7. 读取 `case-status` 和 `case-tasks`，只向客户展示实际存在的中文字段 `question_zh`、`help_zh`、`evidence_help_zh`。
+8. 用带确认人、带时区时间戳和证据引用的结构化确认调用 `case-confirm`；不得传入或覆盖案件状态。
+9. Python 只重跑受影响税种，并重新生成同一修订版的任务、脱敏快照和中文报告。
+10. 只向客户输出中文《税务健康检查报告》PDF；HTML、工作底稿、快照和证据包仅用于内部审计，不提供 Word。
+11. 升级 OpenTaxCheck 包以接收新版官方规则包。
 
 CLI 可恢复案件运行 `opentaxcheck case-self-check --case CASE --request request.json`，随后使用 `case-status`、`case-tasks` 和 `case-confirm` 完成补件闭环。无案件目录的单次报告仍可运行 `opentaxcheck tax-health-check --request request.json --output-dir output`；需要显式加入全部参数化计算模板时可追加 `--include-parameterized-packs`。所有计算事实必须经客户确认并绑定证据。
 
