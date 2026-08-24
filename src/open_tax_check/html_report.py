@@ -45,6 +45,7 @@ def _toc() -> str:
         ("reading-notice", "阅读提示"),
         ("executive-summary", "税务健康检查结论"),
         ("risk-overview", "风险全景"),
+        ("scenario-map", "本次税务检查地图"),
         ("priority-actions", "优先处理清单"),
         ("risk-details", "重点风险详解"),
         ("tax-coverage", "分税种检查结果"),
@@ -94,6 +95,49 @@ def _risk_overview(view: ReportViewV3) -> str:
         '</div>'
     )
     return _section("risk-overview", "风险全景", content)
+
+
+def _scenario_map(view: ReportViewV3) -> str:
+    """Render the non-assurance scenario coverage boundary for customers."""
+
+    rows = "".join(
+        '<tr data-scenario-id="{scenario_id}">'
+        '<th scope="row">{name}</th>'
+        '<td>{total}</td>'
+        '<td class="scenario-state scenario-state-clear">{executed_clear}</td>'
+        '<td class="scenario-state scenario-state-risk">{executed_risk}</td>'
+        '<td class="scenario-state scenario-state-evidence">{awaiting_evidence}</td>'
+        '<td class="scenario-state scenario-state-unparsed">{received_unparsed}</td>'
+        '<td class="scenario-state scenario-state-na">{not_applicable}</td>'
+        '<td class="scenario-state scenario-state-pending">{not_performed}</td>'
+        '</tr>'.format(
+            scenario_id=_e(item.scenario_id),
+            name=_e(item.name_zh),
+            total=_e(item.total_count),
+            executed_clear=_e(item.executed_clear_count),
+            executed_risk=_e(item.executed_risk_count),
+            awaiting_evidence=_e(item.awaiting_evidence_count),
+            received_unparsed=_e(item.received_unparsed_count),
+            not_applicable=_e(item.not_applicable_count),
+            not_performed=_e(item.not_performed_count),
+        )
+        for item in view.scenario_coverage.items
+    )
+    header = (
+        '<thead><tr><th scope="col" style="width:22%">场景</th>'
+        '<th scope="col">合计</th>'
+        '<th scope="col" class="scenario-state-clear">已执行且未见异常</th>'
+        '<th scope="col" class="scenario-state-risk">已执行需关注</th>'
+        '<th scope="col" class="scenario-state-evidence">待补资料</th>'
+        '<th scope="col" class="scenario-state-unparsed">已收到待解析</th>'
+        '<th scope="col" class="scenario-state-na">不适用</th>'
+        '<th scope="col" class="scenario-state-pending">未执行</th></tr></thead>'
+    )
+    content = (
+        '<p>按场景汇总本次检查程序的当前状态；待补资料不计入已执行或已通过。</p>'
+        f'<table class="scenario-map-table">{header}<tbody>{rows}</tbody></table>'
+    )
+    return _section("scenario-map", "本次税务检查地图", content, classes="page-break")
 
 
 def _actions(view: ReportViewV3) -> str:
@@ -199,7 +243,7 @@ def render_report_html(view: ReportViewV3) -> str:
     )
     body = "".join((
         _cover(view), _toc(), _reading_notice(view), _summary(view),
-        _risk_overview(view), _actions(view), _risk_details(view),
+        _risk_overview(view), _scenario_map(view), _actions(view), _risk_details(view),
         _tax_coverage(view), _material_scope(view), _appendix(view),
     ))
     return (

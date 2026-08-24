@@ -60,6 +60,25 @@ def test_html_contains_fixed_sections_in_customer_reading_order():
     assert "THR-20260101-20261231-R0007" in html
 
 
+def test_html_contains_scenario_map_with_safe_counts():
+    """A missing scenario-map section would hide the coverage boundary from customers."""
+
+    html = render_report_html(_view())
+
+    assert 'id="scenario-map"' in html
+    assert html.index('href="#scenario-map"') < html.index('href="#priority-actions"')
+    assert html.index('<section id="risk-overview"') < html.index('<section id="scenario-map"')
+    assert html.index('<section id="scenario-map"') < html.index('<section id="priority-actions"')
+    assert "待补资料不计入已执行或已通过" in html
+    assert 'data-scenario-id="revenue_and_turnover"' in html
+    assert 'data-scenario-id="costs_and_expenses"' in html
+    assert 'data-scenario-id="assets_and_real_estate"' in html
+    assert 'data-scenario-id="contracts_and_special_transactions"' in html
+    assert 'data-scenario-id="people_shareholders_and_related_parties"' in html
+    for label in ("场景", "合计", "已执行且未见异常", "已执行需关注", "待补资料", "已收到待解析", "不适用", "未执行"):
+        assert label in html
+
+
 def test_html_escapes_customer_text_and_contains_no_external_assets():
     html = render_report_html(_view(entity_name='<script src="https://evil.example/x.js">'))
 

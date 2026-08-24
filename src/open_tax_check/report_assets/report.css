@@ -98,6 +98,24 @@ tr, .risk-heading, .summary-block { break-inside: avoid; }
 .disclaimer { border-top: 1px solid #aeb7bf; padding-top: 3mm; color: #4d5962; }
 .empty { color: #64727d; font-style: normal; }
 
+.scenario-map-table { font-size: 8.5pt; }
+.scenario-map-table th,
+.scenario-map-table td { padding: 1.8mm 1.4mm; }
+.scenario-map-table th[scope="row"] { background: #f5f6f7; }
+.scenario-map-table .scenario-state { text-align: center; border-top-width: 3px; }
+.scenario-map-table .scenario-state-clear { border-top-color: #3f4850; }
+.scenario-map-table .scenario-state-risk { border-top-color: #171c20; }
+.scenario-map-table .scenario-state-evidence { border-top-color: #66717a; }
+.scenario-map-table .scenario-state-unparsed { border-top-color: #7e878e; }
+.scenario-map-table .scenario-state-na { border-top-color: #9ca4aa; }
+.scenario-map-table .scenario-state-pending { border-top-color: #b6bdc2; }
+.scenario-map-table th.scenario-state-clear { background: #e4e7e9; }
+.scenario-map-table th.scenario-state-risk { background: #d4d8db; }
+.scenario-map-table th.scenario-state-evidence { background: #e9ebed; }
+.scenario-map-table th.scenario-state-unparsed { background: #f0f1f2; }
+.scenario-map-table th.scenario-state-na { background: #f5f6f7; }
+.scenario-map-table th.scenario-state-pending { background: #fafafa; }
+
 @media screen {
   body { width: 210mm; margin: 0 auto; padding: 12mm 16mm; }
 }

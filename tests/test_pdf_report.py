@@ -1,6 +1,8 @@
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 import re
+import unicodedata
 
 import pytest
 from pypdf import PdfReader
@@ -54,6 +56,20 @@ def _require_chromium() -> None:
         pytest.skip(f"Chromium unavailable: {error}")
 
 
+def _flatten_outline_titles(items: object) -> tuple[str, ...]:
+    titles: list[str] = []
+    if not isinstance(items, list):
+        return ()
+    for item in items:
+        if isinstance(item, list):
+            titles.extend(_flatten_outline_titles(item))
+            continue
+        title = getattr(item, "title", None)
+        if isinstance(title, str):
+            titles.append(title)
+    return tuple(titles)
+
+
 def test_renderer_unavailable_leaves_no_customer_file(tmp_path: Path, monkeypatch):
     output = tmp_path / "税务健康检查报告.pdf"
     monkeypatch.setattr("open_tax_check.pdf_report.sync_playwright", None)
@@ -94,8 +110,39 @@ def test_real_chromium_pdf_is_valid_and_contains_customer_identity(tmp_path: Pat
         annotation = reference.get_object()
         destination = reader.named_destinations[str(annotation["/Dest"])]
         target_pages.append(reader.get_destination_page_number(destination) + 1)
-    assert len(printed_pages) == len(target_pages) == 8
+    assert len(printed_pages) == len(target_pages) == 9
     assert printed_pages == target_pages
+
+
+def test_real_chromium_pdf_contains_the_scenario_map_and_cross_check_boundary(tmp_path: Path):
+    """Removing the map or its scope disclaimer would overstate report coverage."""
+
+    _require_chromium()
+    output = tmp_path / "税务健康检查报告.pdf"
+    cross_check_ids = (
+        "BOOK-FS-REV-001",
+        "FS-VAT-SALES-001",
+        "BOOK-VAT-OUTPUT-001",
+        "FS-CIT-REV-PROFIT-001",
+        "BOOK-CIT-BE-001",
+    )
+    view = replace(_view(), appendix_executed_checks=cross_check_ids)
+
+    assert write_report_pdf(view, output) == output
+
+    reader = PdfReader(output)
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    normalized_text = unicodedata.normalize("NFKC", text)
+    outline_titles = _flatten_outline_titles(reader.outline)
+    assert not reader.is_encrypted
+    assert "本次税务检查地图" in normalized_text
+    assert "待补资料不计入已执行或已通过" in normalized_text
+    for name in ("收入与营业额", "成本与费用", "资产与不动产", "合同与特殊交易", "人员、股东与关联方"):
+        assert name in normalized_text
+    for check_id in cross_check_ids:
+        assert check_id in normalized_text
+    assert outline_titles.index("风险全景") < outline_titles.index("本次税务检查地图")
+    assert outline_titles.index("本次税务检查地图") < outline_titles.index("优先处理清单")
 
 
 def test_renderer_blocks_external_resource_before_publication(tmp_path: Path, monkeypatch):
