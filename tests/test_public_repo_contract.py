@@ -89,6 +89,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
     def test_public_docs_describe_scenario_map_and_preserve_delivery_boundaries(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertNotIn("三组清单", readme)
         for required in (
             "case-guide/v2",
             "收入与流转",

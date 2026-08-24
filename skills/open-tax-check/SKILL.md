@@ -18,12 +18,12 @@ opentaxcheck case-start --case <case-dir> --profile <profile.json>
 opentaxcheck case-guide --case <case-dir>
 ```
 
-逐项原样展示 `case-guide/v2` 的中文字段和三组资料清单，不另写开场或自行判断税种适用性。客户回答待确认问题时只用 `case-confirm`；完成后原样展示 `tax-customer-handoff/v1`，不得把机器限制、待补资料或试算金额改写成更强结论。模型选择规则见 [references/model-recommendations.md](references/model-recommendations.md)。
+逐项原样展示 `case-guide/v2` 的中文字段：`scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。不另写开场或自行判断税种适用性。客户回答待确认问题时只用 `case-confirm`；完成后原样展示 `tax-customer-handoff/v1`，不得把机器限制、待补资料或试算金额改写成更强结论。模型选择规则见 [references/model-recommendations.md](references/model-recommendations.md)。
 
 ## 经营场景引导
 `case-guide/v2` 提供 `scenario_questions`、`active_scenarios` 和 `document_groups`：先保留五项基础档案，再只询问不动产、应税合同、雇员/股东往来及关联/重组等经营事实，明确确认后才展开条件资料。
 五类导航场景为：收入与流转、成本费用、资产与不动产、合同及特殊交易、人员、股东及关联事项；场景命中不等于税种适用，AI 智能体不得替客户确认经营事实。
-客户可见状态只有 `executed_clear`、`executed_risk`、`awaiting_evidence`、`received_unparsed`、`not_applicable`、`not_performed`；待补资料、已收到待解析和未执行均不计入已执行或已通过。
+六个英文内部值是接口状态码：`executed_clear`=已执行且未见异常、`executed_risk`=已执行需关注、`awaiting_evidence`=待补资料、`received_unparsed`=已收到待解析、`not_applicable`=不适用、`not_performed`=未执行；宿主只展示中文字段/文案，不直接展示代码。待补资料、已收到待解析和未执行均不计入已执行或已通过。
 当前五个固定交叉核对 ID 为 `BOOK-FS-REV-001`、`FS-VAT-SALES-001`、`BOOK-VAT-OUTPUT-001`、`FS-CIT-REV-PROFIT-001`、`BOOK-CIT-BE-001`；外部清单中的未核验条目只能作为询问型候选，100+ 清单不扩张为自动规则或客户结论。
 
 ## 先守住范围

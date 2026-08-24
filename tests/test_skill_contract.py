@@ -9,6 +9,36 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_skill_host_reference_uses_case_guide_v2_contract(self):
+        host = (SKILL / "references" / "host-integrations.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("case-guide/v1", host)
+        for required in (
+            "case-guide/v2",
+            "scenario_questions",
+            "active_scenarios",
+            "document_groups",
+            "接口状态码",
+            "已执行且未见异常",
+            "已执行需关注",
+            "待补资料",
+            "已收到待解析",
+            "不适用",
+            "未执行",
+            "宿主只展示中文字段/文案，不直接展示代码",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, host)
+
+    def test_skill_and_readme_describe_dynamic_document_groups(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("三组资料", skill)
+        self.assertNotIn("三组清单", readme)
+        for text in (skill, readme):
+            self.assertIn("按基础资料+已激活场景动态生成的 `document_groups`", text)
+
     def test_skill_describes_scenario_map_without_claiming_no_risk(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         for required in (

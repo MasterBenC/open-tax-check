@@ -11,7 +11,7 @@
 ## 固定顺序
 
 1. 验证 Python 3.11–3.13；安装 `open-tax-check[excel,report]`，再运行 `python -m playwright install chromium`。
-2. 首次对话调用 `case-guide`，原样展示 `case-guide/v1`；收齐五项企业信息后调用 `case-start`。宿主不得自行改写开场、资料组或阶段状态。
+2. 首次对话调用 `case-guide`，原样展示 `case-guide/v2` 的 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。收齐五项企业信息后调用 `case-start`。宿主不得自行改写开场、场景问题、资料组或阶段状态。
 3. 为一个法律实体、一个地区和 2023–2026 检查期间构造 `TaxCheckRequest`。
 4. 不提供模型服务，调用 `case-self-check` 生成可恢复案件快照。
 5. 读取 `case-status` 和 `case-tasks`，只向客户展示 `question_zh`、`help_zh`、`evidence_help_zh`。
@@ -21,6 +21,21 @@
 9. 升级 OpenTaxCheck 包以接收新版官方规则包。
 
 CLI 可恢复案件运行 `opentaxcheck case-self-check --case CASE --request request.json`，随后使用 `case-status`、`case-tasks` 和 `case-confirm` 完成补件闭环。无案件目录的单次报告仍可运行 `opentaxcheck tax-health-check --request request.json --output-dir output`；需要显式加入全部参数化计算模板时可追加 `--include-parameterized-packs`。所有计算事实必须经客户确认并绑定证据。
+
+## 客户状态呈现
+
+以下六个英文内部值仅作为接口状态码；宿主只展示中文字段/文案，不直接展示代码：
+
+| 接口状态码 | 客户中文文案 |
+| --- | --- |
+| `executed_clear` | 已执行且未见异常 |
+| `executed_risk` | 已执行需关注 |
+| `awaiting_evidence` | 待补资料 |
+| `received_unparsed` | 已收到待解析 |
+| `not_applicable` | 不适用 |
+| `not_performed` | 未执行 |
+
+待补资料、已收到待解析和未执行均不计入已执行或已通过。宿主不得把未解决状态改写为“无风险”或已完成。
 
 ## 统一案件交付
 
