@@ -5,7 +5,7 @@ import re
 import unicodedata
 
 import pytest
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 from open_tax_check.pdf_report import (
     PdfExportUnavailable,
@@ -136,13 +136,44 @@ def test_real_chromium_pdf_contains_the_scenario_map_and_cross_check_boundary(tm
     outline_titles = _flatten_outline_titles(reader.outline)
     assert not reader.is_encrypted
     assert "本次税务检查地图" in normalized_text
-    assert "待补资料不计入已执行或已通过" in normalized_text
+    assert "待补资料、已收到待解析和未执行均不计入已执行或已通过。" in normalized_text
     for name in ("收入与营业额", "成本与费用", "资产与不动产", "合同与特殊交易", "人员、股东与关联方"):
         assert name in normalized_text
     for check_id in cross_check_ids:
         assert check_id in normalized_text
     assert outline_titles.index("风险全景") < outline_titles.index("本次税务检查地图")
     assert outline_titles.index("本次税务检查地图") < outline_titles.index("优先处理清单")
+
+
+def test_validation_rejects_pdf_missing_scenario_map_bookmark(tmp_path: Path):
+    _require_chromium()
+    source = tmp_path / "source.pdf"
+    missing_map = tmp_path / "missing-map.pdf"
+    write_report_pdf(_view(), source)
+
+    reader = PdfReader(source)
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    required_titles = (
+        "阅读提示",
+        "税务健康检查结论",
+        "风险全景",
+        "本次税务检查地图",
+        "优先处理清单",
+        "重点风险详解",
+        "分税种检查结果",
+        "资料范围与检查边界",
+        "附录",
+    )
+    for title in required_titles:
+        if title != "本次税务检查地图":
+            writer.add_outline_item(title, 0)
+    with missing_map.open("wb") as handle:
+        writer.write(handle)
+
+    with pytest.raises(PdfExportUnavailable, match="^pdf_validation_failed$"):
+        validate_report_pdf(missing_map, "THR-20260101-20261231-R0003")
 
 
 def test_renderer_blocks_external_resource_before_publication(tmp_path: Path, monkeypatch):

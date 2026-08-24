@@ -134,7 +134,7 @@ def _scenario_map(view: ReportViewV3) -> str:
         '<th scope="col" class="scenario-state-pending">未执行</th></tr></thead>'
     )
     content = (
-        '<p>按场景汇总本次检查程序的当前状态；待补资料不计入已执行或已通过。</p>'
+        '<p>按场景汇总本次检查程序的当前状态；待补资料、已收到待解析和未执行均不计入已执行或已通过。</p>'
         f'<table class="scenario-map-table">{header}<tbody>{rows}</tbody></table>'
     )
     return _section("scenario-map", "本次税务检查地图", content, classes="page-break")
