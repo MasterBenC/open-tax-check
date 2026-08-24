@@ -9,6 +9,29 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_skill_describes_scenario_map_without_claiming_no_risk(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        for required in (
+            "经营场景",
+            "收入与流转",
+            "成本费用",
+            "资产与不动产",
+            "合同及特殊交易",
+            "人员、股东及关联事项",
+            "case-guide/v2",
+            "待补资料、已收到待解析和未执行均不计入已执行或已通过",
+            "AI 智能体不得替客户确认经营事实",
+            "场景命中不等于税种适用",
+            "外部清单中的未核验条目只能作为询问型候选",
+            "BOOK-FS-REV-001",
+            "FS-VAT-SALES-001",
+            "BOOK-VAT-OUTPUT-001",
+            "FS-CIT-REV-PROFIT-001",
+            "BOOK-CIT-BE-001",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, skill)
+
     def test_skill_contains_opening_model_and_handoff_contracts(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         models = (SKILL / "references" / "model-recommendations.md").read_text(encoding="utf-8")

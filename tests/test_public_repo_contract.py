@@ -86,6 +86,35 @@ def assert_privacy_option_is_required(test_case, text):
 
 
 class PublicRepositoryContractTests(unittest.TestCase):
+    def test_public_docs_describe_scenario_map_and_preserve_delivery_boundaries(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for required in (
+            "case-guide/v2",
+            "收入与流转",
+            "成本费用",
+            "资产与不动产",
+            "合同及特殊交易",
+            "人员、股东及关联事项",
+            "executed_clear",
+            "executed_risk",
+            "awaiting_evidence",
+            "received_unparsed",
+            "not_applicable",
+            "not_performed",
+            "待补资料、已收到待解析和未执行均不计入已执行或已通过",
+            "场景命中不等于税种适用",
+            "外部清单中的未核验条目只能作为询问型候选",
+            "BOOK-FS-REV-001",
+            "FS-VAT-SALES-001",
+            "BOOK-VAT-OUTPUT-001",
+            "FS-CIT-REV-PROFIT-001",
+            "BOOK-CIT-BE-001",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, readme)
+        self.assertIn("经营场景税务风险地图", changelog)
+
     def test_required_public_files_exist(self):
         for name in (
             "README.md",

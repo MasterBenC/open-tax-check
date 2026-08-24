@@ -29,6 +29,14 @@ Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经�
 4. 映射提案必须由复核人确认并绑定来源；随后才可运行标准化、勾稽和规则。
 5. 勾稽通过不表示不存在税务风险；所有 finding 仍须专业复核，且未解析资料会保留在覆盖矩阵中。
 
+### 经营场景税务风险地图（`case-guide/v2`）
+
+客户引导保留企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型五项基础档案，并通过 `scenario_questions`、`active_scenarios`、`document_groups` 按已确认经营事实动态追问和补充资料。五类导航场景是：收入与流转、成本费用、资产与不动产、合同及特殊交易、人员、股东及关联事项。
+
+场景命中不等于税种适用；AI 智能体不得替客户确认经营事实，只能展示问题、整理客户原话和证据。客户可见状态固定为 `executed_clear`、`executed_risk`、`awaiting_evidence`、`received_unparsed`、`not_applicable`、`not_performed`。待补资料、已收到待解析和未执行均不计入已执行或已通过，当前资料下未发现异常也不表示无税务风险。
+
+第一版场景地图关联五个固定交叉核对 ID：`BOOK-FS-REV-001`、`FS-VAT-SALES-001`、`BOOK-VAT-OUTPUT-001`、`FS-CIT-REV-PROFIT-001`、`BOOK-CIT-BE-001`。外部清单中的未核验条目只能作为询问型候选；100+ 清单不能自动变成税种适用、税率、风险或结论，文档不声称已覆盖 100+ 自动规则。升级 OpenTaxCheck 包可获得新版场景目录和已核验规则，历史交付保持只读。
+
 ## 快速开始
 
 需要 Python 3.11、3.12 或 3.13。
@@ -40,7 +48,7 @@ opentaxcheck case-start --case .\cases\demo --profile .\customer-profile.json
 opentaxcheck case-guide --case .\cases\demo
 ```
 
-`case-guide` 会返回基础资料、建议资料和发生相关业务时再补充的资料三组清单；条件清单只是询问资料，不代表已经认定契税、印花税或其他税种适用。推荐模型为 DeepSeek V4、腾讯混元 3、GLM-5.2、GPT-5.6、Claude 4.8+、Qwen 3.7 Max 和 Doubao Seed 2.0 Pro，`qwen3.7-plus` 可作为成本均衡方案。模型只影响资料理解和对话辅助，不能改变税额计算、案件状态、证据要求或报告结论；缺少结构化 JSON 或工具能力时使用 `off`。
+`case-guide/v2` 会返回基础资料、场景问题、已触发场景和建议资料三组清单；条件清单只是询问资料，不代表已经认定契税、印花税或其他税种适用。推荐模型为 DeepSeek V4、腾讯混元 3、GLM-5.2、GPT-5.6、Claude 4.8+、Qwen 3.7 Max 和 Doubao Seed 2.0 Pro，`qwen3.7-plus` 可作为成本均衡方案。模型只影响资料理解和对话辅助，不能改变税额计算、案件状态、证据要求或报告结论；缺少结构化 JSON 或工具能力时使用 `off`。
 
 ```powershell
 python -m venv .venv
