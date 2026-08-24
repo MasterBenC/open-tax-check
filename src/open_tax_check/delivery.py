@@ -37,7 +37,10 @@ from .report_view import (
 )
 from .scenario_map import scenario_catalog
 from .tax_cross_checks import parse_tax_cross_check_payload
-from .tax_reporting import tax_snapshot_payload, write_tax_health_snapshot
+from .tax_reporting import (
+    _tax_snapshot_payload_from_report_view,
+    _write_tax_health_snapshot_from_report_view,
+)
 from .tax_models import TaxCheckSnapshot, TaxStatus
 from .workpaper import WORKPAPER_NAME, write_tax_health_workpaper
 
@@ -75,13 +78,15 @@ def _sha256(path: Path) -> str:
 def _snapshot_digest(
     snapshot: TaxCheckSnapshot,
     report_view: ReportViewV3,
+    entity_name: str,
 ) -> str:
     return hashlib.sha256(
         json.dumps(
-            tax_snapshot_payload(
+            _tax_snapshot_payload_from_report_view(
                 snapshot,
+                report_view,
                 revision=snapshot.revision,
-                report_view=report_view,
+                entity_name=entity_name,
             ),
             ensure_ascii=False,
             sort_keys=True,
@@ -736,7 +741,7 @@ def build_case_delivery(
         tax_cross_checks=cross_check_run,
         confirmed_facts=_confirmed_coverage_facts(root),
     )
-    snapshot_digest = _snapshot_digest(snapshot, report_view)
+    snapshot_digest = _snapshot_digest(snapshot, report_view, entity_name)
     existing = _existing_delivery(
         root,
         snapshot,
@@ -803,10 +808,11 @@ def build_case_delivery(
             delivery_revision=snapshot.revision,
             case_audit=case_audit_payloads,
         )
-        write_tax_health_snapshot(
+        _write_tax_health_snapshot_from_report_view(
             snapshot,
             snapshot_path,
-            report_view=report_view,
+            report_view,
+            entity_name=entity_name,
         )
 
         artifacts = [

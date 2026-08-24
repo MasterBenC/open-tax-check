@@ -134,3 +134,46 @@
 ## Concerns
 
 - 聚焦测试有 3 项按现有平台条件跳过；本轮按要求未运行完整回归。
+
+---
+
+# Fix round 3/5
+
+## RED / GREEN
+
+- C2 RED：`inspect.signature` 显示公共 `tax_snapshot_payload` 和
+  `write_tax_health_snapshot` 仍公开接受 `report_view`，调用者可注入自行构造的 view。
+- I3 RED：`ScenarioCoverageSnapshot` 只校验版本字段非空，未知 coverage schema 与
+  catalog version 均可实例化。
+- GREEN：
+  `PYTHONPATH=src python -m pytest tests/test_report_view.py tests/test_tax_health_reporting.py tests/test_tax_health.py tests/test_delivery.py tests/test_customer_guide.py tests/test_scenario_map.py -q`
+  结果为 `195 passed, 3 skipped, 20 subtests passed`。
+
+## 公共与内部接口
+
+- 公共 `tax_snapshot_payload` 与 `write_tax_health_snapshot` 的签名不再包含
+  `report_view` 或 `scenario_coverage`；公共路径始终从 snapshot 和当前 evidence
+  重新构造 coverage。
+- 新增私有 `_tax_snapshot_payload_from_report_view` 与
+  `_write_tax_health_snapshot_from_report_view`，仅供正式 delivery 同源复用。
+- 私有边界校验 `ReportViewV3` 类型、当前实体、期间、revision、report id、
+  report schema、coverage revision、coverage schema 与 catalog version。
+- delivery 仍只构造一次 `build_report_view_v3`；HTML/PDF、snapshot digest 和机器
+  JSON 消费同一 view，后两者仅经私有 helper 序列化。
+
+## 严格子协议
+
+- `ScenarioCoverageSnapshot.__post_init__` 现在要求
+  `schema_version == tax-scenario-coverage/v1`，否则抛出
+  `invalid_scenario_coverage_schema_version`。
+- 同时要求 `catalog_version == tax-scenario-catalog/v1`，否则抛出
+  `invalid_scenario_catalog_version`。
+
+## Commit
+
+最终 SHA 见本轮提交历史。
+
+## Concerns
+
+- 聚焦测试有 3 项按现有平台条件跳过；按要求未运行完整回归。
+- 私有 helper 是 Python 模块内部信任边界，不承诺抵御调用者直接调用私有符号。

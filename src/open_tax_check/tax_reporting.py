@@ -19,7 +19,12 @@ from .report_view import (
     build_report_view_v3,
     effective_limitations,
 )
-from .scenario_map import scenario_coverage_payload
+from .scenario_map import (
+    SCENARIO_CATALOG_SCHEMA_VERSION,
+    SCENARIO_COVERAGE_SCHEMA_VERSION,
+    ScenarioCoverageSnapshot,
+    scenario_coverage_payload,
+)
 from .tax_cross_checks import TaxCrossCheckRun
 from .tax_models import Question, RuleSource, TaxCheckSnapshot, TaxResult, TaxStatus
 from .tax_registry import TAX_DEFINITIONS
@@ -58,38 +63,24 @@ def tax_snapshot_payload(
     tax_cross_checks: TaxCrossCheckRun | None = None,
     confirmed_facts: Mapping[str, object] | None = None,
     revision: int | None = None,
-    report_view: ReportViewV3 | None = None,
 ) -> dict[str, object]:
     """Return an allowlisted, JSON-friendly snapshot without customer facts."""
     current_revision = snapshot.revision if revision is None else revision
-    if report_view is None:
-        scenario_coverage = _build_scenario_coverage(
-            snapshot,
-            revision=current_revision,
-            material_statuses=material_statuses,
-            tax_cross_checks=tax_cross_checks,
-            confirmed_facts=confirmed_facts,
-        )
-    else:
-        if material_statuses or tax_cross_checks is not None or confirmed_facts is not None:
-            raise ValueError("report_view_evidence_conflict")
-        if not isinstance(report_view, ReportViewV3):
-            raise ValueError("report_view_snapshot_mismatch")
-        period = snapshot.request.period
-        expected_report_id = (
-            f"THR-{period.start:%Y%m%d}-{period.end:%Y%m%d}-R{current_revision:04d}"
-        )
-        if (
-            report_view.meta.schema_version != "tax-health-report/v3"
-            or report_view.meta.revision != current_revision
-            or report_view.meta.period_start != period.start
-            or report_view.meta.period_end != period.end
-            or report_view.meta.report_id != expected_report_id
-            or report_view.scenario_coverage.revision != current_revision
-            or not report_view.executive_summary.entity_name
-        ):
-            raise ValueError("report_view_snapshot_mismatch")
-        scenario_coverage = report_view.scenario_coverage
+    scenario_coverage = _build_scenario_coverage(
+        snapshot,
+        revision=current_revision,
+        material_statuses=material_statuses,
+        tax_cross_checks=tax_cross_checks,
+        confirmed_facts=confirmed_facts,
+    )
+    return _tax_snapshot_payload(snapshot, scenario_coverage, current_revision)
+
+
+def _tax_snapshot_payload(
+    snapshot: TaxCheckSnapshot,
+    scenario_coverage: ScenarioCoverageSnapshot,
+    revision: int,
+) -> dict[str, object]:
     result_payloads = []
     for result in snapshot.results:
         payload = to_dict(result)
@@ -108,7 +99,7 @@ def tax_snapshot_payload(
         question_payloads.append(payload)
     payload = {
         "schema_version": snapshot.schema_version,
-        "revision": current_revision,
+        "revision": revision,
         "request": {
             "period": to_dict(snapshot.request.period),
             "jurisdiction": snapshot.request.jurisdiction,
@@ -129,6 +120,35 @@ def tax_snapshot_payload(
     }
     payload["scenario_coverage"] = scenario_coverage_payload(scenario_coverage)
     return payload
+
+
+def _tax_snapshot_payload_from_report_view(
+    snapshot: TaxCheckSnapshot,
+    report_view: ReportViewV3,
+    *,
+    revision: int,
+    entity_name: str,
+) -> dict[str, object]:
+    period = snapshot.request.period
+    expected_report_id = (
+        f"THR-{period.start:%Y%m%d}-{period.end:%Y%m%d}-R{revision:04d}"
+    )
+    if (
+        not isinstance(report_view, ReportViewV3)
+        or report_view.meta.schema_version != "tax-health-report/v3"
+        or report_view.meta.revision != revision
+        or report_view.meta.period_start != period.start
+        or report_view.meta.period_end != period.end
+        or report_view.meta.report_id != expected_report_id
+        or report_view.executive_summary.entity_name != entity_name
+        or report_view.scenario_coverage.revision != revision
+        or report_view.scenario_coverage.schema_version
+        != SCENARIO_COVERAGE_SCHEMA_VERSION
+        or report_view.scenario_coverage.catalog_version
+        != SCENARIO_CATALOG_SCHEMA_VERSION
+    ):
+        raise ValueError("report_view_snapshot_mismatch")
+    return _tax_snapshot_payload(snapshot, report_view.scenario_coverage, revision)
 
 
 def _sources(results: Iterable[TaxResult]) -> tuple[RuleSource, ...]:
@@ -399,15 +419,32 @@ def write_tax_health_report(
 def write_tax_health_snapshot(
     snapshot: TaxCheckSnapshot,
     path: Path,
-    *,
-    report_view: ReportViewV3 | None = None,
 ) -> Path:
     """Atomically write the allowlisted machine snapshot payload as JSON."""
     content = json.dumps(
         tax_snapshot_payload(
             snapshot,
             revision=snapshot.revision,
-            report_view=report_view,
+        ),
+        ensure_ascii=False,
+        sort_keys=True,
+    ) + "\n"
+    return _write_text_atomic(Path(path), content)
+
+
+def _write_tax_health_snapshot_from_report_view(
+    snapshot: TaxCheckSnapshot,
+    path: Path,
+    report_view: ReportViewV3,
+    *,
+    entity_name: str,
+) -> Path:
+    content = json.dumps(
+        _tax_snapshot_payload_from_report_view(
+            snapshot,
+            report_view,
+            revision=snapshot.revision,
+            entity_name=entity_name,
         ),
         ensure_ascii=False,
         sort_keys=True,

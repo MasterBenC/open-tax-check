@@ -162,8 +162,10 @@ class ScenarioCoverageSnapshot:
     unique_check_count: int
 
     def __post_init__(self) -> None:
-        _require_text(self.schema_version, "invalid_scenario_coverage_schema_version")
-        _require_text(self.catalog_version, "invalid_scenario_catalog_version")
+        if self.schema_version != SCENARIO_COVERAGE_SCHEMA_VERSION:
+            raise ValueError("invalid_scenario_coverage_schema_version")
+        if self.catalog_version != SCENARIO_CATALOG_SCHEMA_VERSION:
+            raise ValueError("invalid_scenario_catalog_version")
         if not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision <= 0:
             raise ValueError("invalid_scenario_coverage_revision")
         if not isinstance(self.unique_check_count, int) or isinstance(self.unique_check_count, bool):

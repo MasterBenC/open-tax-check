@@ -2,6 +2,7 @@
 
 from datetime import date
 from dataclasses import replace
+import inspect
 import json
 import unittest
 
@@ -49,7 +50,7 @@ def test_machine_snapshot_rejects_unknown_material_state():
         )
 
 
-def test_machine_snapshot_writer_reuses_report_view_scenario_coverage(tmp_path):
+def test_public_machine_snapshot_apis_reject_coverage_injection(tmp_path):
     snapshot = snapshot_with_every_status()
     report_view = build_report_view_v3(
         snapshot,
@@ -57,12 +58,29 @@ def test_machine_snapshot_writer_reuses_report_view_scenario_coverage(tmp_path):
     )
     path = tmp_path / "snapshot.json"
 
-    write_tax_health_snapshot(snapshot, path, report_view=report_view)
+    assert "report_view" not in inspect.signature(tax_snapshot_payload).parameters
+    assert "scenario_coverage" not in inspect.signature(tax_snapshot_payload).parameters
+    assert "report_view" not in inspect.signature(write_tax_health_snapshot).parameters
+    assert "scenario_coverage" not in inspect.signature(
+        write_tax_health_snapshot
+    ).parameters
+    with pytest.raises(TypeError):
+        tax_snapshot_payload(snapshot, report_view=report_view)
+    with pytest.raises(TypeError):
+        write_tax_health_snapshot(snapshot, path, report_view=report_view)
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["scenario_coverage"] == scenario_coverage_payload(
-        report_view.scenario_coverage
-    )
+
+def test_private_report_view_payload_rejects_entity_mismatch():
+    snapshot = snapshot_with_every_status()
+    report_view = build_report_view_v3(snapshot, entity_name="甲公司")
+
+    with pytest.raises(ValueError, match="report_view_snapshot_mismatch"):
+        tax_reporting._tax_snapshot_payload_from_report_view(
+            snapshot,
+            report_view,
+            revision=snapshot.revision,
+            entity_name="乙公司",
+        )
 
 
 PERIOD = DateRange(date(2026, 1, 1), date(2026, 1, 31))

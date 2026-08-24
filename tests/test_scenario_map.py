@@ -1,5 +1,5 @@
 import json
-from dataclasses import FrozenInstanceError, is_dataclass
+from dataclasses import FrozenInstanceError, is_dataclass, replace
 import re
 
 import pytest
@@ -493,3 +493,30 @@ def test_coverage_payload_is_versioned_serializable_snapshot():
         "unique_check_count": 5,
     }
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "schema_version",
+            "tax-scenario-coverage/v2",
+            "invalid_scenario_coverage_schema_version",
+        ),
+        (
+            "catalog_version",
+            "tax-scenario-catalog/v2",
+            "invalid_scenario_catalog_version",
+        ),
+    ],
+)
+def test_coverage_snapshot_rejects_unknown_protocol_versions(field, value, message):
+    coverage = build_scenario_coverage(
+        revision=1,
+        check_states={},
+        material_states={},
+        confirmed_facts={},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        replace(coverage, **{field: value})
