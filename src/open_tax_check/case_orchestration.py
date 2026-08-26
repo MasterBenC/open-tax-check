@@ -620,6 +620,46 @@ def apply_scenario_confirmations(
     ):
         raise ValueError("invalid_scenario_confirmation_batch")
 
+    lock_path = root / ".scenario-confirmation.lock"
+    lock_token = os.urandom(16).hex()
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise ValueError("scenario_confirmation_locked") from None
+    lock_stat = os.fstat(lock_fd)
+    lock_token_written = False
+    try:
+        try:
+            lock_bytes = lock_token.encode("ascii")
+            if os.write(lock_fd, lock_bytes) != len(lock_bytes):
+                raise OSError("scenario_confirmation_lock_write_failed")
+            lock_token_written = True
+        finally:
+            os.close(lock_fd)
+        return _apply_scenario_confirmations_locked(root, confirmations)
+    finally:
+        try:
+            current_stat = lock_path.lstat()
+            same_file = (
+                current_stat.st_dev == lock_stat.st_dev
+                and current_stat.st_ino == lock_stat.st_ino
+            )
+            token_matches = (
+                lock_path.read_text(encoding="ascii") == lock_token
+                if lock_token_written
+                else True
+            )
+            if same_file and token_matches:
+                lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _apply_scenario_confirmations_locked(
+    root: Path,
+    confirmations: tuple[Mapping[str, object], ...],
+) -> dict[str, object]:
+
     parsed: list[tuple[Mapping[str, object], Confirmation, str]] = []
     for item in confirmations:
         if not _scenario_confirmer_is_human(item.get("confirmed_by")):

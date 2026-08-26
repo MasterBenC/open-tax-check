@@ -1,6 +1,8 @@
 from datetime import date
 import hashlib
 import json
+import queue
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -203,6 +205,113 @@ class CaseOrchestrationTests(unittest.TestCase):
       self.assertEqual(len(events), 1)
       self.assertEqual(set(events[0].fact_keys), {item["fact_key"] for item in batch})
       self.assertFalse(pointer.exists())
+
+  def test_concurrent_scenario_confirmations_do_not_lose_an_update(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      tasks = build_case_customer_tasks(case_dir)
+      first_payload = self._scenario_confirmation(tasks[0])
+      second_payload = self._scenario_confirmation(tasks[1])
+      first_at_write = threading.Event()
+      release_first_write = threading.Event()
+      second_started = threading.Barrier(2)
+      outcomes = queue.Queue()
+      original_write = case_orchestration._write_json
+
+      def controlled_write(path, payload):
+        if (
+          path.name == "scenario-facts.json"
+          and first_payload["fact_key"] in payload["facts"]
+        ):
+          first_at_write.set()
+          if not release_first_write.wait(timeout=5):
+            raise AssertionError("first scenario confirmation was not released")
+        original_write(path, payload)
+
+      def apply(payload, *, wait_for_start=False):
+        if wait_for_start:
+          second_started.wait(timeout=5)
+        try:
+          result = case_orchestration.apply_scenario_confirmations(case_dir, (payload,))
+          outcomes.put(("ok", payload["fact_key"], result))
+        except Exception as error:
+          outcomes.put(("error", payload["fact_key"], str(error)))
+
+      with patch.object(case_orchestration, "_write_json", side_effect=controlled_write):
+        first = threading.Thread(target=apply, args=(first_payload,))
+        first.start()
+        self.assertTrue(first_at_write.wait(timeout=5))
+
+        second = threading.Thread(
+          target=apply,
+          args=(second_payload,),
+          kwargs={"wait_for_start": True},
+        )
+        second.start()
+        second_started.wait(timeout=5)
+        second.join(timeout=5)
+        self.assertFalse(second.is_alive())
+        release_first_write.set()
+        first.join(timeout=5)
+        self.assertFalse(first.is_alive())
+
+      observed = [outcomes.get_nowait(), outcomes.get_nowait()]
+      successes = [item for item in observed if item[0] == "ok"]
+      errors = [item for item in observed if item[0] == "error"]
+      facts = json.loads(
+        (case_dir / "work/scenario-facts.json").read_text(encoding="utf-8")
+      )
+
+      self.assertEqual(len(successes), 1)
+      self.assertEqual(len(errors), 1)
+      self.assertIn(
+        errors[0][2],
+        {"scenario_confirmation_locked", "scenario_confirmation_stale"},
+      )
+      self.assertEqual(facts["revision"], 1)
+      self.assertEqual(set(facts["facts"]), {successes[0][1]})
+      self.assertFalse((case_dir / ".scenario-confirmation.lock").exists())
+
+  def test_scenario_confirmation_removes_lock_when_token_write_fails(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+
+      with patch.object(case_orchestration.os, "write", side_effect=OSError("disk full")):
+        with self.assertRaisesRegex(OSError, "disk full"):
+          case_orchestration.apply_scenario_confirmations(
+            case_dir, (self._scenario_confirmation(task),)
+          )
+
+      self.assertFalse((case_dir / ".scenario-confirmation.lock").exists())
+
+  def test_scenario_confirmation_does_not_remove_lock_with_replaced_token(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+      lock_path = case_dir / ".scenario-confirmation.lock"
+
+      def replace_lock_token(*_args):
+        lock_path.write_text("replacement-owner-token", encoding="ascii")
+        raise ValueError("forced_failure")
+
+      with patch.object(
+        case_orchestration,
+        "_apply_scenario_confirmations_locked",
+        side_effect=replace_lock_token,
+      ):
+        with self.assertRaisesRegex(ValueError, "forced_failure"):
+          case_orchestration.apply_scenario_confirmations(
+            case_dir, (self._scenario_confirmation(task),)
+          )
+
+      self.assertEqual(
+        lock_path.read_text(encoding="ascii"),
+        "replacement-owner-token",
+      )
 
   def _invoke_scenario_cli(self, case_dir, input_path, payload):
     input_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
