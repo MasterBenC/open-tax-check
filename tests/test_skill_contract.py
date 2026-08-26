@@ -62,6 +62,19 @@ class SkillContractTests(unittest.TestCase):
                 ):
                     self.assertIn(field, text)
 
+    def test_skill_and_readme_put_first_guide_before_profile_write(self):
+        documents = (
+            (SKILL / "SKILL.md").read_text(encoding="utf-8"),
+            (ROOT / "README.md").read_text(encoding="utf-8"),
+        )
+        for text in documents:
+            with self.subTest(document=text[:40]):
+                first_guide = "先运行第一次 `case-guide`"
+                profile_write = "再把这五项信息写入"
+                self.assertIn(first_guide, text)
+                self.assertIn(profile_write, text)
+                self.assertLess(text.index(first_guide), text.index(profile_write))
+
     def test_skill_and_readme_describe_dynamic_document_groups(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

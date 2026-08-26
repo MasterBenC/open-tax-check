@@ -9,9 +9,7 @@ description: Use when checking Chinese enterprise tax materials from CSV or Exce
 
 ## 先和客户这样开始
 
-首次对话先展示：`欢迎使用税务健康检查 AI 智能体。请先告诉我企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。`
-
-把五项信息写入 `customer-profile/v1` JSON，再运行：
+首次对话先运行第一次 `case-guide`，展示其 `message_zh` 中的“税务健康检查 AI 智能体”欢迎语，并按 `profile_questions` 收集企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。再把这五项信息写入 `customer-profile/v1` JSON，运行 `case-start`，随后运行第二次 `case-guide`：
 
 ```text
 opentaxcheck case-guide --case <case-dir>

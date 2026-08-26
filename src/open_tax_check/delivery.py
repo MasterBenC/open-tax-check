@@ -486,10 +486,39 @@ def _material_statuses(
         for item in documents
         if isinstance(item, dict) and isinstance(item.get("source_id"), str)
     }
-    reconciliation = case_audit_payloads.get("structured_reconciliation", {})
-    reconciliation_passed = (
-        isinstance(reconciliation, dict) and reconciliation.get("passed") is True
+    structured_reconciliation = case_audit_payloads.get(
+        "structured_reconciliation", {}
     )
+    structured_reconciliation_passed = (
+        isinstance(structured_reconciliation, dict)
+        and structured_reconciliation.get("passed") is True
+    )
+    mapping_review = case_audit_payloads.get("mapping_review", {})
+    mapping_confirmations = (
+        mapping_review.get("confirmations", [])
+        if isinstance(mapping_review, dict)
+        else []
+    )
+    workbook_reconciliation = case_audit_payloads.get("reconciliation", {})
+    workbook_reconciliation_passed = (
+        isinstance(workbook_reconciliation, dict)
+        and isinstance(workbook_reconciliation.get("trial_balance"), dict)
+        and workbook_reconciliation["trial_balance"].get("passed") is True
+        and isinstance(
+            workbook_reconciliation.get("journal_to_trial_balance"), dict
+        )
+        and workbook_reconciliation["journal_to_trial_balance"].get("passed")
+        is True
+    )
+    reconciled_workbook_source_ids = {
+        item["source_id"]
+        for item in mapping_confirmations
+        if workbook_reconciliation_passed
+        and isinstance(item, dict)
+        and item.get("role") in {"journal", "trial_balance"}
+        and isinstance(item.get("source_id"), str)
+        and item["source_id"].strip()
+    }
     status_map = {
         "present_unparsed": "received_pending",
         "accepted": "imported_pending_confirmation",
@@ -507,9 +536,11 @@ def _material_statuses(
         if source_id in structured_source_ids:
             status = (
                 "imported_reconciled"
-                if reconciliation_passed
+                if structured_reconciliation_passed
                 else "imported_pending_confirmation"
             )
+        if source_id in reconciled_workbook_source_ids:
+            status = "imported_reconciled"
         display_name = source.get("filename")
         statuses.append({
             "source_id": source_id,

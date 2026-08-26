@@ -41,7 +41,7 @@ Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经�
 
 需要 Python 3.11、3.12 或 3.13。
 
-面向客户时，由 AI 智能体先说：“欢迎使用税务健康检查 AI 智能体。请先告诉我企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。”智能体把这五项写入 `customer-profile/v1`，然后调用：
+面向客户时，AI 智能体先运行第一次 `case-guide`，展示返回的 `message_zh` 欢迎语，并按 `profile_questions` 收集企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。再把这五项信息写入 `customer-profile/v1`，调用 `case-start`，随后调用第二次 `case-guide`：
 
 ```powershell
 opentaxcheck case-guide --case .\cases\demo

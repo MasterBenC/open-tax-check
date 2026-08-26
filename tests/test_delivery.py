@@ -335,6 +335,65 @@ def test_case_delivery_binds_material_only_by_unique_cross_check_source_ref(
     assert costs["executed_clear_count"] == 1 - received_unparsed_count
 
 
+def test_case_delivery_marks_confirmed_reconciled_workbook_as_reconciled(
+    tmp_path: Path,
+):
+    case = _case(tmp_path)
+    manifest_payload = {
+        "sources": [{
+            "source_id": "source-1",
+            "status": "accepted",
+            "filename": "journal.xlsx",
+        }],
+    }
+    manifest_bytes = json.dumps(manifest_payload).encode("utf-8")
+    (case / "work/input_manifest.json").write_bytes(manifest_bytes)
+    (case / "work/reconciliation.json").write_text(
+        json.dumps({
+            "trial_balance": {"passed": True},
+            "journal_to_trial_balance": {"passed": True},
+        }),
+        encoding="utf-8",
+    )
+    (case / "reviews").mkdir(exist_ok=True)
+    (case / "reviews/mapping_review.json").write_text(
+        json.dumps({
+            "confirmations": [{
+                "role": "journal",
+                "source_id": "source-1",
+                "reviewer": "host:test",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    run = replace(
+        completed_run(),
+        source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+    )
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = build_case_delivery(case)
+    machine = json.loads(
+        (
+            case
+            / result["revision_path"]
+            / "tax-health-snapshot.json"
+        ).read_text(encoding="utf-8")
+    )
+    coverage = {
+        item["scenario_id"]: item
+        for item in machine["scenario_coverage"]["items"]
+    }
+
+    assert coverage["revenue_and_turnover"]["executed_clear_count"] == 4
+    assert coverage["revenue_and_turnover"]["awaiting_evidence_count"] == 0
+    assert coverage["costs_and_expenses"]["executed_clear_count"] == 1
+    assert coverage["costs_and_expenses"]["awaiting_evidence_count"] == 0
+
+
 def test_case_delivery_rejects_cross_check_bound_to_another_source_manifest(tmp_path: Path):
     case = _case(tmp_path)
     (case / "work/input_manifest.json").write_text(json.dumps({"sources": []}), encoding="utf-8")
