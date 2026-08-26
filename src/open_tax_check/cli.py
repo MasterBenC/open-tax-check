@@ -13,6 +13,7 @@ from .case import init_case, resolve_safe_case_path, set_case_scope
 from .customer_guide import build_case_guide, start_case_from_profile
 from .case_orchestration import (
     apply_case_confirmations,
+    apply_scenario_confirmations,
     build_case_customer_tasks,
     case_status_payload,
     run_case_self_check,
@@ -549,28 +550,34 @@ def main() -> int:
             payload = json.loads(args.input.read_text(encoding="utf-8"))
             if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
                 raise ValueError("invalid_confirmation_batch")
-            required_confirmation_fields = {
-                "question_id", "fact_key", "value", "confirmed_by", "confirmed_at",
-            }
-            allowed_confirmation_fields = required_confirmation_fields | {"evidence_refs"}
-            if any(
-                not required_confirmation_fields.issubset(item)
-                or not set(item).issubset(allowed_confirmation_fields)
-                for item in payload
-            ):
-                raise ValueError("invalid_confirmation_batch")
-            confirmations = tuple(
-                Confirmation(
-                    question_id=item["question_id"],
-                    fact_key=item["fact_key"],
-                    value=item["value"],
-                    confirmed_by=item["confirmed_by"],
-                    confirmed_at=item["confirmed_at"],
-                    evidence_refs=tuple(item.get("evidence_refs", ())),
+            scenario_items = [item.get("confirmation_kind") == "scenario" for item in payload]
+            if any(scenario_items) and not all(scenario_items):
+                raise ValueError("mixed_confirmation_batch")
+            if scenario_items and all(scenario_items):
+                result = apply_scenario_confirmations(args.case, tuple(payload))
+            else:
+                required_confirmation_fields = {
+                    "question_id", "fact_key", "value", "confirmed_by", "confirmed_at",
+                }
+                allowed_confirmation_fields = required_confirmation_fields | {"evidence_refs"}
+                if any(
+                    not required_confirmation_fields.issubset(item)
+                    or not set(item).issubset(allowed_confirmation_fields)
+                    for item in payload
+                ):
+                    raise ValueError("invalid_confirmation_batch")
+                confirmations = tuple(
+                    Confirmation(
+                        question_id=item["question_id"],
+                        fact_key=item["fact_key"],
+                        value=item["value"],
+                        confirmed_by=item["confirmed_by"],
+                        confirmed_at=item["confirmed_at"],
+                        evidence_refs=tuple(item.get("evidence_refs", ())),
+                    )
+                    for item in payload
                 )
-                for item in payload
-            )
-            result = apply_case_confirmations(args.case, confirmations)
+                result = apply_case_confirmations(args.case, confirmations)
         except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
             allowed = {
                 "unknown_question", "confirmation_fact_mismatch", "invalid_confirmation_value",
@@ -578,6 +585,16 @@ def main() -> int:
                 "blocked_data_quality",
                 "confirmation_evidence_required",
                 "unverified_confirmation_evidence",
+                "invalid_scenario_confirmation_batch",
+                "invalid_scenario_confirmation",
+                "invalid_scenario_confirmer",
+                "invalid_scenario_facts",
+                "unknown_scenario_question",
+                "scenario_question_digest_mismatch",
+                "scenario_confirmation_stale",
+                "scenario_confirmation_conflict",
+                "scenario_confirmation_write_failed",
+                "mixed_confirmation_batch",
             }
             error_code = str(error) if str(error) in allowed else "case_confirmation_failed"
             print(json.dumps({"status": "failed", "error_code": error_code}, ensure_ascii=False))

@@ -18,6 +18,11 @@ from .agent_orchestration import (
     task_payload,
 )
 from .case import resolve_safe_case_path, write_json
+from .customer_guide import (
+    SCENARIO_FACTS_SCHEMA_VERSION,
+    build_scenario_question_tasks,
+    load_scenario_fact_store,
+)
 from .evidence import verify_evidence_file
 from .schemas import to_dict
 from .source_paths import resolve_safe_source
@@ -71,6 +76,19 @@ _CROSS_CHECK_CONFIRMATION_FIELDS = frozenset(
         "confirmed_at",
         "evidence_refs",
         "bridge",
+    }
+)
+_SCENARIO_CONFIRMATION_FIELDS = frozenset(
+    {
+        "confirmation_kind",
+        "question_id",
+        "fact_key",
+        "value",
+        "confirmed_by",
+        "confirmed_at",
+        "evidence_refs",
+        "scenario_revision",
+        "question_digest",
     }
 )
 
@@ -496,7 +514,15 @@ def build_case_customer_tasks(
     )
     combined: list[AgentQuestionTask | dict[str, object]] = []
     seen: set[str] = set()
-    for item in (*cross_check_tasks, *health_tasks):
+    state = _read_json(root / "state.json")
+    has_review_period = (
+        isinstance(state, Mapping)
+        and isinstance(state.get("review_period"), Mapping)
+        and isinstance(state["review_period"].get("start"), str)
+        and isinstance(state["review_period"].get("end"), str)
+    )
+    scenario_tasks = build_scenario_question_tasks(root) if has_review_period else ()
+    for item in (*cross_check_tasks, *health_tasks, *scenario_tasks):
         task_id = item.task_id if isinstance(item, AgentQuestionTask) else str(item["task_id"])
         if task_id in seen:
             continue
@@ -546,6 +572,192 @@ def _confirmation_evidence_is_verified(root: Path, confirmation: Confirmation) -
         reference == customer_ref or _verified_manifest_source(root, reference)
         for reference in confirmation.evidence_refs
     )
+
+
+def _scenario_confirmation_digest(payload: Mapping[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _scenario_confirmer_is_human(value: object) -> bool:
+    return value == "customer" or (
+        isinstance(value, str)
+        and value.startswith("human:")
+        and bool(value.removeprefix("human:").strip())
+    )
+
+
+def _scenario_confirmation_result(root: Path, scenario_revision: int) -> dict[str, object]:
+    if (root / "work" / PRIVATE_SNAPSHOT_NAME).is_file():
+        return case_status_payload(root)
+    return {
+        "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+        "status": "scenario_confirmed",
+        "revision": 0,
+        "scenario_revision": scenario_revision,
+    }
+
+
+def apply_scenario_confirmations(
+    case_dir: Path,
+    confirmations: tuple[Mapping[str, object], ...],
+) -> dict[str, object]:
+    """Validate and atomically persist one all-scenario confirmation batch."""
+
+    root = _case_dir(case_dir)
+    _case_state(root)
+    if not confirmations or any(
+        not isinstance(item, Mapping)
+        or set(item) != _SCENARIO_CONFIRMATION_FIELDS
+        or item.get("confirmation_kind") != "scenario"
+        for item in confirmations
+    ):
+        raise ValueError("invalid_scenario_confirmation_batch")
+
+    parsed: list[tuple[Mapping[str, object], Confirmation, str]] = []
+    for item in confirmations:
+        if not _scenario_confirmer_is_human(item.get("confirmed_by")):
+            raise ValueError("invalid_scenario_confirmer")
+        evidence_refs = item.get("evidence_refs")
+        if not isinstance(evidence_refs, list) or not evidence_refs:
+            raise ValueError("confirmation_evidence_required")
+        if (
+            not isinstance(item.get("value"), bool)
+            or not isinstance(item.get("scenario_revision"), int)
+            or isinstance(item.get("scenario_revision"), bool)
+            or not isinstance(item.get("question_digest"), str)
+            or len(item["question_digest"]) != 64
+        ):
+            raise ValueError("invalid_scenario_confirmation")
+        try:
+            confirmation = Confirmation(
+                question_id=item["question_id"],
+                fact_key=item["fact_key"],
+                value=item["value"],
+                confirmed_by=item["confirmed_by"],
+                confirmed_at=item["confirmed_at"],
+                evidence_refs=tuple(evidence_refs),
+            )
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("invalid_scenario_confirmation") from None
+        if not _confirmation_evidence_is_verified(root, confirmation):
+            raise ValueError("unverified_confirmation_evidence")
+        parsed.append((item, confirmation, _scenario_confirmation_digest(item)))
+
+    question_ids = [item.question_id for _, item, _ in parsed]
+    fact_keys = [item.fact_key for _, item, _ in parsed]
+    if len(set(question_ids)) != len(question_ids) or len(set(fact_keys)) != len(fact_keys):
+        raise ValueError("invalid_scenario_confirmation_batch")
+
+    store = load_scenario_fact_store(root, strict=True)
+    facts = store["facts"]
+    assert isinstance(facts, dict)
+    replayed = [
+        isinstance(facts.get(confirmation.fact_key), Mapping)
+        and facts[confirmation.fact_key].get("confirmation_digest") == digest
+        for _, confirmation, digest in parsed
+    ]
+    if all(replayed):
+        return _scenario_confirmation_result(root, int(store["revision"]))
+    if any(replayed) or any(confirmation.fact_key in facts for _, confirmation, _ in parsed):
+        raise ValueError("scenario_confirmation_conflict")
+    current_revision = int(store["revision"])
+    if any(item.get("scenario_revision") != current_revision for item, _, _ in parsed):
+        raise ValueError("scenario_confirmation_stale")
+
+    pending = {
+        str(item["question_id"]): item
+        for item in build_scenario_question_tasks(root)
+    }
+    for item, confirmation, _ in parsed:
+        question = pending.get(confirmation.question_id)
+        if question is None or question.get("fact_key") != confirmation.fact_key:
+            raise ValueError("unknown_scenario_question")
+        if item.get("question_digest") != question.get("question_digest"):
+            raise ValueError("scenario_question_digest_mismatch")
+
+    revised_facts = dict(facts)
+    for item, confirmation, digest in parsed:
+        revised_facts[confirmation.fact_key] = {
+            "question_id": confirmation.question_id,
+            "value": confirmation.value,
+            "confirmed_by": confirmation.confirmed_by,
+            "confirmed_at": confirmation.confirmed_at,
+            "evidence_refs": list(confirmation.evidence_refs),
+            "scenario_revision": item["scenario_revision"],
+            "question_digest": item["question_digest"],
+            "confirmation_digest": digest,
+        }
+    revised_store = {
+        "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+        "revision": current_revision + 1,
+        "facts": revised_facts,
+    }
+    batch_digest = hashlib.sha256(
+        json.dumps(
+            sorted(digest for _, _, digest in parsed),
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    occurred_at = max(
+        (confirmation for _, confirmation, _ in parsed),
+        key=lambda item: datetime.fromisoformat(item.confirmed_at),
+    ).confirmed_at
+    facts_path = root / "work" / "scenario-facts.json"
+    pointer = root / "work" / "delivery.json"
+    private_path = root / "work" / PRIVATE_SNAPSHOT_NAME
+    transaction_paths = (
+        facts_path,
+        private_path,
+        root / "work" / PUBLIC_SNAPSHOT_NAME,
+        root / "work" / "customer-tasks.json",
+        root / "output" / REPORT_NAME,
+        root / "output" / HANDOFF_NAME,
+        root / "state.json",
+        pointer,
+    )
+    original_bytes = {
+        path: path.read_bytes() if path.is_file() else None
+        for path in transaction_paths
+    }
+    try:
+        pointer.unlink(missing_ok=True)
+        _write_json(facts_path, revised_store)
+        if private_path.is_file():
+            snapshot = load_case_snapshot(root)
+            snapshot = replace(
+                snapshot,
+                revision=snapshot.revision + 1,
+                audit_events=snapshot.audit_events
+                + (
+                    AuditEvent(
+                        event_type="scenario_confirmation",
+                        occurred_at=occurred_at,
+                        fact_keys=tuple(fact_keys),
+                        confirmation_digest=batch_digest,
+                    ),
+                ),
+            )
+            _persist_case_view(root, snapshot)
+    except Exception:
+        for path, content in original_bytes.items():
+            try:
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    temporary = path.with_name(f".{path.name}.scenario-restore")
+                    temporary.write_bytes(content)
+                    os.replace(temporary, path)
+            except OSError:
+                pass
+        raise ValueError("scenario_confirmation_write_failed") from None
+    return _scenario_confirmation_result(root, current_revision + 1)
 
 
 def _cross_check_bridge(payload: object) -> tuple[AmountBridgeItem, ...]:

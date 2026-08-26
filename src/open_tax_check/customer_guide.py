@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
+import re
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -10,11 +12,12 @@ from typing import Literal, Mapping
 from .case import init_case, resolve_safe_case_path, write_json
 from . import source_paths
 from .scenario_map import scenario_catalog_payload
+from .tax_models import Confirmation
 
 
 CUSTOMER_PROFILE_SCHEMA_VERSION = "customer-profile/v1"
 CASE_GUIDE_SCHEMA_VERSION = "case-guide/v2"
-SCENARIO_FACTS_SCHEMA_VERSION = "tax-scenario-facts/v1"
+SCENARIO_FACTS_SCHEMA_VERSION = "tax-scenario-facts/v2"
 SCENARIO_FACT_KEYS = (
     "has_real_estate_activity",
     "has_taxable_contracts",
@@ -129,6 +132,19 @@ _SCENARIO_FACT_SCENARIOS = {
 }
 _BASELINE_SCENARIOS = ("revenue_and_turnover", "costs_and_expenses")
 _MISSING = object()
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SCENARIO_FACT_FIELDS = frozenset(
+    {
+        "question_id",
+        "value",
+        "confirmed_by",
+        "confirmed_at",
+        "evidence_refs",
+        "scenario_revision",
+        "question_digest",
+        "confirmation_digest",
+    }
+)
 
 
 def _scenario_catalog() -> tuple[Mapping[str, object], ...]:
@@ -155,6 +171,176 @@ def _scenario_questions(confirmed_facts: Mapping[str, bool]) -> list[dict[str, s
         for fact_key in SCENARIO_FACT_KEYS
         if fact_key not in confirmed_facts
     ]
+
+
+def _scenario_question_digest(question: Mapping[str, object]) -> str:
+    canonical = {
+        "schema_version": "tax-scenario-question/v1",
+        "question_id": question["question_id"],
+        "fact_key": question["fact_key"],
+        "question_zh": question["question_zh"],
+        "answer_type": question["answer_type"],
+    }
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def load_scenario_fact_store(
+    case_dir: Path,
+    *,
+    strict: bool = False,
+) -> dict[str, object]:
+    """Load the exact validated v2 fact store or an empty unconfirmed store."""
+
+    root = resolve_safe_case_path(case_dir)
+    facts_path = root / "work" / "scenario-facts.json"
+    if not os.path.lexists(facts_path):
+        return {
+            "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+            "revision": 0,
+            "facts": {},
+        }
+    try:
+        safe_path = source_paths.resolve_safe_source(facts_path, root / "work")
+        payload = json.loads(safe_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {
+            "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+            "revision": 0,
+            "facts": {},
+        }
+    except (json.JSONDecodeError, OSError, UnicodeError, ValueError):
+        if strict:
+            raise ValueError("invalid_scenario_facts") from None
+        return {
+            "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+            "revision": 0,
+            "facts": {},
+        }
+    revision = payload.get("revision") if isinstance(payload, Mapping) else None
+    facts = payload.get("facts") if isinstance(payload, Mapping) else None
+    if (
+        isinstance(payload, Mapping)
+        and payload.get("schema_version") == "tax-scenario-facts/v1"
+    ):
+        return {
+            "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+            "revision": 0,
+            "facts": {},
+        }
+    valid = (
+        isinstance(payload, Mapping)
+        and set(payload) == {"schema_version", "revision", "facts"}
+        and payload.get("schema_version") == SCENARIO_FACTS_SCHEMA_VERSION
+        and isinstance(revision, int)
+        and not isinstance(revision, bool)
+        and revision >= 0
+        and isinstance(facts, Mapping)
+    )
+    if valid:
+        for fact_key, record in facts.items():
+            if (
+                fact_key not in SCENARIO_FACT_KEYS
+                or not isinstance(record, Mapping)
+                or set(record) != _SCENARIO_FACT_FIELDS
+                or record.get("question_id") != f"scenario-{fact_key}"
+                or not isinstance(record.get("value"), bool)
+                or not _is_human_confirmer(record.get("confirmed_by"))
+                or not isinstance(record.get("evidence_refs"), list)
+                or not record["evidence_refs"]
+                or not isinstance(record.get("scenario_revision"), int)
+                or isinstance(record.get("scenario_revision"), bool)
+                or not 0 <= record["scenario_revision"] < revision
+                or _SHA256_RE.fullmatch(str(record.get("question_digest"))) is None
+                or _SHA256_RE.fullmatch(str(record.get("confirmation_digest"))) is None
+            ):
+                valid = False
+                break
+            question = {
+                "question_id": record["question_id"],
+                "fact_key": fact_key,
+                "question_zh": _SCENARIO_QUESTION_TEXT[fact_key],
+                "answer_type": "boolean",
+            }
+            if record["question_digest"] != _scenario_question_digest(question):
+                valid = False
+                break
+            confirmation_payload = {
+                "confirmation_kind": "scenario",
+                "question_id": record["question_id"],
+                "fact_key": fact_key,
+                "value": record["value"],
+                "confirmed_by": record["confirmed_by"],
+                "confirmed_at": record["confirmed_at"],
+                "evidence_refs": record["evidence_refs"],
+                "scenario_revision": record["scenario_revision"],
+                "question_digest": record["question_digest"],
+            }
+            expected_confirmation_digest = hashlib.sha256(
+                json.dumps(
+                    confirmation_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if record["confirmation_digest"] != expected_confirmation_digest:
+                valid = False
+                break
+            try:
+                Confirmation(
+                    question_id=record["question_id"],
+                    fact_key=fact_key,
+                    value=record["value"],
+                    confirmed_by=record["confirmed_by"],
+                    confirmed_at=record["confirmed_at"],
+                    evidence_refs=tuple(record["evidence_refs"]),
+                )
+            except (TypeError, ValueError):
+                valid = False
+                break
+    if not valid:
+        if strict:
+            raise ValueError("invalid_scenario_facts")
+        return {
+            "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+            "revision": 0,
+            "facts": {},
+        }
+    return {
+        "schema_version": SCENARIO_FACTS_SCHEMA_VERSION,
+        "revision": revision,
+        "facts": {str(key): dict(value) for key, value in facts.items()},
+    }
+
+
+def build_scenario_question_tasks(case_dir: Path) -> tuple[dict[str, object], ...]:
+    """Return pending scenario questions bound to the current server contract."""
+
+    confirmed = {
+        fact_key: value
+        for fact_key, value in load_confirmed_scenario_facts(case_dir).items()
+        if fact_key in SCENARIO_FACT_KEYS
+    }
+    store = load_scenario_fact_store(case_dir)
+    revision = int(store["revision"])
+    return tuple(
+        {
+            "task_id": f"agent-task-{question['question_id']}",
+            "confirmation_kind": "scenario",
+            **question,
+            "required_evidence_types": ["customer_confirmation"],
+            "scenario_revision": revision,
+            "question_digest": _scenario_question_digest(question),
+        }
+        for question in _scenario_questions(confirmed)
+    )
 
 
 def _active_scenarios(confirmed_facts: Mapping[str, bool]) -> list[str]:
@@ -199,40 +385,14 @@ def _document_groups(active_scenarios: tuple[str, ...] | list[str]) -> list[dict
 def load_confirmed_scenario_facts(case_dir: Path) -> dict[str, bool]:
     """Load source-safe, human-confirmed boolean scenario facts."""
 
-    root = resolve_safe_case_path(case_dir)
-    facts_path = root / "work" / "scenario-facts.json"
-    try:
-        safe_facts_path = source_paths.resolve_safe_source(facts_path, root / "work")
-        payload = json.loads(safe_facts_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeError, ValueError):
-        return {}
-    if not isinstance(payload, Mapping) or payload.get("schema_version") != SCENARIO_FACTS_SCHEMA_VERSION:
-        return {}
-    facts = payload.get("facts")
-    if not isinstance(facts, Mapping):
-        return {}
-    top_level_confirmer = payload.get("confirmed_by", _MISSING)
-    if top_level_confirmer is not _MISSING and not _is_human_confirmer(top_level_confirmer):
-        return {}
-    coverage_fact_keys = {
-        fact_key
-        for scenario in _scenario_catalog()
-        for fact_key in scenario.get("trigger_fact_keys", ())
-        if isinstance(fact_key, str)
+    store = load_scenario_fact_store(case_dir)
+    facts = store["facts"]
+    assert isinstance(facts, Mapping)
+    return {
+        str(fact_key): record["value"]
+        for fact_key, record in facts.items()
+        if isinstance(record, Mapping) and isinstance(record.get("value"), bool)
     }
-    known_fact_keys = set(SCENARIO_FACT_KEYS) | coverage_fact_keys
-    confirmed: dict[str, bool] = {}
-    for fact_key, raw_value in facts.items():
-        if fact_key not in known_fact_keys:
-            continue
-        value: object = raw_value
-        confirmer: object = top_level_confirmer
-        if isinstance(raw_value, Mapping):
-            value = raw_value.get("value")
-            confirmer = raw_value.get("confirmed_by", top_level_confirmer)
-        if isinstance(value, bool) and confirmer is not _MISSING and _is_human_confirmer(confirmer):
-            confirmed[str(fact_key)] = value
-    return confirmed
 
 
 def _is_human_confirmer(value: object) -> bool:

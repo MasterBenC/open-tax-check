@@ -9,6 +9,10 @@ from unittest.mock import patch
 import open_tax_check.customer_guide as customer_guide
 from open_tax_check.customer_guide import build_case_guide, start_case_from_profile
 from open_tax_check.case import init_case, write_json
+from open_tax_check.case_orchestration import (
+    apply_scenario_confirmations,
+    build_case_customer_tasks,
+)
 
 
 @pytest.fixture
@@ -293,12 +297,12 @@ def test_every_guide_stage_contains_privacy_and_disclaimer(tmp_path: Path) -> No
         assert "不代表" in guide["disclaimer_zh"]
 
 
-def test_confirmed_false_scenario_does_not_emit_conditional_materials(case_with_profile: Path) -> None:
+def test_direct_v1_scenario_fact_cannot_activate_or_resolve_question(case_with_profile: Path) -> None:
     write_json(case_with_profile / "work" / "scenario-facts.json", {
         "schema_version": "tax-scenario-facts/v1",
         "facts": {
             "has_real_estate_activity": {
-                "value": False,
+                "value": True,
                 "confirmed_by": "customer",
             },
         },
@@ -311,13 +315,13 @@ def test_confirmed_false_scenario_does_not_emit_conditional_materials(case_with_
         group.get("scenario_id") != "assets_and_real_estate"
         for group in guide["document_groups"]
     )
-    assert not any(
+    assert any(
         question["fact_key"] == "has_real_estate_activity"
         for question in guide["scenario_questions"]
     )
 
 
-def test_confirmed_scenario_fact_loader_keeps_only_customer_or_named_human_booleans(
+def test_direct_v1_scenario_fact_loader_trusts_no_entries(
     case_with_profile: Path,
 ) -> None:
     write_json(case_with_profile / "work" / "scenario-facts.json", {
@@ -353,11 +357,7 @@ def test_confirmed_scenario_fact_loader_keeps_only_customer_or_named_human_boole
         },
     })
 
-    assert customer_guide.load_confirmed_scenario_facts(case_with_profile) == {
-        "has_real_estate_activity": False,
-        "has_taxable_contracts": True,
-        "revenue_recognition": False,
-    }
+    assert customer_guide.load_confirmed_scenario_facts(case_with_profile) == {}
 
 
 def test_confirmed_scenario_fact_loader_treats_invalid_file_as_unknown(
@@ -384,6 +384,30 @@ def test_unknown_fact_is_asked_but_not_treated_as_not_applicable(case_with_profi
 
 
 def _scenario_guide_for_fact(case_dir: Path, value: bool, **envelope: object) -> dict[str, object]:
+    confirmed_by = envelope.get("confirmed_by")
+    if confirmed_by == "customer" or (
+        isinstance(confirmed_by, str)
+        and confirmed_by.startswith("human:")
+        and confirmed_by.removeprefix("human:").strip()
+    ):
+        task = next(
+            item for item in build_case_customer_tasks(case_dir)
+            if isinstance(item, dict)
+            and item.get("confirmation_kind") == "scenario"
+            and item.get("fact_key") == "has_real_estate_activity"
+        )
+        apply_scenario_confirmations(case_dir, ({
+            "confirmation_kind": "scenario",
+            "question_id": task["question_id"],
+            "fact_key": task["fact_key"],
+            "value": value,
+            "confirmed_by": confirmed_by,
+            "confirmed_at": "2026-08-26T18:00:00+08:00",
+            "evidence_refs": [f"customer-confirmation:{task['question_id']}"],
+            "scenario_revision": task["scenario_revision"],
+            "question_digest": task["question_digest"],
+        },))
+        return build_case_guide(case_dir)
     payload: dict[str, object] = {
         "schema_version": "tax-scenario-facts/v1",
         "facts": {"has_real_estate_activity": {"value": value, **envelope}},
@@ -424,7 +448,9 @@ def test_customer_confirmation_activates_or_resolves_fact_question(case_with_pro
         for question in active["scenario_questions"]
     )
 
-    inactive = _scenario_guide_for_fact(case_with_profile, False, confirmed_by="customer")
+    inactive_case = case_with_profile.parent / "inactive-case"
+    start_case_from_profile(inactive_case, _profile())
+    inactive = _scenario_guide_for_fact(inactive_case, False, confirmed_by="customer")
     assert "assets_and_real_estate" not in inactive["active_scenarios"]
     assert not any(
         question["fact_key"] == "has_real_estate_activity"

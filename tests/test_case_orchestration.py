@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from open_tax_check.case import init_case
 from open_tax_check import cli
+import open_tax_check.case_orchestration as case_orchestration
 from open_tax_check.host_contract import validate_customer_handoff
 from open_tax_check.case_orchestration import (
     CaseStatus,
@@ -129,6 +130,223 @@ def _with_input_binding(case_dir, run):
 
 
 class CaseOrchestrationTests(unittest.TestCase):
+  @staticmethod
+  def _scenario_confirmation(task, **overrides):
+    payload = {
+      "confirmation_kind": "scenario",
+      "question_id": task["question_id"],
+      "fact_key": task["fact_key"],
+      "value": True,
+      "confirmed_by": "customer",
+      "confirmed_at": "2026-08-26T18:00:00+08:00",
+      "evidence_refs": [f"customer-confirmation:{task['question_id']}"],
+      "scenario_revision": task["scenario_revision"],
+      "question_digest": task["question_digest"],
+    }
+    payload.update(overrides)
+    return payload
+
+  def test_case_tasks_uses_remaining_queue_for_bound_scenario_questions(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+
+      tasks = build_case_customer_tasks(case_dir)
+
+      self.assertEqual(len(tasks), 3)
+      self.assertTrue(all(isinstance(item, dict) for item in tasks))
+      self.assertEqual(
+        [item["fact_key"] for item in tasks],
+        [
+          "has_real_estate_activity",
+          "has_taxable_contracts",
+          "has_employees_or_shareholder_flows",
+        ],
+      )
+      for item in tasks:
+        self.assertEqual(item["confirmation_kind"], "scenario")
+        self.assertEqual(item["answer_type"], "boolean")
+        self.assertEqual(item["scenario_revision"], 0)
+        self.assertRegex(item["question_digest"], r"^[0-9a-f]{64}$")
+
+  def test_scenario_confirmation_batch_is_atomic_revisioned_and_idempotent(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      case_dir = __import__("pathlib").Path(temp_dir) / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      scenario_tasks = build_case_customer_tasks(case_dir)
+      run_case_self_check(case_dir, _request(), occurred_at=OCCURRED_AT)
+      pointer = case_dir / "work" / "delivery.json"
+      pointer.write_text('{"revision": 1}', encoding="utf-8")
+      batch = tuple(self._scenario_confirmation(task) for task in scenario_tasks[:2])
+      apply_confirmations = getattr(
+        case_orchestration, "apply_scenario_confirmations", None
+      )
+      self.assertTrue(callable(apply_confirmations))
+
+      first = apply_confirmations(case_dir, batch)
+      replay = apply_confirmations(case_dir, batch)
+
+      facts = json.loads(
+        (case_dir / "work/scenario-facts.json").read_text(encoding="utf-8")
+      )
+      snapshot = load_case_snapshot(case_dir)
+      self.assertEqual(first["revision"], 2)
+      self.assertEqual(replay["revision"], 2)
+      self.assertEqual(facts["schema_version"], "tax-scenario-facts/v2")
+      self.assertEqual(facts["revision"], 1)
+      self.assertEqual(set(facts["facts"]), {item["fact_key"] for item in batch})
+      self.assertEqual(snapshot.revision, 2)
+      events = [
+        event for event in snapshot.audit_events
+        if event.event_type == "scenario_confirmation"
+      ]
+      self.assertEqual(len(events), 1)
+      self.assertEqual(set(events[0].fact_keys), {item["fact_key"] for item in batch})
+      self.assertFalse(pointer.exists())
+
+  def _invoke_scenario_cli(self, case_dir, input_path, payload):
+    input_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    with patch.object(
+      cli.sys,
+      "argv",
+      ["opentaxcheck", "case-confirm", "--case", str(case_dir), "--input", str(input_path)],
+    ), patch("builtins.print") as print_output:
+      code = cli.main()
+    return code, json.loads(print_output.call_args.args[0])
+
+  def test_cli_applies_all_scenario_confirmation_batch(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+
+      code, output = self._invoke_scenario_cli(
+        case_dir,
+        root / "scenario-confirmations.json",
+        [self._scenario_confirmation(task)],
+      )
+
+      self.assertEqual(code, 0)
+      self.assertEqual(output["status"], "scenario_confirmed")
+      self.assertEqual(output["scenario_revision"], 1)
+
+  def test_cli_rejects_non_human_scenario_confirmers(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+
+      for confirmed_by in ("ai", "agent", "model", "host", "host:codex", "", "human:"):
+        with self.subTest(confirmed_by=confirmed_by):
+          code, output = self._invoke_scenario_cli(
+            case_dir,
+            root / "scenario-confirmations.json",
+            [self._scenario_confirmation(task, confirmed_by=confirmed_by)],
+          )
+          self.assertEqual(code, 4)
+          self.assertEqual(output["error_code"], "invalid_scenario_confirmer")
+
+  def test_cli_rejects_scenario_confirmation_without_evidence(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+
+      code, output = self._invoke_scenario_cli(
+        case_dir,
+        root / "scenario-confirmations.json",
+        [self._scenario_confirmation(task, evidence_refs=[])],
+      )
+
+      self.assertEqual(code, 4)
+      self.assertEqual(output["error_code"], "confirmation_evidence_required")
+
+  def test_cli_rejects_stale_scenario_revision(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      tasks = build_case_customer_tasks(case_dir)
+      case_orchestration.apply_scenario_confirmations(
+        case_dir, (self._scenario_confirmation(tasks[0]),)
+      )
+
+      code, output = self._invoke_scenario_cli(
+        case_dir,
+        root / "scenario-confirmations.json",
+        [self._scenario_confirmation(tasks[1])],
+      )
+
+      self.assertEqual(code, 4)
+      self.assertEqual(output["error_code"], "scenario_confirmation_stale")
+
+  def test_cli_rejects_conflicting_scenario_confirmation(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+      case_orchestration.apply_scenario_confirmations(
+        case_dir, (self._scenario_confirmation(task),)
+      )
+
+      code, output = self._invoke_scenario_cli(
+        case_dir,
+        root / "scenario-confirmations.json",
+        [self._scenario_confirmation(task, value=False, scenario_revision=1)],
+      )
+
+      self.assertEqual(code, 4)
+      self.assertEqual(output["error_code"], "scenario_confirmation_conflict")
+
+  def test_cli_rejects_wrong_scenario_question_digest(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+
+      code, output = self._invoke_scenario_cli(
+        case_dir,
+        root / "scenario-confirmations.json",
+        [self._scenario_confirmation(task, question_digest="0" * 64)],
+      )
+
+      self.assertEqual(code, 4)
+      self.assertEqual(output["error_code"], "scenario_question_digest_mismatch")
+
+  def test_cli_rejects_mixed_standard_and_scenario_confirmation_batch(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      scenario_task = build_case_customer_tasks(case_dir)[0]
+      run_case_self_check(case_dir, _request(), occurred_at=OCCURRED_AT)
+      standard_task = next(
+        item for item in build_case_customer_tasks(case_dir)
+        if not isinstance(item, dict)
+      )
+      standard = {
+        "question_id": standard_task.question_id,
+        "fact_key": standard_task.fact_key,
+        "value": self._answer_for(standard_task),
+        "confirmed_by": "customer",
+        "confirmed_at": "2026-08-26T18:00:00+08:00",
+        "evidence_refs": [f"customer-confirmation:{standard_task.question_id}"],
+      }
+
+      code, output = self._invoke_scenario_cli(
+        case_dir,
+        root / "mixed-confirmations.json",
+        [standard, self._scenario_confirmation(scenario_task)],
+      )
+
+      self.assertEqual(code, 4)
+      self.assertEqual(output["error_code"], "mixed_confirmation_batch")
+
   def test_cross_check_confirmation_is_incremental_append_only_and_idempotent(self):
     with __import__("tempfile").TemporaryDirectory() as temp_dir:
       case_dir = __import__("pathlib").Path(temp_dir) / "case"

@@ -12,7 +12,7 @@ import tempfile
 import re
 
 from .case import resolve_safe_case_path
-from .customer_guide import load_confirmed_scenario_facts
+from .customer_guide import load_scenario_fact_store
 from .case_orchestration import (
     HANDOFF_NAME,
     build_case_customer_handoff,
@@ -37,7 +37,7 @@ from .report_view import (
 )
 from .reviews import ReviewError, load_active_mappings
 from .scenario_map import scenario_catalog
-from .schemas import SCHEMA_VERSION
+from .schemas import SCHEMA_VERSION, to_dict
 from .tax_cross_checks import parse_tax_cross_check_payload
 from .tax_reporting import (
     _tax_snapshot_payload_from_report_view,
@@ -69,6 +69,17 @@ class _PointerRollbackError(DeliveryError):
     """The new pointer may be live, so its referenced revision must remain."""
 
 
+def _private_snapshot_digest(snapshot: TaxCheckSnapshot) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            to_dict(snapshot),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -82,14 +93,18 @@ def _snapshot_digest(
     report_view: ReportViewV3,
     entity_name: str,
 ) -> str:
+    report_payload = _tax_snapshot_payload_from_report_view(
+        snapshot,
+        report_view,
+        revision=snapshot.revision,
+        entity_name=entity_name,
+    )
     return hashlib.sha256(
         json.dumps(
-            _tax_snapshot_payload_from_report_view(
-                snapshot,
-                report_view,
-                revision=snapshot.revision,
-                entity_name=entity_name,
-            ),
+            {
+                "private_snapshot": to_dict(snapshot),
+                "report_payload": report_payload,
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -98,7 +113,18 @@ def _snapshot_digest(
 
 
 def _confirmed_coverage_facts(root: Path) -> dict[str, bool]:
-    confirmed = load_confirmed_scenario_facts(root)
+    try:
+        store = load_scenario_fact_store(root, strict=True)
+    except ValueError:
+        raise DeliveryError("delivery_case_audit_invalid") from None
+    records = store["facts"]
+    if not isinstance(records, dict):
+        raise DeliveryError("delivery_case_audit_invalid")
+    confirmed = {
+        fact_key: record["value"]
+        for fact_key, record in records.items()
+        if isinstance(record, dict) and isinstance(record.get("value"), bool)
+    }
     coverage_fact_keys = {
         fact_key
         for scenario in scenario_catalog()
@@ -197,6 +223,8 @@ def _publish_pointer_and_handoff(
     expected_case_audit_digest: str,
     expected_tax_cross_checks: dict[str, str] | None,
     expected_source_manifest_sha256: str | None,
+    expected_private_snapshot_digest: str,
+    expected_case_state_digest: str,
 ) -> None:
     current_artifacts, current_payloads = _case_audit_artifacts(root)
     current_tax_cross_checks = _tax_cross_check_record(
@@ -208,6 +236,16 @@ def _publish_pointer_and_handoff(
         or _source_manifest_digest(root) != expected_source_manifest_sha256
     ):
         raise DeliveryError("delivery_case_audit_invalid")
+    try:
+        current_private_digest = _private_snapshot_digest(load_case_snapshot(root))
+        current_state_digest = _sha256(root / "state.json")
+    except (OSError, TypeError, ValueError):
+        raise DeliveryError("delivery_revision_conflict") from None
+    if (
+        current_private_digest != expected_private_snapshot_digest
+        or current_state_digest != expected_case_state_digest
+    ):
+        raise DeliveryError("delivery_revision_conflict")
     pointer_path = root / "work" / DELIVERY_POINTER_NAME
     previous = pointer_path.read_bytes() if pointer_path.is_file() else None
     _atomic_json(pointer_path, pointer)
@@ -352,6 +390,11 @@ def _case_audit_artifacts(
             "case-audit/structured-document-index.json",
         ),
         ("findings", root / "output/findings.json", "case-audit/findings.json"),
+        (
+            "scenario_facts",
+            root / "work/scenario-facts.json",
+            "case-audit/scenario-facts.json",
+        ),
     )
     for key, path, archive_path in known:
         loaded = _case_audit_json(root, path)
@@ -795,6 +838,8 @@ def build_case_delivery(
     """Publish all delivery artifacts from one immutable case snapshot."""
     root = _case_root(case_dir)
     snapshot = load_case_snapshot(root)
+    private_snapshot_digest = _private_snapshot_digest(snapshot)
+    case_state_digest = _sha256(root / "state.json")
     if any(result.status is TaxStatus.BLOCKED for result in snapshot.results):
         raise DeliveryError("delivery_blocked_data_quality")
     options = _delivery_options(include_evidence_files=include_evidence_files)
@@ -887,6 +932,8 @@ def build_case_delivery(
             expected_case_audit_digest=case_audit_digest,
             expected_tax_cross_checks=tax_cross_checks,
             expected_source_manifest_sha256=source_manifest_sha256,
+            expected_private_snapshot_digest=private_snapshot_digest,
+            expected_case_state_digest=case_state_digest,
         )
         return pointer
 
@@ -995,6 +1042,8 @@ def build_case_delivery(
             expected_case_audit_digest=case_audit_digest,
             expected_tax_cross_checks=tax_cross_checks,
             expected_source_manifest_sha256=source_manifest_sha256,
+            expected_private_snapshot_digest=private_snapshot_digest,
+            expected_case_state_digest=case_state_digest,
         )
         return pointer
     except PdfExportUnavailable as error:

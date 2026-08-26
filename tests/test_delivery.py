@@ -11,6 +11,7 @@ import pytest
 from open_tax_check.case import init_case
 from open_tax_check.case_orchestration import (
     apply_case_confirmations,
+    apply_scenario_confirmations,
     build_case_customer_handoff,
     build_case_customer_tasks,
     run_case_self_check,
@@ -74,6 +75,25 @@ def _case(tmp_path: Path) -> Path:
     case = tmp_path / "case"
     init_case(case, "虚构科技有限公司", "2026-01-01", "2026-12-31")
     run_case_self_check(case, _request(), occurred_at="2026-07-30T10:00:00+08:00")
+    return case
+
+
+def _case_with_scenario_confirmation(tmp_path: Path) -> Path:
+    case = tmp_path / "scenario-case"
+    init_case(case, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+    task = build_case_customer_tasks(case)[0]
+    run_case_self_check(case, _request(), occurred_at="2026-07-30T10:00:00+08:00")
+    apply_scenario_confirmations(case, ({
+        "confirmation_kind": "scenario",
+        "question_id": task["question_id"],
+        "fact_key": task["fact_key"],
+        "value": True,
+        "confirmed_by": "customer",
+        "confirmed_at": "2026-08-26T18:00:00+08:00",
+        "evidence_refs": [f"customer-confirmation:{task['question_id']}"],
+        "scenario_revision": task["scenario_revision"],
+        "question_digest": task["question_digest"],
+    },))
     return case
 
 
@@ -406,7 +426,7 @@ def test_case_delivery_uses_one_scenario_coverage_for_report_and_machine_snapsho
     assert len(coverage_builds) == 1
 
 
-def test_case_delivery_uses_only_human_confirmed_scenario_facts(tmp_path: Path):
+def test_case_delivery_ignores_direct_v1_scenario_facts(tmp_path: Path):
     case = _case(tmp_path)
     (case / "work/scenario-facts.json").write_text(
         json.dumps({
@@ -443,8 +463,8 @@ def test_case_delivery_uses_only_human_confirmed_scenario_facts(tmp_path: Path):
         if item["scenario_id"] == "revenue_and_turnover"
     )
 
-    assert revenue["not_applicable_count"] == 4
-    assert revenue["not_performed_count"] == 0
+    assert revenue["not_applicable_count"] == 0
+    assert revenue["not_performed_count"] == 4
 
 
 @pytest.mark.parametrize(
@@ -739,6 +759,15 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
     assert len(delivery_manifest["tax_cross_checks"]["sha256"]) == 64
 
 
+def test_case_delivery_bundles_validated_scenario_facts_as_case_audit(tmp_path: Path):
+    case = _case_with_scenario_confirmation(tmp_path)
+
+    result = build_case_delivery(case)
+
+    with ZipFile(case / result["revision_path"] / "evidence-bundle.zip") as archive:
+        assert "case-audit/scenario-facts.json" in archive.namelist()
+
+
 def test_case_delivery_is_idempotent_for_same_snapshot(tmp_path: Path):
     case = _case(tmp_path)
 
@@ -1018,6 +1047,61 @@ def test_case_delivery_revalidates_manifest_and_cross_checks_before_pointer_publ
         side_effect=mutate_then_publish,
     ):
         with pytest.raises(DeliveryError, match="delivery_case_audit_invalid"):
+            build_case_delivery(case)
+
+    assert not (case / "work/delivery.json").exists()
+    assert not (case / "work/deliveries/revision-0001-report-v3").exists()
+
+
+def test_case_delivery_does_not_publish_when_scenario_facts_change_during_render(
+    tmp_path: Path,
+):
+    case = _case_with_scenario_confirmation(tmp_path)
+    facts_path = case / "work/scenario-facts.json"
+    from open_tax_check import delivery
+
+    original_publish = delivery._publish_pointer_and_handoff
+
+    def mutate_then_publish(root, pointer, **bindings):
+        payload = json.loads(facts_path.read_text(encoding="utf-8"))
+        record = next(iter(payload["facts"].values()))
+        record["value"] = not record["value"]
+        facts_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return original_publish(root, pointer, **bindings)
+
+    with patch.object(
+        delivery,
+        "_publish_pointer_and_handoff",
+        side_effect=mutate_then_publish,
+    ):
+        with pytest.raises(DeliveryError, match="delivery_case_audit_invalid"):
+            build_case_delivery(case)
+
+    assert not (case / "work/delivery.json").exists()
+    assert not (case / "work/deliveries/revision-0002-report-v3").exists()
+
+
+def test_case_delivery_does_not_publish_when_private_snapshot_fact_changes_during_render(
+    tmp_path: Path,
+):
+    case = _case(tmp_path)
+    snapshot_path = case / "work/tax-health-snapshot.private.json"
+    from open_tax_check import delivery
+
+    original_publish = delivery._publish_pointer_and_handoff
+
+    def mutate_then_publish(root, pointer, **bindings):
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        payload["request"]["facts"][0]["value"] = False
+        snapshot_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return original_publish(root, pointer, **bindings)
+
+    with patch.object(
+        delivery,
+        "_publish_pointer_and_handoff",
+        side_effect=mutate_then_publish,
+    ):
+        with pytest.raises(DeliveryError, match="delivery_revision_conflict"):
             build_case_delivery(case)
 
     assert not (case / "work/delivery.json").exists()
