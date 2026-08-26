@@ -35,6 +35,7 @@ from .report_view import (
     ReportViewV3,
     build_report_view_v3,
 )
+from .reviews import ReviewError, load_active_mappings
 from .scenario_map import scenario_catalog
 from .tax_cross_checks import parse_tax_cross_check_payload
 from .tax_reporting import (
@@ -468,6 +469,7 @@ def _report_context(
 
 
 def _material_statuses(
+    case_dir: Path,
     manifest: dict[str, object] | None,
     case_audit_payloads: dict[str, object],
 ) -> tuple[dict[str, object], ...]:
@@ -493,12 +495,17 @@ def _material_statuses(
         isinstance(structured_reconciliation, dict)
         and structured_reconciliation.get("passed") is True
     )
-    mapping_review = case_audit_payloads.get("mapping_review", {})
-    mapping_confirmations = (
-        mapping_review.get("confirmations", [])
-        if isinstance(mapping_review, dict)
-        else []
-    )
+    mapping_confirmations: list[dict] = []
+    if "mapping_review" in case_audit_payloads:
+        try:
+            active_mappings = load_active_mappings(case_dir)
+        except ReviewError:
+            raise DeliveryError("delivery_case_audit_invalid") from None
+        mapping_confirmations = [
+            decision
+            for role in ("journal", "trial_balance")
+            for decision in active_mappings.get(role, ())
+        ]
     workbook_reconciliation = case_audit_payloads.get("reconciliation", {})
     workbook_reconciliation_passed = (
         isinstance(workbook_reconciliation, dict)
@@ -755,7 +762,7 @@ def build_case_delivery(
     case_audit_digest = _case_audit_digest(case_audit_artifacts)
     entity_name, reviewed_findings = _report_context(root, case_audit_payloads)
     manifest_payload = _read_manifest(root)
-    material_statuses = _material_statuses(manifest_payload, case_audit_payloads)
+    material_statuses = _material_statuses(root, manifest_payload, case_audit_payloads)
     try:
         cross_check_run = (
             parse_tax_cross_check_payload(case_audit_payloads["tax_cross_checks"])

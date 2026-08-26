@@ -130,12 +130,13 @@ python -m pytest tests/test_pdf_report.py::test_real_chromium_pdf_is_valid_and_c
 
 ## 2026-08-26 场景风险地图验收证据
 
-- 测试验收：focused **226 passed, 1 skipped, 101 subtests**；full **1176 passed, 22 skipped, 461 subtests**。
-- 构建与发布验收：wheel/sdist 构建成功；strict release passed；isolated wheel status verified。
-- 验证环境：Windows only，Python 3.12，schema v3；未声称 macOS/Linux 结果。
+- 验证环境：Windows only，Python 3.12，`PYTHONPATH=src`，Playwright Chromium 路径为 `C:\Users\benhu\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe`；未声称 macOS/Linux 结果。
+- focused 命令：设置上述 `PYTHONPATH` 和 `OPENTAXCHECK_CHROMIUM_EXECUTABLE` 后运行 `python -m pytest tests/test_scenario_map.py tests/test_customer_guide.py tests/test_customer_guide_cli.py tests/test_report_view.py tests/test_tax_health_reporting.py tests/test_html_report.py tests/test_pdf_report.py tests/test_skill_contract.py tests/test_public_repo_contract.py -q`；结果为 **226 passed, 1 skipped, 101 subtests passed**。
+- full 命令：在相同环境下运行 `python -m pytest -q`；结果为 **1176 passed, 22 skipped, 461 subtests passed, 16 warnings**。跳过项不计为通过；警告来自 Windows 子进程输出的 UTF-8 解码，不影响本次测试退出状态，但保留为已知环境风险。
+- 构建与发布命令：依次运行 `python -m build`、`python scripts/validate_release.py --strict`、`python scripts/validate_installed_wheel.py --dist dist`；wheel/sdist 构建成功，strict release passed，isolated wheel 返回 `status=verified`、`report_schema_version=tax-health-report/v3`。
 - 四类 PDF 均未加密、0 个空白页，且均存在场景风险地图：
-  - ordinary：8 页，SHA-256 `c18af498e1c48031e5009fbbd9296cba1423575fd19513062d6869fb8eb529d8`
-  - long-text：9 页，SHA-256 `80f753c5617cb0b7d3cc8fad30e8631c1274a0674e41b1e9ac3e40e2a625daec`
-  - no-risk：7 页，SHA-256 `4482f3451f76e3dff4bf75a21c355bb6f8e34336846545104672b9a99d004b16`
-  - many-gaps：11 页，SHA-256 `a141c5ddd06e79ef79165707feb7a713fe3d301fbb822934218b7e53e59a8b0e`
+  - ordinary：`.superpowers/sdd/2026-08-22-scenario-risk-map/visual-qa/ordinary/税务健康检查报告.pdf`，8 页，SHA-256 `c18af498e1c48031e5009fbbd9296cba1423575fd19513062d6869fb8eb529d8`
+  - long-text：`.superpowers/sdd/2026-08-22-scenario-risk-map/visual-qa/long-text/税务健康检查报告.pdf`，9 页，SHA-256 `80f753c5617cb0b7d3cc8fad30e8631c1274a0674e41b1e9ac3e40e2a625daec`
+  - no-risk：`.superpowers/sdd/2026-08-22-scenario-risk-map/visual-qa/no-risk/税务健康检查报告.pdf`，7 页，SHA-256 `4482f3451f76e3dff4bf75a21c355bb6f8e34336846545104672b9a99d004b16`
+  - many-gaps：`.superpowers/sdd/2026-08-22-scenario-risk-map/visual-qa/many-gaps/税务健康检查报告.pdf`，11 页，SHA-256 `a141c5ddd06e79ef79165707feb7a713fe3d301fbb822934218b7e53e59a8b0e`
 - 视觉检查：字体统一，无裁切或重叠；长文正确续页；表格跨页可读；灰度层次可辨。many-gaps 第 10 页留白较多但含检查边界，不是空白页。

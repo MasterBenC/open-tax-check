@@ -17,6 +17,7 @@ from open_tax_check.case_orchestration import (
 )
 from open_tax_check import cli
 from open_tax_check.delivery import DeliveryError, build_case_delivery, verified_delivery_artifacts
+from open_tax_check.reviews import confirm_mapping, confirm_sheet_selection
 from open_tax_check.scenario_map import scenario_coverage_payload
 from open_tax_check.tax_models import (
     Confirmation,
@@ -74,6 +75,106 @@ def _case(tmp_path: Path) -> Path:
     init_case(case, "虚构科技有限公司", "2026-01-01", "2026-12-31")
     run_case_self_check(case, _request(), occurred_at="2026-07-30T10:00:00+08:00")
     return case
+
+
+def _confirmed_journal_case(
+    tmp_path: Path,
+    *,
+    trial_balance_passed: bool = True,
+    journal_to_trial_balance_passed: bool = True,
+) -> tuple[Path, str]:
+    from openpyxl import Workbook
+
+    case = _case(tmp_path)
+    journal_path = case / "input/journal.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Journal"
+    sheet.append(())
+    sheet.append(())
+    sheet.append(("voucher", "date", "account", "debit", "credit", "unreported"))
+    workbook.save(journal_path)
+    workbook.close()
+
+    source_sha256 = hashlib.sha256(journal_path.read_bytes()).hexdigest()
+    source_id = source_sha256[:16]
+    (case / "work/workbook_inventory.json").write_text(
+        json.dumps({
+            "workbooks": [{
+                "source_id": source_id,
+                "filename": "journal.xlsx",
+                "sha256": source_sha256,
+                "sheets": [{
+                    "sheet_id": "sheet-0001",
+                    "name": "Journal",
+                    "used_range": "A1:F20",
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    confirm_sheet_selection(
+        case,
+        role="journal",
+        source_id=source_id,
+        sheet_id="sheet-0001",
+        header_rows=(3,),
+        hidden_rows="exclude",
+        reviewer="host:selector",
+    )
+    confirm_mapping(case, {
+        "role": "journal",
+        "source_id": source_id,
+        "sheet_id": "sheet-0001",
+        "header_rows": [3],
+        "headers": ["voucher", "date", "account", "debit", "credit"],
+        "mapping": {
+            "voucher": "voucher_no",
+            "date": "date",
+            "account": "account_name",
+            "debit": "debit",
+            "credit": "credit",
+        },
+        "exclusions": {"unreported": "not needed for normalization"},
+        "reviewer": "host:reviewer",
+    })
+
+    manifest_payload = {
+        "sources": [{
+            "source_id": source_id,
+            "status": "accepted",
+            "filename": "journal.xlsx",
+        }],
+    }
+    manifest_bytes = json.dumps(manifest_payload).encode("utf-8")
+    (case / "work/input_manifest.json").write_bytes(manifest_bytes)
+    (case / "work/reconciliation.json").write_text(
+        json.dumps({
+            "trial_balance": {"passed": trial_balance_passed},
+            "journal_to_trial_balance": {"passed": journal_to_trial_balance_passed},
+        }),
+        encoding="utf-8",
+    )
+    base_run = completed_run()
+    run = replace(
+        base_run,
+        results=tuple(
+            replace(
+                result,
+                source_refs=tuple(
+                    replace(source_ref, source_id=source_id)
+                    for source_ref in result.source_refs
+                ),
+            )
+            for result in base_run.results
+        ),
+        source_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+    )
+    (case / "work/tax-cross-checks.json").write_text(
+        json.dumps(tax_cross_check_payload(run), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return case, source_id
 
 
 def test_case_delivery_publishes_one_revision_for_all_artifacts(tmp_path: Path):
@@ -338,6 +439,60 @@ def test_case_delivery_binds_material_only_by_unique_cross_check_source_ref(
 def test_case_delivery_marks_confirmed_reconciled_workbook_as_reconciled(
     tmp_path: Path,
 ):
+    case, _ = _confirmed_journal_case(tmp_path)
+
+    result = build_case_delivery(case)
+    machine = json.loads(
+        (
+            case
+            / result["revision_path"]
+            / "tax-health-snapshot.json"
+        ).read_text(encoding="utf-8")
+    )
+    coverage = {
+        item["scenario_id"]: item
+        for item in machine["scenario_coverage"]["items"]
+    }
+
+    assert coverage["revenue_and_turnover"]["executed_clear_count"] == 4
+    assert coverage["revenue_and_turnover"]["awaiting_evidence_count"] == 0
+    assert coverage["costs_and_expenses"]["executed_clear_count"] == 1
+    assert coverage["costs_and_expenses"]["awaiting_evidence_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("trial_balance_passed", "journal_to_trial_balance_passed"),
+    [(False, True), (True, False)],
+)
+def test_case_delivery_does_not_reconcile_workbook_when_either_check_fails(
+    tmp_path: Path,
+    trial_balance_passed: bool,
+    journal_to_trial_balance_passed: bool,
+):
+    case, _ = _confirmed_journal_case(
+        tmp_path,
+        trial_balance_passed=trial_balance_passed,
+        journal_to_trial_balance_passed=journal_to_trial_balance_passed,
+    )
+
+    result = build_case_delivery(case)
+    machine = json.loads(
+        (case / result["revision_path"] / "tax-health-snapshot.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    coverage = {
+        item["scenario_id"]: item
+        for item in machine["scenario_coverage"]["items"]
+    }
+
+    assert coverage["revenue_and_turnover"]["awaiting_evidence_count"] == 4
+    assert coverage["revenue_and_turnover"]["executed_clear_count"] == 0
+    assert coverage["costs_and_expenses"]["awaiting_evidence_count"] == 1
+    assert coverage["costs_and_expenses"]["executed_clear_count"] == 0
+
+
+def test_case_delivery_rejects_malformed_mapping_confirmation(tmp_path: Path):
     case = _case(tmp_path)
     manifest_payload = {
         "sources": [{
@@ -375,23 +530,8 @@ def test_case_delivery_marks_confirmed_reconciled_workbook_as_reconciled(
         encoding="utf-8",
     )
 
-    result = build_case_delivery(case)
-    machine = json.loads(
-        (
-            case
-            / result["revision_path"]
-            / "tax-health-snapshot.json"
-        ).read_text(encoding="utf-8")
-    )
-    coverage = {
-        item["scenario_id"]: item
-        for item in machine["scenario_coverage"]["items"]
-    }
-
-    assert coverage["revenue_and_turnover"]["executed_clear_count"] == 4
-    assert coverage["revenue_and_turnover"]["awaiting_evidence_count"] == 0
-    assert coverage["costs_and_expenses"]["executed_clear_count"] == 1
-    assert coverage["costs_and_expenses"]["awaiting_evidence_count"] == 0
+    with pytest.raises(DeliveryError, match="^delivery_case_audit_invalid$"):
+        build_case_delivery(case)
 
 
 def test_case_delivery_rejects_cross_check_bound_to_another_source_manifest(tmp_path: Path):
@@ -477,9 +617,13 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
         json.dumps({"items": []}),
         encoding="utf-8",
     )
+    (case / "work/workbook_inventory.json").write_text(
+        json.dumps({"workbooks": []}),
+        encoding="utf-8",
+    )
     (case / "reviews").mkdir()
     (case / "reviews/mapping_review.json").write_text(
-        json.dumps({"confirmations": [{"reviewer": "host:test"}]}),
+        json.dumps({"schema_version": "0.2.0", "confirmations": []}),
         encoding="utf-8",
     )
 
