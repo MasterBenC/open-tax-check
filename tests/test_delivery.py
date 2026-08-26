@@ -494,6 +494,10 @@ def test_case_delivery_does_not_reconcile_workbook_when_either_check_fails(
 
 def test_case_delivery_rejects_malformed_mapping_confirmation(tmp_path: Path):
     case = _case(tmp_path)
+    (case / "work/workbook_inventory.json").write_text(
+        json.dumps({"workbooks": []}),
+        encoding="utf-8",
+    )
     manifest_payload = {
         "sources": [{
             "source_id": "source-1",
