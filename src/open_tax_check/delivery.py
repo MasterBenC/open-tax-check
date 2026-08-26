@@ -37,6 +37,7 @@ from .report_view import (
 )
 from .reviews import ReviewError, load_active_mappings
 from .scenario_map import scenario_catalog
+from .schemas import SCHEMA_VERSION
 from .tax_cross_checks import parse_tax_cross_check_payload
 from .tax_reporting import (
     _tax_snapshot_payload_from_report_view,
@@ -468,10 +469,77 @@ def _report_context(
     return entity_name.strip(), tuple(findings)
 
 
-def _material_statuses(
+def _active_workbook_mappings(
     case_dir: Path,
+    case_audit_payloads: dict[str, object],
+) -> tuple[dict, ...]:
+    if "mapping_review" not in case_audit_payloads:
+        return ()
+    try:
+        active_mappings = load_active_mappings(case_dir)
+    except ReviewError:
+        raise DeliveryError("delivery_case_audit_invalid") from None
+    return tuple(
+        decision
+        for role in ("journal", "trial_balance")
+        for decision in active_mappings.get(role, ())
+    )
+
+
+def _reconciliation_result_status(value: object) -> bool | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"passed", "items", "issues"}
+        or not isinstance(value.get("passed"), bool)
+        or not isinstance(value.get("items"), list)
+        or not all(isinstance(item, dict) for item in value["items"])
+        or not isinstance(value.get("issues"), list)
+        or not all(
+            isinstance(issue, dict)
+            and isinstance(issue.get("code"), str)
+            and bool(issue["code"].strip())
+            for issue in value["issues"]
+        )
+        or value["passed"] is bool(value["issues"])
+    ):
+        raise DeliveryError("delivery_case_audit_invalid")
+    return value["passed"]
+
+
+def _workbook_reconciliation_statuses(
+    case_audit_payloads: dict[str, object],
+    mapping_confirmations: tuple[dict, ...],
+) -> tuple[bool | None, bool | None]:
+    active_roles = {
+        item.get("role")
+        for item in mapping_confirmations
+        if isinstance(item, dict)
+    }
+    if not {"journal", "trial_balance"}.issubset(active_roles):
+        return None, None
+    reconciliation = case_audit_payloads.get("reconciliation")
+    if reconciliation is None:
+        return None, None
+    if (
+        not isinstance(reconciliation, dict)
+        or set(reconciliation)
+        != {"schema_version", "trial_balance", "journal_to_trial_balance"}
+        or reconciliation.get("schema_version") != SCHEMA_VERSION
+    ):
+        raise DeliveryError("delivery_case_audit_invalid")
+    return (
+        _reconciliation_result_status(reconciliation["trial_balance"]),
+        _reconciliation_result_status(reconciliation["journal_to_trial_balance"]),
+    )
+
+
+def _material_statuses(
     manifest: dict[str, object] | None,
     case_audit_payloads: dict[str, object],
+    mapping_confirmations: tuple[dict, ...],
+    workbook_reconciliation_statuses: tuple[bool | None, bool | None],
 ) -> tuple[dict[str, object], ...]:
     """Translate intake state into the report's separate material-status axis."""
 
@@ -495,27 +563,8 @@ def _material_statuses(
         isinstance(structured_reconciliation, dict)
         and structured_reconciliation.get("passed") is True
     )
-    mapping_confirmations: list[dict] = []
-    if "mapping_review" in case_audit_payloads:
-        try:
-            active_mappings = load_active_mappings(case_dir)
-        except ReviewError:
-            raise DeliveryError("delivery_case_audit_invalid") from None
-        mapping_confirmations = [
-            decision
-            for role in ("journal", "trial_balance")
-            for decision in active_mappings.get(role, ())
-        ]
-    workbook_reconciliation = case_audit_payloads.get("reconciliation", {})
-    workbook_reconciliation_passed = (
-        isinstance(workbook_reconciliation, dict)
-        and isinstance(workbook_reconciliation.get("trial_balance"), dict)
-        and workbook_reconciliation["trial_balance"].get("passed") is True
-        and isinstance(
-            workbook_reconciliation.get("journal_to_trial_balance"), dict
-        )
-        and workbook_reconciliation["journal_to_trial_balance"].get("passed")
-        is True
+    workbook_reconciliation_passed = all(
+        status is True for status in workbook_reconciliation_statuses
     )
     reconciled_workbook_source_ids = {
         item["source_id"]
@@ -762,7 +811,19 @@ def build_case_delivery(
     case_audit_digest = _case_audit_digest(case_audit_artifacts)
     entity_name, reviewed_findings = _report_context(root, case_audit_payloads)
     manifest_payload = _read_manifest(root)
-    material_statuses = _material_statuses(root, manifest_payload, case_audit_payloads)
+    mapping_confirmations = _active_workbook_mappings(root, case_audit_payloads)
+    workbook_reconciliation_statuses = _workbook_reconciliation_statuses(
+        case_audit_payloads,
+        mapping_confirmations,
+    )
+    if any(status is False for status in workbook_reconciliation_statuses):
+        raise DeliveryError("delivery_blocked_data_quality")
+    material_statuses = _material_statuses(
+        manifest_payload,
+        case_audit_payloads,
+        mapping_confirmations,
+        workbook_reconciliation_statuses,
+    )
     try:
         cross_check_run = (
             parse_tax_cross_check_payload(case_audit_payloads["tax_cross_checks"])
