@@ -576,6 +576,29 @@ def test_case_delivery_blocks_when_current_workbook_reconciliation_fails(
     assert not (case / "work/deliveries").exists()
 
 
+@pytest.mark.parametrize(
+    ("trial_balance_passed", "journal_to_trial_balance_passed"),
+    [(False, True), (True, False)],
+)
+def test_case_delivery_blocks_failed_reconciliation_after_mapping_review_deleted(
+    tmp_path: Path,
+    trial_balance_passed: bool,
+    journal_to_trial_balance_passed: bool,
+):
+    case, _ = _confirmed_workbook_case(
+        tmp_path,
+        trial_balance_passed=trial_balance_passed,
+        journal_to_trial_balance_passed=journal_to_trial_balance_passed,
+    )
+    (case / "reviews/mapping_review.json").unlink()
+
+    with pytest.raises(DeliveryError, match="^delivery_blocked_data_quality$"):
+        build_case_delivery(case)
+
+    assert not (case / "work/delivery.json").exists()
+    assert not (case / "work/deliveries").exists()
+
+
 def test_case_delivery_allows_current_workbook_flow_before_reconciliation_runs(
     tmp_path: Path,
 ):
@@ -589,6 +612,7 @@ def test_case_delivery_allows_current_workbook_flow_before_reconciliation_runs(
 
 def test_case_delivery_rejects_unstructured_current_reconciliation(tmp_path: Path):
     case, _ = _confirmed_workbook_case(tmp_path)
+    (case / "reviews/mapping_review.json").unlink()
     (case / "work/reconciliation.json").write_text(
         json.dumps({
             "schema_version": "0.2.0",
@@ -715,7 +739,15 @@ def test_case_delivery_bundles_structured_contracts_reconciliations_and_review(t
         encoding="utf-8",
     )
     (case / "work/reconciliation.json").write_text(
-        json.dumps({"trial_balance": {"passed": True}}),
+        json.dumps({
+            "schema_version": "0.2.0",
+            "trial_balance": {"passed": True, "items": [], "issues": []},
+            "journal_to_trial_balance": {
+                "passed": True,
+                "items": [],
+                "issues": [],
+            },
+        }),
         encoding="utf-8",
     )
     (case / "work/structured-reconciliation.json").write_text(
@@ -1106,6 +1138,65 @@ def test_case_delivery_does_not_publish_when_private_snapshot_fact_changes_durin
 
     assert not (case / "work/delivery.json").exists()
     assert not (case / "work/deliveries/revision-0001-report-v3").exists()
+
+
+def test_case_delivery_does_not_publish_when_unknown_private_snapshot_field_is_added_during_render(
+    tmp_path: Path,
+):
+    case = _case(tmp_path)
+    snapshot_path = case / "work/tax-health-snapshot.private.json"
+    from open_tax_check import delivery
+
+    original_publish = delivery._publish_pointer_and_handoff
+
+    def mutate_then_publish(root, pointer, **bindings):
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        payload["unexpected_top_level_field"] = {"injected": True}
+        snapshot_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return original_publish(root, pointer, **bindings)
+
+    with patch.object(
+        delivery,
+        "_publish_pointer_and_handoff",
+        side_effect=mutate_then_publish,
+    ):
+        with pytest.raises(DeliveryError, match="delivery_revision_conflict"):
+            build_case_delivery(case)
+
+    assert not (case / "work/delivery.json").exists()
+    assert not (case / "work/deliveries/revision-0001-report-v3").exists()
+
+
+def test_case_delivery_rejects_symlinked_private_snapshot(tmp_path: Path):
+    case = _case(tmp_path)
+    snapshot_path = case / "work/tax-health-snapshot.private.json"
+    outside = tmp_path / "outside-private-snapshot.json"
+    outside.write_bytes(snapshot_path.read_bytes())
+    snapshot_path.unlink()
+    try:
+        snapshot_path.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+
+    with pytest.raises(DeliveryError, match="^delivery_revision_conflict$"):
+        build_case_delivery(case)
+
+    assert not (case / "work/delivery.json").exists()
+    assert not (case / "work/deliveries").exists()
+
+
+def test_case_delivery_rejects_oversized_private_snapshot(tmp_path: Path):
+    case = _case(tmp_path)
+    snapshot_path = case / "work/tax-health-snapshot.private.json"
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    payload["unexpected_top_level_field"] = "x" * (2 * 1024 * 1024)
+    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeliveryError, match="^delivery_revision_conflict$"):
+        build_case_delivery(case)
+
+    assert not (case / "work/delivery.json").exists()
+    assert not (case / "work/deliveries").exists()
 
 
 def test_pointer_rollback_failure_preserves_revision_referenced_by_new_pointer(

@@ -15,6 +15,7 @@ from .case import resolve_safe_case_path
 from .customer_guide import load_scenario_fact_store
 from .case_orchestration import (
     HANDOFF_NAME,
+    PRIVATE_SNAPSHOT_NAME,
     build_case_customer_handoff,
     case_status_payload,
     customer_handoff_payload,
@@ -53,6 +54,7 @@ _HISTORICAL_REPORT_SCHEMA_VERSION = "tax-health-report/v2"
 DELIVERY_POINTER_NAME = "delivery.json"
 DELIVERY_DIR_NAME = "deliveries"
 _CASE_AUDIT_JSON_LIMIT = 2 * 1024 * 1024
+_PRIVATE_SNAPSHOT_JSON_LIMIT = 2 * 1024 * 1024
 _CASE_AUDIT_DOCUMENT_LIMIT = 100
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -78,6 +80,21 @@ def _private_snapshot_digest(snapshot: TaxCheckSnapshot) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _private_snapshot_file_digest(root: Path) -> str:
+    try:
+        path = resolve_safe_source(
+            root / "work" / PRIVATE_SNAPSHOT_NAME,
+            root / "work",
+        )
+        with path.open("rb") as source:
+            raw = source.read(_PRIVATE_SNAPSHOT_JSON_LIMIT + 1)
+    except (OSError, ValueError):
+        raise DeliveryError("delivery_revision_conflict") from None
+    if len(raw) > _PRIVATE_SNAPSHOT_JSON_LIMIT:
+        raise DeliveryError("delivery_revision_conflict")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _sha256(path: Path) -> str:
@@ -223,6 +240,7 @@ def _publish_pointer_and_handoff(
     expected_case_audit_digest: str,
     expected_tax_cross_checks: dict[str, str] | None,
     expected_source_manifest_sha256: str | None,
+    expected_private_snapshot_file_digest: str,
     expected_private_snapshot_digest: str,
     expected_case_state_digest: str,
 ) -> None:
@@ -237,12 +255,14 @@ def _publish_pointer_and_handoff(
     ):
         raise DeliveryError("delivery_case_audit_invalid")
     try:
+        current_private_file_digest = _private_snapshot_file_digest(root)
         current_private_digest = _private_snapshot_digest(load_case_snapshot(root))
         current_state_digest = _sha256(root / "state.json")
     except (OSError, TypeError, ValueError):
         raise DeliveryError("delivery_revision_conflict") from None
     if (
-        current_private_digest != expected_private_snapshot_digest
+        current_private_file_digest != expected_private_snapshot_file_digest
+        or current_private_digest != expected_private_snapshot_digest
         or current_state_digest != expected_case_state_digest
     ):
         raise DeliveryError("delivery_revision_conflict")
@@ -553,15 +573,7 @@ def _reconciliation_result_status(value: object) -> bool | None:
 
 def _workbook_reconciliation_statuses(
     case_audit_payloads: dict[str, object],
-    mapping_confirmations: tuple[dict, ...],
 ) -> tuple[bool | None, bool | None]:
-    active_roles = {
-        item.get("role")
-        for item in mapping_confirmations
-        if isinstance(item, dict)
-    }
-    if not {"journal", "trial_balance"}.issubset(active_roles):
-        return None, None
     reconciliation = case_audit_payloads.get("reconciliation")
     if reconciliation is None:
         return None, None
@@ -837,6 +849,7 @@ def build_case_delivery(
 ) -> dict[str, object]:
     """Publish all delivery artifacts from one immutable case snapshot."""
     root = _case_root(case_dir)
+    private_snapshot_file_digest = _private_snapshot_file_digest(root)
     snapshot = load_case_snapshot(root)
     private_snapshot_digest = _private_snapshot_digest(snapshot)
     case_state_digest = _sha256(root / "state.json")
@@ -859,7 +872,6 @@ def build_case_delivery(
     mapping_confirmations = _active_workbook_mappings(root, case_audit_payloads)
     workbook_reconciliation_statuses = _workbook_reconciliation_statuses(
         case_audit_payloads,
-        mapping_confirmations,
     )
     if any(status is False for status in workbook_reconciliation_statuses):
         raise DeliveryError("delivery_blocked_data_quality")
@@ -932,6 +944,7 @@ def build_case_delivery(
             expected_case_audit_digest=case_audit_digest,
             expected_tax_cross_checks=tax_cross_checks,
             expected_source_manifest_sha256=source_manifest_sha256,
+            expected_private_snapshot_file_digest=private_snapshot_file_digest,
             expected_private_snapshot_digest=private_snapshot_digest,
             expected_case_state_digest=case_state_digest,
         )
@@ -1042,6 +1055,7 @@ def build_case_delivery(
             expected_case_audit_digest=case_audit_digest,
             expected_tax_cross_checks=tax_cross_checks,
             expected_source_manifest_sha256=source_manifest_sha256,
+            expected_private_snapshot_file_digest=private_snapshot_file_digest,
             expected_private_snapshot_digest=private_snapshot_digest,
             expected_case_state_digest=case_state_digest,
         )
