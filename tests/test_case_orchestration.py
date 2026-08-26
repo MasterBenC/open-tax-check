@@ -427,6 +427,23 @@ class CaseOrchestrationTests(unittest.TestCase):
       self.assertEqual(code, 4)
       self.assertEqual(output["error_code"], "scenario_question_digest_mismatch")
 
+  def test_cli_exposes_retryable_scenario_confirmation_lock(self):
+    with __import__("tempfile").TemporaryDirectory() as temp_dir:
+      root = __import__("pathlib").Path(temp_dir)
+      case_dir = root / "case"
+      init_case(case_dir, "虚构科技有限公司", "2026-01-01", "2026-12-31")
+      task = build_case_customer_tasks(case_dir)[0]
+      (case_dir / ".scenario-confirmation.lock").write_text("active", encoding="ascii")
+
+      code, output = self._invoke_scenario_cli(
+        case_dir,
+        root / "scenario-confirmations.json",
+        [self._scenario_confirmation(task)],
+      )
+
+      self.assertEqual(code, 4)
+      self.assertEqual(output["error_code"], "scenario_confirmation_locked")
+
   def test_cli_rejects_mixed_standard_and_scenario_confirmation_batch(self):
     with __import__("tempfile").TemporaryDirectory() as temp_dir:
       root = __import__("pathlib").Path(temp_dir)

@@ -593,6 +593,7 @@ def main() -> int:
                 "scenario_question_digest_mismatch",
                 "scenario_confirmation_stale",
                 "scenario_confirmation_conflict",
+                "scenario_confirmation_locked",
                 "scenario_confirmation_write_failed",
                 "mixed_confirmation_batch",
             }
