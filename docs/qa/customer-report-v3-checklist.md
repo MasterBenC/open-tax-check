@@ -127,3 +127,15 @@ python -m pytest tests/test_pdf_report.py::test_real_chromium_pdf_is_valid_and_c
 - Playwright 1.62 对应的默认 Chromium 下载曾在本机因 CDN 连接重置而未完成；本地真实渲染因此使用已安装的 Playwright Chromium 1228 路径。GitHub Actions 的九组矩阵均已成功执行默认 Chromium 安装。
 - macOS、Linux 和 Python 3.11 未在本机运行；其通过结论仅来自上述 GitHub Actions 远端证据。
 - 本记录验证固定 HTML/Chromium/PDF 交付路径，不证明任意浏览器版本的像素级完全一致。
+
+## 2026-08-26 场景风险地图验收证据
+
+- 测试验收：focused **226 passed, 1 skipped, 101 subtests**；full **1176 passed, 22 skipped, 461 subtests**。
+- 构建与发布验收：wheel/sdist 构建成功；strict release passed；isolated wheel status verified。
+- 验证环境：Windows only，Python 3.12，schema v3；未声称 macOS/Linux 结果。
+- 四类 PDF 均未加密、0 个空白页，且均存在场景风险地图：
+  - ordinary：8 页，SHA-256 `c18af498e1c48031e5009fbbd9296cba1423575fd19513062d6869fb8eb529d8`
+  - long-text：9 页，SHA-256 `80f753c5617cb0b7d3cc8fad30e8631c1274a0674e41b1e9ac3e40e2a625daec`
+  - no-risk：7 页，SHA-256 `4482f3451f76e3dff4bf75a21c355bb6f8e34336846545104672b9a99d004b16`
+  - many-gaps：11 页，SHA-256 `a141c5ddd06e79ef79165707feb7a713fe3d301fbb822934218b7e53e59a8b0e`
+- 视觉检查：字体统一，无裁切或重叠；长文正确续页；表格跨页可读；灰度层次可辨。many-gaps 第 10 页留白较多但含检查边界，不是空白页。
