@@ -128,11 +128,11 @@ python -m pytest tests/test_pdf_report.py::test_real_chromium_pdf_is_valid_and_c
 - macOS、Linux 和 Python 3.11 未在本机运行；其通过结论仅来自上述 GitHub Actions 远端证据。
 - 本记录验证固定 HTML/Chromium/PDF 交付路径，不证明任意浏览器版本的像素级完全一致。
 
-## 2026-08-26 场景风险地图验收证据
+## 2026-08-26 视觉验收与 2026-08-28 最终复验
 
 - 验证环境：Windows only，Python 3.12，`PYTHONPATH=src`，Playwright Chromium 路径为 `C:\Users\benhu\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe`；未声称 macOS/Linux 结果。
-- focused 命令：设置上述 `PYTHONPATH` 和 `OPENTAXCHECK_CHROMIUM_EXECUTABLE` 后运行 `python -m pytest tests/test_scenario_map.py tests/test_customer_guide.py tests/test_customer_guide_cli.py tests/test_report_view.py tests/test_tax_health_reporting.py tests/test_html_report.py tests/test_pdf_report.py tests/test_skill_contract.py tests/test_public_repo_contract.py -q`；结果为 **226 passed, 1 skipped, 101 subtests passed**。
-- full 命令：在相同环境下运行 `python -m pytest -q`；结果为 **1176 passed, 22 skipped, 461 subtests passed, 16 warnings**。跳过项不计为通过；警告来自 Windows 子进程输出的 UTF-8 解码，不影响本次测试退出状态，但保留为已知环境风险。
+- focused 命令：设置上述 `PYTHONPATH` 和 `OPENTAXCHECK_CHROMIUM_EXECUTABLE` 后运行 `python -m pytest tests/test_scenario_map.py tests/test_customer_guide.py tests/test_customer_guide_cli.py tests/test_case_orchestration.py tests/test_delivery.py tests/test_report_view.py tests/test_tax_health_reporting.py tests/test_html_report.py tests/test_pdf_report.py tests/test_skill_contract.py tests/test_public_repo_contract.py -q`；最终结果为 **318 passed, 4 skipped, 110 subtests passed**。
+- full 命令：在相同环境下运行 `python -m pytest -q -x`；最终结果为 **1201 passed, 23 skipped, 468 subtests passed**，终端摘要未报告 warning。跳过项单独记录，不计为通过。
 - 构建与发布命令：依次运行 `python -m build`、`python scripts/validate_release.py --strict`、`python scripts/validate_installed_wheel.py --dist dist`；wheel/sdist 构建成功，strict release passed，isolated wheel 返回 `status=verified`、`report_schema_version=tax-health-report/v3`。
 - 四类 PDF 均未加密、0 个空白页，且均存在场景风险地图：
   - ordinary：`.superpowers/sdd/2026-08-22-scenario-risk-map/visual-qa/ordinary/税务健康检查报告.pdf`，8 页，SHA-256 `c18af498e1c48031e5009fbbd9296cba1423575fd19513062d6869fb8eb529d8`
