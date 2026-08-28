@@ -9,6 +9,23 @@ SKILL = ROOT / "skills" / "open-tax-check"
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_public_docs_share_one_agent_install_source_without_store_claims(self):
+        documents = {
+            "skill": (SKILL / "SKILL.md").read_text(encoding="utf-8"),
+            "host": (SKILL / "references" / "host-integrations.md").read_text(
+                encoding="utf-8"
+            ),
+            "readme": (ROOT / "README.md").read_text(encoding="utf-8"),
+        }
+        for name, text in documents.items():
+            with self.subTest(document=name):
+                self.assertIn(
+                    "https://github.com/MasterBenC/open-tax-check",
+                    text,
+                )
+                self.assertIn("一句话安装指令", text)
+                self.assertIn("尚未在其他智能体商店正式发布", text)
+
     def test_skill_host_reference_uses_case_guide_v2_contract(self):
         host = (SKILL / "references" / "host-integrations.md").read_text(
             encoding="utf-8"

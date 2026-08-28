@@ -2,6 +2,14 @@
 
 本契约对 Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code、OpenClaw 使用同一套业务字段。当前只提供宿主无关的操作顺序，不声明任何平台认证或原生插件兼容性；每个宿主都需按当前官方文档核验。
 
+## 一句话安装指令
+
+把下面这句话直接发给支持 Skill 的 AI 智能体：
+
+> 请从 https://github.com/MasterBenC/open-tax-check 获取最新版 OpenTaxCheck，把 `skills/open-tax-check` 安装到你当前智能体的 Skill 目录，安装 Python 包 `open-tax-check[excel,report]`，运行 `python -m playwright install chromium`，并在处理客户资料前执行仓库自带的离线宿主回放和完整虚构案例验证；不要替客户确认经营事实。
+
+当前官方安装源是上述 GitHub 仓库；Hermes 使用该来源。其他宿主应按各自当前官方 Skill 机制导入，不得推断平台认证、原生插件或商店上架状态。OpenTaxCheck 尚未在其他智能体商店正式发布，第三方转载和同名条目不属于官方发行。
+
 ## 路线
 
 - Python / CLI / JSON 核心：适用于本地命令能力，优先调用可恢复的案件接口 `run_case_self_check`、`case_status_payload`、`build_case_customer_tasks` 和 `apply_case_confirmations`；无案件目录的嵌入式调用仍可使用 `run_tax_health_check` 和 `continue_tax_health_check`。

@@ -2,6 +2,21 @@
 
 OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目助理结合起来，用于中国企业税务健康自查。宿主 AI 负责理解资料、向客户追问和解释结果；Python 负责来源绑定、金额、期间、勾稽、规则、状态和交付。报告不以税务专业人员批准为生成条件，但不替代涉税鉴证、专业税务意见或纳税申报结论。
 
+## 一句话安装指令
+
+把下面这句话直接发给支持 Skill 的 AI 智能体：
+
+> 请从 https://github.com/MasterBenC/open-tax-check 获取最新版 OpenTaxCheck，把 `skills/open-tax-check` 安装到你当前智能体的 Skill 目录，安装 Python 包 `open-tax-check[excel,report]`，运行 `python -m playwright install chromium`，并在处理客户资料前执行仓库自带的离线宿主回放和完整虚构案例验证；不要替客户确认经营事实。
+
+当前官方安装源是上述 GitHub 仓库，Hermes 可直接从该地址获取；Codex、Claude Code、Qoder、OpenClaw、WorkBuddy 等请按各自宿主当前的官方 Skill 安装机制导入该目录。OpenTaxCheck 尚未在其他智能体商店正式发布，不要把第三方转载或同名条目视为官方版本。需要手动安装时运行：
+
+```text
+git clone https://github.com/MasterBenC/open-tax-check.git
+cd open-tax-check
+python -m pip install -e ".[excel,report]"
+python -m playwright install chromium
+```
+
 ## 当前版本范围
 
 当前稳定版本为 **OpenTaxCheck v1.1.0**；此前的 `v1.0.0` 和当前稳定版本均已通过 GitHub Tag/Release 公开发布。v1.1.0 的远端 CI 已在 Windows、macOS、Linux 与 Python 3.11–3.13 组合上通过：
