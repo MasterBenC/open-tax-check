@@ -18,6 +18,7 @@ if str(ROOT / "src") not in sys.path:
 from open_tax_check.case import init_case, write_json
 from open_tax_check.case_orchestration import (
     apply_case_confirmations,
+    apply_scenario_confirmations,
     build_case_customer_tasks,
     case_status_payload,
     run_case_self_check,
@@ -648,14 +649,16 @@ def _prepare_complete_pipeline_case(
 
 
 def _fictional_answer(task):
-    if task.answer_type == "boolean":
-        return task.fact_key in {
+    answer_type = task.get("answer_type") if isinstance(task, dict) else task.answer_type
+    fact_key = task.get("fact_key") if isinstance(task, dict) else task.fact_key
+    if answer_type == "boolean":
+        return fact_key in {
             "activity.has_vat_taxable_transaction",
             "activity.has_individual_income_tax_duty",
             "entity.has_enterprise_income_tax_scope",
             "tax.has_vat_or_consumption_tax_payable",
         }
-    if task.answer_type == "choice":
+    if answer_type == "choice":
         choices = {
             "vat.rate_path": "general_taxpayer_6",
             "enterprise_income_tax.rate_path": "standard_resident_enterprise",
@@ -664,18 +667,18 @@ def _fictional_answer(task):
             "education_surcharge.rate_path": "standard",
             "local_education_surcharge.rate_path": "standard",
         }
-        return choices.get(task.fact_key, task.choices[0].value)
-    if task.answer_type == "integer":
+        return choices.get(fact_key, task.choices[0].value)
+    if answer_type == "integer":
         return 0
-    if task.answer_type == "decimal":
+    if answer_type == "decimal":
         return {
             "vat.taxable_sales": "1000000.00",
             "vat.input_tax_credits": "0.00",
             "enterprise_income_tax.taxable_income": "975000.00",
             "individual_income_tax.annual_comprehensive_taxable_income": "5000.00",
             "surcharge.vat_consumption_tax_base": "60000.00",
-        }.get(task.fact_key, "0.00")
-    if task.answer_type == "date":
+        }.get(fact_key, "0.00")
+    if answer_type == "date":
         return COMPLETE_PERIOD_END
     return "客户确认无其他相关应税事实"
 
@@ -703,6 +706,22 @@ def _confirmation_source(case_dir: Path, fact_key: str) -> str | None:
 
 
 def _confirm_task(case_dir: Path, task, value, occurred_at: datetime) -> None:
+    if isinstance(task, dict):
+        apply_scenario_confirmations(
+            case_dir,
+            ({
+                "confirmation_kind": "scenario",
+                "question_id": task["question_id"],
+                "fact_key": task["fact_key"],
+                "value": value,
+                "confirmed_by": "customer",
+                "confirmed_at": occurred_at.isoformat(),
+                "evidence_refs": [f"customer-confirmation:{task['question_id']}"],
+                "scenario_revision": task["scenario_revision"],
+                "question_digest": task["question_digest"],
+            },),
+        )
+        return
     source_id = _confirmation_source(case_dir, task.fact_key)
     evidence_refs = [f"customer-confirmation:{task.question_id}"]
     if source_id is not None:
@@ -789,7 +808,7 @@ def _run_complete_fictional_case(case_dir: Path) -> FictionalCaseResult:
     conflict_task = next(
         item
         for item in build_case_customer_tasks(case_dir)
-        if item.answer_type == "boolean"
+        if not isinstance(item, dict) and item.answer_type == "boolean"
     )
     for value in (False, True, False):
         _confirm_task(case_dir, conflict_task, value, occurred_at)
