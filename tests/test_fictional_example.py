@@ -377,8 +377,11 @@ class FictionalExampleTests(unittest.TestCase):
             pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(pdf_path).pages)
             self.assertIn("税务健康检查报告", pdf_text)
             self.assertIn("虚构科技有限公司", pdf_text)
+            import re
+            import unicodedata
+            compact_pdf = re.sub(r"\s+", "", unicodedata.normalize("NFKC", pdf_text))
             for item in cross_checks["results"]:
-                self.assertIn(item["check_id"], pdf_text)
+                self.assertIn(item["check_id"], compact_pdf)
             from openpyxl import load_workbook
             workbook = load_workbook(revision_dir / "税务健康检查工作底稿.xlsx", read_only=True)
             try:

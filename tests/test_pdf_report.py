@@ -114,6 +114,12 @@ def test_real_chromium_pdf_is_valid_and_contains_customer_identity(tmp_path: Pat
     assert printed_pages == target_pages
 
 
+def _compact_pdf_text(text: str) -> str:
+    """Collapse whitespace so soft-wrapped PDF tokens stay matchable."""
+
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+
+
 def test_real_chromium_pdf_contains_the_scenario_map_and_cross_check_boundary(tmp_path: Path):
     """Removing the map or its scope disclaimer would overstate report coverage."""
 
@@ -139,8 +145,9 @@ def test_real_chromium_pdf_contains_the_scenario_map_and_cross_check_boundary(tm
     assert "待补资料、已收到待解析和未执行均不计入已执行或已通过。" in normalized_text
     for name in ("收入与营业额", "成本与费用", "资产与不动产", "合同与特殊交易", "人员、股东与关联方"):
         assert name in normalized_text
+    compact_text = _compact_pdf_text(text)
     for check_id in cross_check_ids:
-        assert check_id in normalized_text
+        assert check_id in compact_text
     assert outline_titles.index("风险全景") < outline_titles.index("本次税务检查地图")
     assert outline_titles.index("本次税务检查地图") < outline_titles.index("优先处理清单")
 

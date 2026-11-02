@@ -44,13 +44,14 @@ def assert_roadmap_milestones(test_case, text):
 def assert_changelog_tracks_current_release(test_case, text):
     test_case.assertIn("https://keepachangelog.com/en/1.1.0/", text)
     test_case.assertIn("## [未发布]", text)
+    test_case.assertIn("## [1.2.0] - 2026-11-02", text)
     test_case.assertIn("## [1.1.0] - 2026-08-04", text)
     test_case.assertIn("## [1.0.0] - 2026-08-02", text)
 
 
 def assert_readme_phase_scope(test_case, text):
     scope = current_release_scope(text)
-    test_case.assertIn("当前稳定版本为 **OpenTaxCheck v1.1.0**", scope)
+    test_case.assertIn("当前包版本为 **OpenTaxCheck v1.2.0**", scope)
     test_case.assertIn("v1.0.0", scope)
     test_case.assertIn("Windows、macOS、Linux", scope)
     test_case.assertIn("未发布的客户报告 v3", scope)
@@ -153,7 +154,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("微信：PosterNote；添加时请备注 GitHub。", text)
         self.assertIn("请勿通过 GitHub Issue、Discussion 或微信发送未经脱敏的客户资料。", text)
         current_scope = current_release_scope(text)
-        self.assertIn("OpenTaxCheck v1.1.0", current_scope)
+        self.assertIn("OpenTaxCheck v1.2.0", current_scope)
         self.assertIn("CSV 和已确认映射的 Excel", current_scope)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", current_scope)
         self.assertIn(LOCAL_OCR_SCOPE_SENTENCE, current_scope)

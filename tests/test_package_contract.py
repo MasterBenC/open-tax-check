@@ -16,7 +16,7 @@ class PackageContractTests(unittest.TestCase):
     def test_package_exposes_version(self):
         import open_tax_check
 
-        self.assertEqual(open_tax_check.__version__, "1.1.0")
+        self.assertEqual(open_tax_check.__version__, "1.2.0")
 
     def test_package_metadata_uses_runtime_version_as_single_source(self):
         data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
