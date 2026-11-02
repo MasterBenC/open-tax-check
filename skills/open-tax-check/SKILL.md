@@ -150,6 +150,7 @@ opentaxcheck tax-health-check --request request.json --output-dir output
 - 调整阶段门槛、覆盖矩阵或报告措辞前，读取 [references/methodology.md](references/methodology.md)。
 - 调整输入格式、字段别名、日期或金额口径前，读取 [references/canonical-schema.md](references/canonical-schema.md)。
 - 调整税务逻辑、阈值、法规或版本前，读取 [references/rule-catalog.md](references/rule-catalog.md)。
+- 核对法规条文、部门规章或优惠口径前，读取 [references/kb-mount.md](references/kb-mount.md)；有挂载时只打开 `personal-kb` 税务相关目录，不得编造条文。
 
 ## 常见错误
 

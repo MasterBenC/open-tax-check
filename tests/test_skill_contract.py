@@ -220,7 +220,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertTrue(description.startswith("Use when "))
         self.assertNotIn("including field normalization", description)
         self.assertIn("# OpenTaxCheck 税务健康检查", text)
-        self.assertLessEqual(len(text.splitlines()), 160)
+        self.assertLessEqual(len(text.splitlines()), 165)
 
     def test_skill_declares_required_boundaries(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -389,7 +389,7 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_links_each_reference_directly(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-        for name in ("canonical-schema.md", "methodology.md", "rule-catalog.md"):
+        for name in ("canonical-schema.md", "methodology.md", "rule-catalog.md", "kb-mount.md"):
             link = f"[references/{name}](references/{name})"
             with self.subTest(reference=name):
                 self.assertIn(link, text)
@@ -498,6 +498,7 @@ class SkillContractTests(unittest.TestCase):
             "references/canonical-schema.md",
             "references/methodology.md",
             "references/rule-catalog.md",
+            "references/kb-mount.md",
             "references/host-integrations.md",
             "references/model-recommendations.md",
             "scripts/opentaxcheck.py",
@@ -522,6 +523,23 @@ class SkillContractTests(unittest.TestCase):
         )
         text = (SKILL / "scripts" / "opentaxcheck.py").read_text(encoding="utf-8")
         self.assertEqual(text, expected)
+
+
+    def test_kb_mount_reference_grounds_personal_kb_cites(self):
+        mount = (SKILL / "references" / "kb-mount.md").read_text(encoding="utf-8")
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue((SKILL / "references" / "kb-mount.md").is_file())
+        for required in (
+            "personal-kb",
+            "02-税务",
+            "needs_verification",
+            "PERSONAL_KB_ROOT",
+            "miit-qualification-kb",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, mount)
+        self.assertIn("[references/kb-mount.md](references/kb-mount.md)", skill)
+
 
 
 if __name__ == "__main__":

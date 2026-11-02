@@ -30,6 +30,13 @@
 
 - 移除客户侧 DOCX 输出、`--include-docx`、`--include-pdf` 和顶层 DOCX writer 导出。缺少 Chromium 时正式交付失败，不回退 Word。
 
+## [1.2.0] - 2026-11-02
+
+### 知识库联动
+
+- Skill 新增 `references/kb-mount.md`：AI 控制器在解释法条/规章/优惠口径前可挂载私有 `MasterBenC/personal-kb`（`02-税务/`，交汇议题辅以 `03-交汇专题/`）；可选对照 `miit-qualification-kb`，高新资格仍须客户确认。
+- `rule-catalog.md`、`methodology.md`、`README.md` 补充知识库路径与引用状态（`kb` / `verified` / `needs_verification` / `unavailable`）；确定性引擎公式、税率与状态机不依赖该库，私库内容不打入公开包。
+
 ## [1.1.0] - 2026-08-04
 
 ### 客户报告 v2

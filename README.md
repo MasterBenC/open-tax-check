@@ -19,7 +19,7 @@ python -m playwright install chromium
 
 ## 当前版本范围
 
-当前稳定版本为 **OpenTaxCheck v1.1.0**；此前的 `v1.0.0` 和当前稳定版本均已通过 GitHub Tag/Release 公开发布。v1.1.0 的远端 CI 已在 Windows、macOS、Linux 与 Python 3.11–3.13 组合上通过：
+当前包版本为 **OpenTaxCheck v1.2.0**；此前的 `v1.0.0`、`v1.1.0` 已通过 GitHub Tag/Release 公开发布。v1.1.0 起的远端 CI 已在 Windows、macOS、Linux 与 Python 3.11–3.13 组合上通过：
 
 - `.xlsx`、`.xlsm`、`.xls` 可进入安全盘点层，程序会记录文件哈希、工作表结构、有限表头信号、候选角色、公式/合并/隐藏信息和资料覆盖矩阵；
 - 唯一、可见、高置信且不含隐藏数据的工作表才可自动选择；其他情况进入 `needs_sheet_selection`，由复核人运行 `select-sheet`；
@@ -284,6 +284,11 @@ AI 智能体应优先使用自身的云端 OCR/视觉能力读取 PDF、图片�
 离线 PDF/PNG/JPEG OCR 通过 `local-paddleocr` provider 提供。安装可选依赖：`pip install -e ".[ocr]"`；模型必须由操作者显式预热：`opentaxcheck prepare-ocr --model-dir PATH`；案件提取使用 `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`。案件运行不会联网下载模型，缺少依赖或模型会返回 `not_performed`。烟测只有在 `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` 时才会执行；默认结果是明确跳过。专用 CI 烟测会在隔离环境中下载 PaddleOCR 官方移动模型并识别完全虚构的图片；一旦显式启用，依赖、下载或识别失败都会按失败处理，不再伪装成跳过。
 
 真实项目应按机构制度执行最小化、脱敏、访问控制、备份和安全删除。日志、截图、Issue、Discussion、测试、提交记录和示例均不得包含真实客户数据或凭证。
+
+
+## 可选知识库挂载（AI 引用）
+
+宿主 AI 在解释法条、部门规章、加计扣除、高新优惠、发票或征管口径时，可按 [`skills/open-tax-check/references/kb-mount.md`](skills/open-tax-check/references/kb-mount.md) 挂载私有库 [MasterBenC/personal-kb](https://github.com/MasterBenC/personal-kb)（尤其是 `02-税务/`；交汇议题可辅以 `03-交汇专题/`）。私库不随本公开仓库分发，确定性计算引擎不依赖该库；未挂载时继续按引擎流程推进，并将法律引用标为 `needs_verification`。
 
 ## 规则覆盖与限制
 
