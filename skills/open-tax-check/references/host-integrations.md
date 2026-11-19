@@ -81,6 +81,7 @@ Codex、Hermes、WorkBuddy、扣子、Qoder、Claude Code 和 OpenClaw 必须原
 维护者可以在无网络和无客户资料的环境中验证七宿主共同字段：
 
 ```text
+# 必须在 clone 下来的仓库根执行：脚本和 tests/fixtures/ 都在仓库里，只拷 skills/ 目录是跑不起来的
 python scripts/replay_host_integrations.py
 ```
 

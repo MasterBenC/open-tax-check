@@ -5,7 +5,7 @@
 在支持终端工具的 AI 智能体中发送以下指令：
 
 ```text
-请在当前项目的隔离 Python 环境中安装 open-tax-check[excel,report]，安装 Playwright Chromium，运行 opentaxcheck --help 验证；不要上传客户资料、不要自动确认科目分类或税务解释。安装完成后告诉我版本、安装位置和验证结果。
+请从 https://github.com/MasterBenC/open-tax-check 获取最新版：先把仓库里的 `skills/open-tax-check` 拷到你自己的 Skill 目录并加载，再在当前项目的隔离 Python 环境中以可编辑模式安装（`python -m pip install -e ".[excel,report]"`，本包尚未发布到 PyPI，不要从包索引安装），安装 Playwright Chromium，运行 opentaxcheck --help 验证；不要上传客户资料、不要自动确认科目分类或税务解释。安装完成后告诉我版本、安装位置和验证结果。
 ```
 
 Hermes 可从 GitHub 安装当前公开版本；WorkBuddy、扣子、Qoder、腾讯 SkillHub 等商店版本应使用各自商店的签名包。商店来源只改变安装渠道，不改变确定性规则、证据合同和人工确认边界。

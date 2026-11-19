@@ -8,7 +8,7 @@ description: Use when checking Chinese enterprise tax materials from CSV or Exce
 把本 Skill 当作 Python 引擎的薄控制器。严格按 `state.json` 推进；代码负责盘点、映射、计算、血缘和状态，AI 只协助解释、整理证据和草拟文字。
 
 ## 一句话安装指令
-把这句话发给支持 Skill 的 AI 智能体：“请从 https://github.com/MasterBenC/open-tax-check 获取最新版 OpenTaxCheck，把 `skills/open-tax-check` 安装到当前智能体的 Skill 目录，安装 `open-tax-check[excel,report]`，再运行 `python -m playwright install chromium` 和仓库自带的离线宿主回放、完整虚构案例验证；不要替客户确认经营事实。”当前官方安装源为该 GitHub 仓库，Hermes 可直接获取，其他宿主按各自官方机制导入；OpenTaxCheck 尚未在其他智能体商店正式发布。
+把这句话发给支持 Skill 的 AI 智能体：“请从 https://github.com/MasterBenC/open-tax-check 获取最新版 OpenTaxCheck，把 `skills/open-tax-check` 安装到当前智能体的 Skill 目录，在该仓库根目录以可编辑模式安装 Python 包（`python -m pip install -e ".[excel,report]"`，本包尚未发布到 PyPI），再运行 `python -m playwright install chromium` 和仓库自带的离线宿主回放、完整虚构案例验证；不要替客户确认经营事实。”当前官方安装源为该 GitHub 仓库，Hermes 可直接获取，其他宿主按各自官方机制导入；OpenTaxCheck 尚未在其他智能体商店正式发布。
 ## 先和客户这样开始
 
 首次对话先运行第一次 `case-guide`，展示其 `message_zh` 中的“税务健康检查 AI 智能体”欢迎语，并按 `profile_questions` 收集企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。再把这五项信息写入 `customer-profile/v1` JSON，运行 `case-start`，随后运行第二次 `case-guide`：
@@ -37,6 +37,10 @@ opentaxcheck case-guide --case <case-dir>
 - 不得自动选择隐藏工作表。含隐藏数据的可见工作表也必须人工确认。
 - 不得把关键词或语义命中变成税务结论；其状态保持 `candidate`，直到税务专业人员复核。
 - 不得把未复核结果放入客户结论，不得给出总体数字健康分。
+
+## 新旧命令的关系
+
+`opentaxcheck`（装包后的命令行入口）与 `python <skill-dir>/scripts/opentaxcheck.py`（没装包时直接用仓库脚本）参数完全相同，二选一即可。两套流程按阶段分工，不要重复建案：引导与自助自查走 `case-guide` → `case-start` → `case-self-check` → `case-status` / `case-tasks` / `case-confirm` → `tax-health-check`；手工逐层核对走 `init` → `inspect` → `select-sheet` → `confirm-mapping` → `run` → `case-delivery`。同一案件目录混用两套时以 `state.json` 的 `next_action` 为准。
 
 ## 1. 初始化案件
 

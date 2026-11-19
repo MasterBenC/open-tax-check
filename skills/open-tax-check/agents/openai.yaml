@@ -1,4 +1,4 @@
 interface:
   display_name: "OpenTaxCheck｜开源税务健康检查"
   short_description: "安全盘点Excel与CSV资料并守住企业税务检查专业复核边界"
-  default_prompt: "请使用 $open-tax-check 安全盘点中国企业税务检查案件，并严格停在选表、数据质量与专业复核门槛。"
+  default_prompt: "请使用 $open-tax-check 检查中国企业税务资料：首次对话先运行 case-guide 收集五项基础档案并建案，再按 state.json 推进安全盘点、选表、数据质量与专业复核门槛，不要替客户确认经营事实。"

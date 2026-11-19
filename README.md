@@ -6,7 +6,7 @@ OpenTaxCheck 将确定性的 Python 税务规则引擎和宿主 AI 税务项目�
 
 把下面这句话直接发给支持 Skill 的 AI 智能体：
 
-> 请从 https://github.com/MasterBenC/open-tax-check 获取最新版 OpenTaxCheck，把 `skills/open-tax-check` 安装到你当前智能体的 Skill 目录，安装 Python 包 `open-tax-check[excel,report]`，运行 `python -m playwright install chromium`，并在处理客户资料前执行仓库自带的离线宿主回放和完整虚构案例验证；不要替客户确认经营事实。
+> 请从 https://github.com/MasterBenC/open-tax-check 获取最新版 OpenTaxCheck，把 `skills/open-tax-check` 安装到你当前智能体的 Skill 目录，在该仓库根目录以可编辑模式安装 Python 包（`python -m pip install -e ".[excel,report]"`；本包尚未发布到 PyPI，不要从包索引安装它），再运行 `python -m playwright install chromium`，并在处理客户资料前执行仓库自带的离线宿主回放和完整虚构案例验证；不要替客户确认经营事实。
 
 当前官方安装源是上述 GitHub 仓库，Hermes 可直接从该地址获取；Codex、Claude Code、Qoder、OpenClaw、WorkBuddy 等请按各自宿主当前的官方 Skill 安装机制导入该目录。OpenTaxCheck 尚未在其他智能体商店正式发布，不要把第三方转载或同名条目视为官方版本。需要手动安装时运行：
 
@@ -54,9 +54,15 @@ Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经�
 
 ## 快速开始
 
-需要 Python 3.11、3.12 或 3.13。
+需要 Python 3.11、3.12 或 3.13。先建隔离环境并装包，本节后面所有 `opentaxcheck` 命令都依赖它：
 
-面向客户时，AI 智能体先运行第一次 `case-guide`，展示返回的 `message_zh` 欢迎语，并按 `profile_questions` 收集企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。再把这五项信息写入 `customer-profile/v1`，调用 `case-start`，随后调用第二次 `case-guide`：
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[excel,report]"
+```
+
+装好后先做客户引导。面向客户时，AI 智能体先运行第一次 `case-guide`，展示返回的 `message_zh` 欢迎语，并按 `profile_questions` 收集企业名称、所在省/市、主营业务、检查期间和增值税纳税人类型；资料不需要一次准备齐，可以按引导逐步补充。再把这五项信息写入 `customer-profile/v1`，调用 `case-start`，随后调用第二次 `case-guide`：
 
 ```powershell
 opentaxcheck case-guide --case .\cases\demo
@@ -64,12 +70,9 @@ opentaxcheck case-start --case .\cases\demo --profile .\customer-profile.json
 opentaxcheck case-guide --case .\cases\demo
 ```
 
-第一次 `case-guide` 只用于欢迎和五项 profile questions；第一次 `document_groups` 可为空。`case-start` 后必须再次 `case-guide`，第二次才返回 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。条件清单只是询问资料，不代表已经认定契税、印花税或其他税种适用。推荐模型为 DeepSeek V4、腾讯混元 3、GLM-5.2、GPT-5.6、Claude 4.8+、Qwen 3.7 Max 和 Doubao Seed 2.0 Pro，`qwen3.7-plus` 可作为成本均衡方案。模型只影响资料理解和对话辅助，不能改变税额计算、案件状态、证据要求或报告结论；缺少结构化 JSON 或工具能力时使用 `off`。
+第一次 `case-guide` 只用于欢迎和五项 profile questions；第一次 `document_groups` 可为空。`case-start` 后必须再次 `case-guide`，第二次才返回 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`；数量不固定。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。条件清单只是询问资料，不代表已经认定契税、印花税或其他税种适用。推荐用宿主当前可用的前沿通用模型（需具备结构化 JSON 输出、文件读取和命令调用，例如 DeepSeek、Qwen、GLM、混元、豆包、GPT、Claude 各家的当前稳定版）；型号随厂商迭代变化，按宿主实际可用的稳定版选，不绑定版本号。模型只影响资料理解和对话辅助，不能改变税额计算、案件状态、证据要求或报告结论；缺少结构化 JSON 或工具能力时使用 `off`。
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[excel]"
 opentaxcheck init --case .\cases\demo --entity "虚构科技有限公司" --period-start 2025-01-01 --period-end 2025-12-31
 ```
 
@@ -124,7 +127,7 @@ opentaxcheck confirm-cross-check --case .\cases\demo --input .\cross-check-confi
 
 私有恢复快照保存在 `work/tax-health-snapshot.private.json`；面向宿主的脱敏快照、中文补件清单和报告分别保存在 `work/tax-health-snapshot.json`、`work/customer-tasks.json` 和 `output/税务健康检查报告.md`。确认回写只接受问题标识、事实键、值、确认人、带时区时间戳和证据引用，不接受宿主提供的案件状态。前置账务或报表勾稽已处于 `blocked_data_quality` 时，命令拒绝生成正常税务报告。
 
-补件完成后，可用 `opentaxcheck case-delivery --case .\\cases\\demo` 发布一个不可变的 `tax-delivery/v1` 修订。交付目录为 `work/deliveries/revision-0001-report-v3/`（实际编号跟随案件快照），正式客户报告固定为《税务健康检查报告》PDF；HTML、工作底稿、机器快照和证据包仅作内部审计产物。PDF 失败时不会发布修订或更新指针；历史 v2 目录只读保留。
+补件完成后，可用 `opentaxcheck case-delivery --case .\cases\demo` 发布一个不可变的 `tax-delivery/v1` 修订。交付目录为 `work/deliveries/revision-0001-report-v3/`（实际编号跟随案件快照），正式客户报告固定为《税务健康检查报告》PDF；HTML、工作底稿、机器快照和证据包仅作内部审计产物。PDF 失败时不会发布修订或更新指针；历史 v2 目录只读保留。
 
 `customer-confirmation:<question_id>` 表示宿主代客户提交的声明引用，只用于记录声明与问题的绑定，不是文件证据、签名或税务事实真实性证明；宿主仍必须向客户展示中文问题并保留限制说明。
 
@@ -203,7 +206,7 @@ opentaxcheck tax-health-check `
   --request .\request.json `
   --output-dir .\output `
   --evidence-manifest .\evidence-manifest.json `
-  --evidence-root .\customer-evidence `
+  --evidence-root .\customer-evidence
 ```
 
 `--evidence-manifest` 和 `--evidence-root` 必须同时出现。生成的 `税务健康检查证据包.zip` 默认不复制客户原始证据文件，只保存已验证证据的标识和摘要；只有显式追加 `--include-evidence-files` 时，才会复制经过大小限制、路径安全检查和哈希验证的原件。
@@ -281,7 +284,7 @@ AI 智能体应优先使用自身的云端 OCR/视觉能力读取 PDF、图片�
 
 ### 本地 OCR（可选）
 
-离线 PDF/PNG/JPEG OCR 通过 `local-paddleocr` provider 提供。安装可选依赖：`pip install -e ".[ocr]"`；模型必须由操作者显式预热：`opentaxcheck prepare-ocr --model-dir PATH`；案件提取使用 `opentaxcheck extract-document --provider local-paddleocr --model-dir PATH`。案件运行不会联网下载模型，缺少依赖或模型会返回 `not_performed`。烟测只有在 `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` 时才会执行；默认结果是明确跳过。专用 CI 烟测会在隔离环境中下载 PaddleOCR 官方移动模型并识别完全虚构的图片；一旦显式启用，依赖、下载或识别失败都会按失败处理，不再伪装成跳过。
+离线 PDF/PNG/JPEG OCR 通过 `local-paddleocr` provider 提供。安装可选依赖：`pip install -e ".[ocr]"`；模型必须由操作者显式预热：`opentaxcheck prepare-ocr --model-dir PATH`；案件提取使用 `opentaxcheck extract-document --case <案件目录> --source <source_id> --provider local-paddleocr --model-dir PATH`（`--case` 与 `--source` 都是必填，缺了直接报参数错误）。案件运行不会联网下载模型，缺少依赖或模型会返回 `not_performed`。烟测只有在 `OPEN_TAX_CHECK_RUN_OCR_SMOKE=1` 时才会执行；默认结果是明确跳过。专用 CI 烟测会在隔离环境中下载 PaddleOCR 官方移动模型并识别完全虚构的图片；一旦显式启用，依赖、下载或识别失败都会按失败处理，不再伪装成跳过。
 
 真实项目应按机构制度执行最小化、脱敏、访问控制、备份和安全删除。日志、截图、Issue、Discussion、测试、提交记录和示例均不得包含真实客户数据或凭证。
 
