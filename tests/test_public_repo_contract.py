@@ -187,7 +187,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
     def test_readme_documents_excel_inspection_and_confirmed_normalization(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn('pip install -e ".[excel]"', text)
+        self.assertIn('pip install -e ".[excel,report]"', text)
         self.assertIn("opentaxcheck inspect", text)
         self.assertIn("opentaxcheck select-sheet", text)
         self.assertIn("`.xlsx`、`.xlsm`、`.xls`", text)

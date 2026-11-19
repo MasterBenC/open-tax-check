@@ -133,17 +133,10 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("资料不需要一次准备齐", skill)
         self.assertIn("case-guide", skill)
         self.assertIn("case-start", skill)
-        for name in (
-            "DeepSeek V4",
-            "腾讯混元 3",
-            "GLM-5.2",
-            "GPT-5.6",
-            "Claude 4.8+",
-            "Qwen 3.7 Max",
-            "Doubao Seed 2.0 Pro",
-        ):
-            self.assertIn(name, models)
-        self.assertIn("qwen3.7-plus", models)
+        for family in ("DeepSeek", "Qwen", "GLM", "混元", "豆包", "GPT", "Claude"):
+            self.assertIn(family, models)
+        self.assertIn("不绑定具体版本号", models)
+        self.assertIn("结构化 JSON", models)
         self.assertNotIn("qwen3.8-max-preview", models)
         self.assertIn("tax-customer-handoff/v1", integrations)
         self.assertIn("不得自行改写", integrations)
@@ -472,8 +465,7 @@ class SkillContractTests(unittest.TestCase):
             'interface:\n'
             '  display_name: "OpenTaxCheck｜开源税务健康检查"\n'
             '  short_description: "安全盘点Excel与CSV资料并守住企业税务检查专业复核边界"\n'
-            '  default_prompt: "请使用 $open-tax-check 安全盘点中国企业税务检查案件，'
-            '并严格停在选表、数据质量与专业复核门槛。"\n'
+            '  default_prompt: "请使用 $open-tax-check 检查中国企业税务资料：首次对话先运行 case-guide 收集五项基础档案并建案，再按 state.json 推进安全盘点、选表、数据质量与专业复核门槛，不要替客户确认经营事实。"\n'
         )
         actual = (SKILL / "agents" / "openai.yaml").read_text(encoding="utf-8")
         self.assertEqual(actual, expected)
@@ -512,14 +504,64 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_wrapper_is_exact_minimal_adapter(self):
         expected = (
-            "#!/usr/bin/env python3\n"
+            '#!/usr/bin/env python3\n'
             '"""Portable Agent Skill entry point for the installed OpenTaxCheck package."""\n'
-            "\n"
-            "from open_tax_check.cli import main\n"
-            "\n"
-            "\n"
+            '\n'
+            'import sys\n'
+            '\n'
+            'INSTALL_HINT = (\n'
+            '    \'  python -m pip install -e ".[excel,report]"\\n\'\n'
+            '    "  python -m playwright install chromium\\n"\n'
+            ')\n'
+            '\n'
+            'MODULE_HINTS = {\n'
+            '    "open_tax_check": "尚未安装 OpenTaxCheck 引擎包 open_tax_check",\n'
+            '    "openpyxl": "Excel 工作簿读取组件 openpyxl 未安装（可选依赖 excel）",\n'
+            '    "playwright": "PDF 报告渲染组件 playwright 未安装（可选依赖 report）",\n'
+            '}\n'
+            '\n'
+            'BROWSER_HINTS = ("Executable doesn\'t exist", "playwright install")\n'
+            '\n'
+            '\n'
+            'def _root_module(error):\n'
+            '    name = getattr(error, "name", None) or ""\n'
+            '    return name.split(".")[0]\n'
+            '\n'
+            '\n'
+            'def _dependency_message(error):\n'
+            '    root = _root_module(error)\n'
+            '    hint = MODULE_HINTS.get(root)\n'
+            '    if hint is None:\n'
+            '        hint = f"缺少 Python 模块 {root or getattr(error, \'name\', \'unknown\')}"\n'
+            '    return f"{hint}。\\n修复步骤：\\n{INSTALL_HINT}"\n'
+            '\n'
+            '\n'
+            'def _fail(message):\n'
+            '    sys.stderr.write(f"{message}\\n")\n'
+            '    return 2\n'
+            '\n'
+            '\n'
+            'def main():\n'
+            '    try:\n'
+            '        from open_tax_check.cli import main as cli_main\n'
+            '    except ModuleNotFoundError as error:\n'
+            '        return _fail(f"无法启动 opentaxcheck：{_dependency_message(error)}")\n'
+            '    try:\n'
+            '        return cli_main()\n'
+            '    except ModuleNotFoundError as error:\n'
+            '        return _fail(f"运行中断：{_dependency_message(error)}")\n'
+            '    except Exception as error:  # noqa: BLE001 - 只在缺少浏览器内核时改写提示\n'
+            '        message = str(error)\n'
+            '        if any(token in message for token in BROWSER_HINTS):\n'
+            '            return _fail(\n'
+            '                "PDF 报告渲染需要 Chromium 浏览器内核，但当前环境未安装。\\n"\n'
+            '                "修复步骤：\\n  python -m playwright install chromium"\n'
+            '            )\n'
+            '        raise\n'
+            '\n'
+            '\n'
             'if __name__ == "__main__":\n'
-            "    raise SystemExit(main())\n"
+            '    raise SystemExit(main())\n'
         )
         text = (SKILL / "scripts" / "opentaxcheck.py").read_text(encoding="utf-8")
         self.assertEqual(text, expected)
@@ -540,6 +582,123 @@ class SkillContractTests(unittest.TestCase):
                 self.assertIn(required, mount)
         self.assertIn("[references/kb-mount.md](references/kb-mount.md)", skill)
 
+
+    def _load_skill_wrapper(self):
+        import importlib.util
+        import sys
+
+        spec = importlib.util.spec_from_file_location(
+            "opentaxcheck_skill_wrapper", SKILL / "scripts" / "opentaxcheck.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        previous = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = previous
+        return module
+
+    def _run_wrapper_with_cli(self, cli_main):
+        import io
+        import sys
+        import types
+        from unittest import mock
+
+        module = self._load_skill_wrapper()
+        package = types.ModuleType("open_tax_check")
+        cli_module = types.ModuleType("open_tax_check.cli")
+        setattr(cli_module, "main", cli_main)
+        setattr(package, "cli", cli_module)
+        stderr = io.StringIO()
+        with mock.patch.dict(
+            sys.modules, {"open_tax_check": package, "open_tax_check.cli": cli_module}
+        ), mock.patch("sys.stderr", stderr):
+            try:
+                status = module.main()
+            except BaseException as error:  # noqa: BLE001 - 透传场景由测试断言
+                return error, stderr.getvalue()
+        return status, stderr.getvalue()
+
+    def test_skill_wrapper_explains_missing_engine_package(self):
+        import builtins
+        import io
+        from unittest import mock
+
+        module = self._load_skill_wrapper()
+        real_import = builtins.__import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name == "open_tax_check" or name.startswith("open_tax_check."):
+                raise ModuleNotFoundError(
+                    "No module named 'open_tax_check'", name="open_tax_check"
+                )
+            return real_import(name, *args, **kwargs)
+
+        stderr = io.StringIO()
+        with mock.patch("builtins.__import__", side_effect=blocked_import), mock.patch(
+            "sys.stderr", stderr
+        ):
+            status = module.main()
+
+        self.assertEqual(status, 2)
+        message = stderr.getvalue()
+        self.assertIn("open_tax_check", message)
+        self.assertIn('python -m pip install -e ".[excel,report]"', message)
+        self.assertIn("python -m playwright install chromium", message)
+
+    def test_skill_wrapper_explains_missing_optional_dependency_at_runtime(self):
+        def failing_main():
+            raise ModuleNotFoundError("No module named 'openpyxl'", name="openpyxl")
+
+        status, message = self._run_wrapper_with_cli(failing_main)
+
+        self.assertEqual(status, 2)
+        self.assertIn("openpyxl", message)
+        self.assertIn('python -m pip install -e ".[excel,report]"', message)
+
+    def test_skill_wrapper_explains_missing_playwright_module(self):
+        def failing_main():
+            raise ModuleNotFoundError(
+                "No module named 'playwright'", name="playwright"
+            )
+
+        status, message = self._run_wrapper_with_cli(failing_main)
+
+        self.assertEqual(status, 2)
+        self.assertIn("playwright", message)
+        self.assertIn("python -m playwright install chromium", message)
+
+    def test_skill_wrapper_explains_missing_chromium_binary(self):
+        def failing_main():
+            raise RuntimeError(
+                "Executable doesn't exist at "
+                "/root/.cache/ms-playwright/chromium-1200/headless_shell"
+            )
+
+        status, message = self._run_wrapper_with_cli(failing_main)
+
+        self.assertEqual(status, 2)
+        self.assertIn("Chromium", message)
+        self.assertIn("python -m playwright install chromium", message)
+
+    def test_skill_wrapper_passes_through_engine_status_codes(self):
+        for expected_status in (0, 3, 4, 5):
+            with self.subTest(status=expected_status):
+                status, message = self._run_wrapper_with_cli(
+                    lambda code=expected_status: code
+                )
+                self.assertEqual(status, expected_status)
+                self.assertEqual(message, "")
+
+    def test_skill_wrapper_reraises_unrelated_runtime_errors(self):
+        def failing_main():
+            raise ValueError("unexpected engine failure")
+
+        status, _ = self._run_wrapper_with_cli(failing_main)
+
+        self.assertIsInstance(status, ValueError)
 
 
 if __name__ == "__main__":
