@@ -515,6 +515,7 @@ class SkillContractTests(unittest.TestCase):
             "references/excel-intake.md",
             "references/professional-review.md",
             "references/example-dialogue.md",
+            "references/ocr-and-structured-import.md",
             "scripts/opentaxcheck.py",
         }
         actual = {
@@ -532,14 +533,21 @@ class SkillContractTests(unittest.TestCase):
             'import sys\n'
             '\n'
             'INSTALL_HINT = (\n'
-            '    \'  python -m pip install -e ".[excel,report]"\\n\'\n'
+            '    \'  python -m pip install "open-tax-check[excel,report,ocr]"\\n\'\n'
             '    "  python -m playwright install chromium\\n"\n'
             ')\n'
             '\n'
             'MODULE_HINTS = {\n'
             '    "open_tax_check": "尚未安装 OpenTaxCheck 引擎包 open_tax_check",\n'
-            '    "openpyxl": "Excel 工作簿读取组件 openpyxl 未安装（可选依赖 excel）",\n'
+            '    "openpyxl": "Excel 工作簿读写组件 openpyxl 未安装（可选依赖 excel）",\n'
+            '    "xlrd": "旧版 .xls 读取组件 xlrd 未安装（可选依赖 excel）",\n'
+            '    "defusedxml": "安全 XML 解析组件 defusedxml 未安装（可选依赖 excel）",\n'
             '    "playwright": "PDF 报告渲染组件 playwright 未安装（可选依赖 report）",\n'
+            '    "pypdf": "PDF 解析组件 pypdf 未安装（可选依赖 report / ocr）",\n'
+            '    "pypdfium2": "PDF 渲染组件 pypdfium2 未安装（可选依赖 ocr）",\n'
+            '    "PIL": "图像处理组件 Pillow（模块名 PIL）未安装（可选依赖 ocr）",\n'
+            '    "paddleocr": "本地离线 OCR 组件 paddleocr 未安装（可选依赖 ocr）",\n'
+            '    "paddle": "本地离线 OCR 推理后端 paddlepaddle（模块名 paddle）未安装（可选依赖 ocr）",\n'
             '}\n'
             '\n'
             'BROWSER_HINTS = ("Executable doesn\'t exist", "playwright install")\n'
@@ -667,7 +675,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertEqual(status, 2)
         message = stderr.getvalue()
         self.assertIn("open_tax_check", message)
-        self.assertIn('python -m pip install -e ".[excel,report]"', message)
+        self.assertIn('python -m pip install "open-tax-check[excel,report,ocr]"', message)
         self.assertIn("python -m playwright install chromium", message)
 
     def test_skill_wrapper_explains_missing_optional_dependency_at_runtime(self):
@@ -678,7 +686,7 @@ class SkillContractTests(unittest.TestCase):
 
         self.assertEqual(status, 2)
         self.assertIn("openpyxl", message)
-        self.assertIn('python -m pip install -e ".[excel,report]"', message)
+        self.assertIn('python -m pip install "open-tax-check[excel,report,ocr]"', message)
 
     def test_skill_wrapper_explains_missing_playwright_module(self):
         def failing_main():

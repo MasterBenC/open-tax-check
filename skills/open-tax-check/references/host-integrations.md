@@ -19,9 +19,9 @@
 ## 固定顺序
 
 1. 验证 Python 3.11–3.13；安装 `open-tax-check[excel,report]`，再运行 `python -m playwright install chromium`。
-2. 首次对话调用 `case-guide`，取得 `message_zh`、欢迎语和 `profile_questions`；第一次 `case-guide` 的 `document_groups` 可为空，不能当作动态资料清单。宿主不得自行改写开场或阶段状态。
+2. 首次对话调用 `case-guide`，取得 `message_zh`、欢迎语和 `profile_questions`；两次调用返回的都是 `case-guide/v2`，第一次 `case-guide` 的 `document_groups` 可为空，不能当作动态资料清单。宿主不得自行改写开场或阶段状态。
 3. 收齐五项企业信息后调用 `case-start`。
-4. `case-start` 后必须再次调用 `case-guide`，读取第二次 `case-guide/v2` 的动态引导。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。第二次返回的 `document_groups` 按基础资料+已激活场景动态生成，数量不固定。宿主不得自行改写场景问题、资料组或阶段状态。
+4. `case-start` 后必须再次调用 `case-guide`。第二次返回的同样是 `case-guide/v2`，与第一次唯一差别是 `document_groups` 改为按基础资料+已激活场景动态生成、数量不固定。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。宿主不得自行改写场景问题、资料组或阶段状态。
 5. 为一个法律实体、一个地区和 2023–2026 检查期间构造 `TaxCheckRequest`。
 6. 不提供模型服务，调用 `case-self-check` 生成可恢复案件快照。
 7. 读取 `case-status` 和 `case-tasks`，只向客户展示实际存在的中文字段 `question_zh`、`help_zh`、`evidence_help_zh`。
@@ -49,7 +49,7 @@ CLI 可恢复案件运行 `opentaxcheck case-self-check --case CASE --request re
 
 ## 统一案件交付
 
-补件完成后，宿主调用 `opentaxcheck case-delivery --case CASE`。命令发布一个 `tax-delivery/v1` 修订目录，例如 `work/deliveries/revision-0001-report-v3/`，并通过 `work/delivery.json` 指向活动清单。正式客户交付物只有 PDF；内部 HTML、`workpaper.xlsx`、机器快照和证据包必须来自同一个 `snapshot_revision`，每个文件都带 SHA-256。
+补件完成后，宿主调用 `opentaxcheck case-delivery --case CASE`。命令发布一个 `tax-delivery/v1` 修订目录，例如 `work/deliveries/revision-0001-report-v3/`，并通过 `work/delivery.json` 指向活动清单。正式客户交付物只有 PDF；内部 HTML、`workpaper.xlsx`、机器快照和证据包必须来自同一个 `snapshot_revision`，每个文件都带 SHA-256。修订目录内的 artifact 文件名固定为 `report.html`、`税务健康检查报告.pdf`、`workpaper.xlsx`、`tax-health-snapshot.json` 和客户交接文件；工作底稿生成阶段的磁盘名是 `税务健康检查工作底稿.xlsx`，发布进修订目录后统一改名为 `workpaper.xlsx`，二者是同一份文件。
 
 交付时必须读取并原样展示机器生成的 `tax-customer-handoff/v1`。宿主不得自行改写标题、限制、待补资料、试算金额免责声明或完成状态，也不得用自己的总结替代该交付说明。
 

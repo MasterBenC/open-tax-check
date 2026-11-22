@@ -12,12 +12,12 @@
 
 ## 2. 内置税种与规则包
 
-21 个税种、45 个包，`jurisdiction=CN`，`rule_version` 统一 `2026.1`，`fact_catalog_version` 为 `zh-CN.v1`。每个税种都有 `screening` 包；下列“计算包”另行说明公式族。
+20 个受管税种项（18 个税种 + 教育费附加、地方教育附加两项附加费，即 `TAX_DEFINITIONS` 的 20 条）、45 个包（23 个 `calculation` + 21 个 `screening` + 1 个 `prototype`），`jurisdiction=CN`，`rule_version` 统一 `2026.1`，`fact_catalog_version` 为 `zh-CN.v1`。每个税种都有 `screening` 包；下列“计算包”另行说明公式族。
 
 | 税种（`tax_id`） | 计算包 | 公式族 | 地方参数键 |
 | --- | --- | --- | --- |
 | 增值税 `vat` | `vat-cn-2023-2025`、`vat-cn-2026` | `base_times_rate_minus_credits` | 无 |
-| 消费税 `consumption_tax` | `consumption-tax-cn-2023-2026` | `base_minus_deductions_times_rate` | 无 |
+| 消费税 `consumption_tax` | `consumption-tax-cn-2023-2026` | `base_times_applicable_parameter` | 无 |
 | 企业所得税 `enterprise_income_tax` | `enterprise-income-tax-cn-2023-2026` | `base_times_rate` | 无 |
 | 个人所得税 `individual_income_tax` | `individual-income-tax-cn-2023-2026` | `base_times_rate_minus_quick_deduction` | 无 |
 | 土地增值税 `land_appreciation_tax` | `land-appreciation-tax-cn-2023-2026` | `base_times_rate_minus_confirmed_deduction` | 无 |
@@ -38,7 +38,7 @@
 | 关税 `customs_duty` | `customs-duty-cn-2023-2024-11`（至 2024-11-30）、`customs-duty-cn-2024-12-2026` | `base_times_applicable_parameter` | 无 |
 | 增值税期间另见 | `vat-cn-2023-2026.prototype`（原型，禁用） | —— | —— |
 
-`generic.applicability.screening.v1` 是所有 `screening` 包的评估器；`calculation` 包的评估器是 `generic.calculation.<公式族>.v1`。
+`generic.applicability.screening.v1` 是所有 `screening` 包的评估器。23 个 `calculation` 包挂的是同一个评估器 `generic.calculation.base_minus_deductions_times_rate.v1`（`evaluator_id` 统一，不随税种变化）；真正的算法由包内 `calculation.formula_id` 决定，`tax_calculation.py` 按 `formula_id` 分派——所以上表“公式族”一列写的是 `formula_id` 的族名，不存在 `generic.calculation.<公式族>.v1` 这种按族命名的评估器。
 
 ## 3. 确认要求（`requirements`）
 

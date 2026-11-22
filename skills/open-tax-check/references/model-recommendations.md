@@ -18,4 +18,4 @@
 - 未知但能稳定处理结构化 JSON 和工具调用的模型：使用 `assist`。
 - 缺少结构化 JSON、文件读取或命令工具：使用 `off`，只运行确定性流程。
 
-任何模式都必须原样展示 `case-guide/v1`、客户问题和 `tax-customer-handoff/v1`，不得自行生成更强的税务结论。
+任何模式都必须原样展示 `case-guide/v2`、客户问题和 `tax-customer-handoff/v1`，不得自行生成更强的税务结论。

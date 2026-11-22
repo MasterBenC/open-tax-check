@@ -44,6 +44,7 @@ description: 用于检查中国企业的税务资料（CSV 序时账或 Excel �
 | `run` | `blocked_data_quality`（`resolve_data_quality_findings`、`provide_exactly_one_csv_journal`）或 Excel `needs_intake_review` | `4` | 解决日期、关键字段、金额、凭证平衡或输入入口 |
 | `run` | `blocked_processing_error`（`inspect_processing_error`） | `5` | 只看本次运行；`work/processing_error.json` 已安全记录失败 |
 | `case-*` | `status: failed` + `error_code` | `0` / `4` | 按 `error_code` 修输入或证据，如 `unverified_confirmation_evidence`、`delivery_blocked_data_quality` |
+| `case-status` | `waiting_for_extraction`（`complete_document_extraction`） | `0` / `2` / `3` / `4` / `5` | 按资料形态选 `import-extraction` 或 `extract-document`，见 [references/ocr-and-structured-import.md](references/ocr-and-structured-import.md) |
 | `tax-health-check` | `completed` | `0` / `3` / `4` | `4` 请求、证据清单或规则包问题；`3` PDF 或证据包写入失败，不得回退 DOCX |
 
 读法：`0` 可复核；`3` 映射待确认；`4` 输入、选表、证据或数据质量阻断；`5` 表示已安全记录处理错误；`2` 命令或依赖问题；`1` 未捕获异常。`inspect` 的 `next_action` 只完成 Excel 输入门槛；`blocked_processing_error` 与退出码 `5` 只属于 `run`，Excel `inspect` 的处理异常一律是 `needs_intake_review` + 退出码 `4`。
@@ -65,7 +66,7 @@ python <skill-dir>/scripts/opentaxcheck.py case-guide --case <case-dir>
 python <skill-dir>/scripts/opentaxcheck.py case-start --case <case-dir> --profile <profile.json>
 ```
 
-第一次 `case-guide` 只有 `message_zh`、欢迎语和 `profile_questions`，`document_groups` 可为空；第二次才是 `case-guide/v2` 动态引导，提供 `scenario_questions`、`active_scenarios` 和按基础资料+已激活场景动态生成的 `document_groups`。`scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户只看中文字段：`message_zh`、`scenario_questions.question_zh`、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh`。不另写开场、不自行判断税种适用性。
+两次 `case-guide` 返回的都是 `case-guide/v2`，差别只在第二次多出按基础资料+已激活场景动态生成的 `document_groups`（第一次的 `document_groups` 可为空）。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户只看到实际存在的中文字段 `message_zh`、`question_zh`、`title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh`。字段口径与七宿主展示规则见 [references/host-integrations.md](references/host-integrations.md)。
 
 ## 2. 经营场景引导
 
@@ -140,13 +141,13 @@ python <skill-dir>/scripts/opentaxcheck.py run --case <case-dir> --ai-mode off
 python <skill-dir>/scripts/opentaxcheck.py tax-health-check --request <request.json> --output-dir <output-dir>
 ```
 
-正式报告只提供中文 PDF，不提供 Word。AI 智能体优先使用自身 OCR/视觉能力读取客户资料，本地离线 OCR 为可选后备；已上传但未提取成功的资料不得描述为“未提供”。首次报告可含“待补充资料”“待确认当地政策”“暂时无法判断”。宿主只展示中文问题字段：`build_agent_question_tasks` 生成任务，`confirmation_from_task` 构造确认，`continue_tax_health_check` 增量重跑；不得把未解决状态改写成“无风险”。
+正式报告只提供中文 PDF，不提供 Word。资料已上传但未提取成功时按 `waiting_for_extraction` → `complete_document_extraction` 处理，命令与产物见 [references/ocr-and-structured-import.md](references/ocr-and-structured-import.md)；已上传但未提取成功的资料不得描述为“未提供”。首次报告可含“待补充资料”“待确认当地政策”“暂时无法判断”，不得把未解决状态改写成“无风险”。
 
 《税务健康检查报告》仅供客户内部自查，不属于涉税鉴证、专业税务意见或纳税申报结论；不以税务专业人员复核、签字或盖章作为生成条件。各税种计算路径、确认要求与未覆盖情形见 [references/tax-packs.md](references/tax-packs.md)。
 
 ## 7. 专业复核与交付边界
 
-每条 finding 核对来源血缘、计算基数、适用期间、纳税人类型、官方依据、缺失证据和反向证据；保留引擎原始结果，在 review 层记录复核人、时间、结论、理由、证据和调整金额。只有 `review_status` 为 `reviewed`、`report_status` 恰为 `approved`，且 finding 为 `suspected`、`confirmed` 或 `insufficient_data` 时才具备进入客户报告的资格，并只能作为经复核结论进入交付层；该门槛不适用于自助报告，自助报告必须如实保留未解决状态和免责声明。流程见 [references/professional-review.md](references/professional-review.md)。交付前列明实体、期间、已收/缺失资料、已执行/未执行程序、数据限制、规则版本和重大假设，并说明本工作是税务健康检查，不是审计、鉴证、法律意见、申报或税务机关认定。
+每条 finding 只在 `review_status` 为 `reviewed`、`report_status` 恰为 `approved`，且 finding 为 `suspected`、`confirmed` 或 `insufficient_data` 时才具备进入客户报告的资格，并只能作为经复核结论进入交付层；该门槛不适用于自助报告，自助报告必须如实保留未解决状态和免责声明。核对维度、review 记录字段与交付前清单见 [references/professional-review.md](references/professional-review.md)。
 
 ## 中文字段展示：正反例
 
@@ -156,3 +157,4 @@ python <skill-dir>/scripts/opentaxcheck.py tax-health-check --request <request.j
 ## 参考资料
 
 - 阶段门槛与报告措辞：[references/methodology.md](references/methodology.md)；首次对话示例：[references/example-dialogue.md](references/example-dialogue.md)；法规挂载：[references/kb-mount.md](references/kb-mount.md)，只打开 `personal-kb` 税务目录，不得编造条文。
+- 文档提取、结构化导入与 OCR 命令：[references/ocr-and-structured-import.md](references/ocr-and-structured-import.md)。
