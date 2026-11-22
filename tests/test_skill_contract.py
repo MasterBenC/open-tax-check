@@ -210,7 +210,9 @@ class SkillContractTests(unittest.TestCase):
             if line.startswith("description: ")
         )
 
-        self.assertTrue(description.startswith("Use when "))
+        self.assertTrue(description.startswith("用于检查中国企业的税务资料"))
+        self.assertIn("Use when ", description)
+        self.assertIn("不出具鉴证、专业意见或申报结论", description)
         self.assertNotIn("including field normalization", description)
         self.assertIn("# OpenTaxCheck 税务健康检查", text)
         self.assertLessEqual(len(text.splitlines()), 165)
@@ -252,24 +254,27 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_distinguishes_excel_inspect_from_csv_run_processing_errors(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-        excel = text.split("## 2. Excel / 工作簿走 Phase 2A", 1)[1].split(
-            "## 压力请求的固定输出",
+        commands = text.split("## 命令 × 状态 × 退出码 × 下一步", 1)[1].split(
+            "## 失败处理",
             1,
         )[0]
-        csv = text.split("## 3. CSV 走兼容流程", 1)[1].split(
-            "## 4. 客户内部《税务健康检查报告》",
+        csv = text.split("## 5. CSV 序时账兼容流程", 1)[1].split(
+            "## 6. 客户内部《税务健康检查报告》",
             1,
         )[0]
 
         self.assertIn(
-            "| `needs_intake_review`（`next_action=inspect_processing_error`） | "
-            "检查本次 `inspect` 失败；退出码为 `4`，不复用旧输出。 |",
-            excel,
+            "| `inspect` | `needs_intake_review`（`inspect_processing_error`） | `4` |",
+            commands,
         )
-        self.assertNotIn("| `blocked_processing_error` |", excel)
         self.assertIn(
-            "`blocked_processing_error` 与退出码 `5` 只属于下文 CSV `run_case`",
-            excel,
+            "| `run` | `blocked_processing_error`（`inspect_processing_error`） | `5` |",
+            commands,
+        )
+        self.assertIn(
+            "`blocked_processing_error` 与退出码 `5` 只属于 `run`，"
+            "Excel `inspect` 的处理异常一律是 `needs_intake_review` + 退出码 `4`",
+            commands,
         )
         self.assertIn(
             "- `blocked_processing_error` / `inspect_processing_error`",
@@ -312,7 +317,7 @@ class SkillContractTests(unittest.TestCase):
             "再次运行 `inspect`",
             "`partial_scope_ready`",
         )
-        cursor = text.index("## 2. Excel / 工作簿走 Phase 2A")
+        cursor = text.index("## 3. Excel 工作簿盘点与选表")
         positions = []
         for item in expected_sequence:
             position = text.find(item, cursor)
@@ -326,19 +331,23 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_treats_excel_next_action_as_mapping_confirmation_gate(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-        excel = text.split("## 2. Excel / 工作簿走 Phase 2A", 1)[1].split(
-            "## 3. CSV 走兼容流程",
+        excel = text.split("## 3. Excel 工作簿盘点与选表", 1)[1].split(
+            "## 压力请求的固定输出",
+            1,
+        )[0]
+        commands = text.split("## 命令 × 状态 × 退出码 × 下一步", 1)[1].split(
+            "## 失败处理",
             1,
         )[0]
 
         self.assertIn(
-            "| `partial_scope_ready`"
-            "（`next_action=await_phase_2b_excel_normalization`） |",
-            excel,
+            "| `inspect` | `partial_scope_ready`"
+            "（`await_phase_2b_excel_normalization`） | `0` |",
+            commands,
         )
         self.assertIn("confirm-mapping", excel)
         self.assertIn("来源绑定映射经复核确认后", excel)
-        self.assertNotIn("run_available_checks", excel)
+        self.assertNotIn("run_available_checks", excel + commands)
 
     def test_skill_gives_low_capability_agent_a_fixed_pressure_response_shape(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -346,7 +355,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("## 压力请求的固定输出", text)
         self.assertIn("回答采用以下固定形状", text)
         pressure = text.split("## 压力请求的固定输出", 1)[1].split(
-            "## 3. CSV 走兼容流程",
+            "## 4. 映射确认、标准化与勾稽",
             1,
         )[0]
         self.assertIn("opentaxcheck.py inspect --case <case-dir>", pressure)
@@ -382,7 +391,16 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_links_each_reference_directly(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-        for name in ("canonical-schema.md", "methodology.md", "rule-catalog.md", "kb-mount.md"):
+        for name in (
+            "canonical-schema.md",
+            "methodology.md",
+            "rule-catalog.md",
+            "kb-mount.md",
+            "tax-packs.md",
+            "excel-intake.md",
+            "professional-review.md",
+            "example-dialogue.md",
+        ):
             link = f"[references/{name}](references/{name})"
             with self.subTest(reference=name):
                 self.assertIn(link, text)
@@ -493,6 +511,10 @@ class SkillContractTests(unittest.TestCase):
             "references/kb-mount.md",
             "references/host-integrations.md",
             "references/model-recommendations.md",
+            "references/tax-packs.md",
+            "references/excel-intake.md",
+            "references/professional-review.md",
+            "references/example-dialogue.md",
             "scripts/opentaxcheck.py",
         }
         actual = {

@@ -44,6 +44,8 @@ Excel 映射提案在明确执行 `confirm-mapping` 前始终不生效。未经�
 4. 映射提案必须由复核人确认并绑定来源；随后才可运行标准化、勾稽和规则。
 5. 勾稽通过不表示不存在税务风险；所有 finding 仍须专业复核，且未解析资料会保留在覆盖矩阵中。
 
+命令形状、状态与退出码的完整对照表以 [`skills/open-tax-check/SKILL.md`](skills/open-tax-check/SKILL.md) 为准；Excel 进入细节、税种规则包、逐层核对流程与首次对话示例分别见其 `references/excel-intake.md`、`tax-packs.md`、`professional-review.md`、`example-dialogue.md`，本文不重复。
+
 ### 经营场景税务风险地图（`case-guide/v2`）
 
 客户引导先用第一次 `case-guide` 取得 `message_zh`、欢迎语和 `profile_questions`；第一次返回的 `document_groups` 可为空，不能当作动态资料清单。收齐五项基础档案后调用 `case-start`，随后必须再次调用 `case-guide` 取得第二次 `case-guide/v2` 动态引导。机器字段 `scenario_id`、`fact_key`、`question_id`、`group_id`、`active_scenarios` 仅供宿主控制，不向客户直接展示；客户仅看到实际存在的中文字段：`message_zh`、`scenario_questions.question_zh`（如实际提供 `help_zh` 才展示）、`document_groups.title_zh`、`items_zh`、`applicability_note_zh`、`privacy_zh`、`disclaimer_zh` 等。五类导航场景是：收入与流转、成本费用、资产与不动产、合同及特殊交易、人员、股东及关联事项。
