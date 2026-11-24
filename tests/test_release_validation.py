@@ -16,6 +16,28 @@ from scripts import validate_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_GITHUB_RELEASE_ENV_VARS = frozenset(
+    {
+        "GITHUB_BASE_REF",
+        "GITHUB_EVENT_NAME",
+        "GITHUB_EVENT_PATH",
+        "GITHUB_HEAD_REF",
+        "GITHUB_REF",
+        "GITHUB_REF_NAME",
+        "GITHUB_REF_PROTECTED",
+        "GITHUB_REF_TYPE",
+        "GITHUB_SHA",
+    }
+)
+
+
+def without_github_release_env(source=None):
+    environment = os.environ if source is None else source
+    return {
+        key: value
+        for key, value in environment.items()
+        if key not in _GITHUB_RELEASE_ENV_VARS and not key.startswith("GITHUB_REF")
+    }
 
 
 class ReleaseValidationTests(unittest.TestCase):
@@ -82,8 +104,11 @@ class ReleaseValidationTests(unittest.TestCase):
                 "argv",
                 ["validate_release.py", *arguments],
             ):
-                with contextlib.redirect_stdout(output):
-                    result = validate_release.main()
+                with mock.patch.dict(
+                    os.environ, without_github_release_env(), clear=True
+                ):
+                    with contextlib.redirect_stdout(output):
+                        result = validate_release.main()
         return result, output.getvalue()
 
     def write_distribution_archives(
@@ -155,6 +180,7 @@ class ReleaseValidationTests(unittest.TestCase):
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=without_github_release_env(),
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("release validation passed", proc.stdout.lower())
@@ -370,7 +396,7 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(result, "tax_pack_release_invalid:non_official_source")
 
     def test_script_emits_utf8_when_inherited_encoding_cannot_encode_chinese(self):
-        env = os.environ.copy()
+        env = without_github_release_env()
         env["PYTHONIOENCODING"] = "cp1252"
         proc = subprocess.run(
             [sys.executable, str(ROOT / "scripts/validate_release.py")],
@@ -457,6 +483,30 @@ class ReleaseValidationTests(unittest.TestCase):
             "expected exactly one wheel and one sdist",
             message,
         )
+
+    def test_run_validator_ignores_inherited_github_release_env(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.create_repository(directory)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GITHUB_REF": "refs/tags/v1.2.0",
+                    "GITHUB_REF_NAME": "v1.2.0",
+                    "GITHUB_REF_TYPE": "tag",
+                    "GITHUB_SHA": "deadbeef",
+                },
+            ):
+                result, message = self.run_validator(
+                    root,
+                    "--require-distributions",
+                )
+
+        self.assertEqual(result, 1, message)
+        self.assertIn(
+            "expected exactly one wheel and one sdist",
+            message,
+        )
+        self.assertNotIn("tag_version_mismatch", message)
 
     def test_require_distributions_rejects_incomplete_or_ambiguous_sets(self):
         cases = (
