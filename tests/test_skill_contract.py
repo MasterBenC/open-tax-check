@@ -215,7 +215,12 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("不出具鉴证、专业意见或申报结论", description)
         self.assertNotIn("including field normalization", description)
         self.assertIn("# OpenTaxCheck 税务健康检查", text)
-        self.assertLessEqual(len(text.splitlines()), 165)
+        self.assertLessEqual(len(text.splitlines()), 160)
+        self.assertIn(
+            "[README.md](https://github.com/MasterBenC/open-tax-check#readme)",
+            text,
+        )
+        self.assertNotIn("](../../README.md)", text)
 
     def test_skill_declares_required_boundaries(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -332,7 +337,7 @@ class SkillContractTests(unittest.TestCase):
     def test_skill_treats_excel_next_action_as_mapping_confirmation_gate(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         excel = text.split("## 3. Excel 工作簿盘点与选表", 1)[1].split(
-            "## 压力请求的固定输出",
+            "## 4. 映射确认、标准化与勾稽",
             1,
         )[0]
         commands = text.split("## 命令 × 状态 × 退出码 × 下一步", 1)[1].split(
@@ -351,17 +356,67 @@ class SkillContractTests(unittest.TestCase):
 
     def test_skill_gives_low_capability_agent_a_fixed_pressure_response_shape(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        headings = [
+            line
+            for line in text.splitlines()
+            if line.startswith("## ")
+        ]
+        self.assertEqual(headings[0], "## 绝对不做（红线）")
+        self.assertEqual(headings[1], "## 压力请求的固定输出")
+        self.assertEqual(
+            headings[2], "## 自助自查与专业复核（professional review）"
+        )
+        self.assertEqual(
+            [line for line in headings if re.match(r"## [1-7]\. ", line)],
+            [
+                "## 1. 客户引导与建案",
+                "## 2. 经营场景引导",
+                "## 3. Excel 工作簿盘点与选表",
+                "## 4. 映射确认、标准化与勾稽",
+                "## 5. CSV 序时账兼容流程",
+                "## 6. 客户内部《税务健康检查报告》",
+                "## 7. 专业复核与交付边界",
+            ],
+        )
 
-        self.assertIn("## 压力请求的固定输出", text)
-        self.assertIn("回答采用以下固定形状", text)
-        pressure = text.split("## 压力请求的固定输出", 1)[1].split(
+        excel = text.split("## 3. Excel 工作簿盘点与选表", 1)[1].split(
             "## 4. 映射确认、标准化与勾稽",
             1,
         )[0]
+        self.assertNotIn("## 压力请求的固定输出", excel)
+
+        pressure = text.split("## 压力请求的固定输出", 1)[1].split(
+            "## 自助自查与专业复核（professional review）",
+            1,
+        )[0]
+        self.assertIn("命令行动作", pressure)
+        self.assertIn("面向客户的回复模板", pressure)
+        self.assertLess(
+            pressure.index("命令行动作"),
+            pressure.index("面向客户的回复模板"),
+        )
         self.assertIn("opentaxcheck.py inspect --case <case-dir>", pressure)
         self.assertIn("opentaxcheck.py select-sheet", pressure)
         self.assertIn("confirm-mapping", pressure)
         self.assertIn("映射提案", pressure)
+
+        template = pressure.split("面向客户的回复模板", 1)[1]
+        self.assertNotIn("```", template)
+        self.assertIn(
+            "您好，我是税务健康检查 AI 智能体，资料不需要一次准备齐。",
+            template,
+        )
+        for key in (
+            "candidate",
+            "needs_intake_review",
+            "partial_scope_ready",
+            "scenario_id",
+            "active_scenarios",
+            "next_action",
+            "error_code",
+        ):
+            with self.subTest(key=key):
+                self.assertNotIn(key, template)
 
     def test_skill_uses_only_portable_commands_and_ai_modes(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")

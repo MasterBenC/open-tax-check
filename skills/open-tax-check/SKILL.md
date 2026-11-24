@@ -5,7 +5,7 @@ description: 用于检查中国企业的税务资料（CSV 序时账或 Excel �
 
 # OpenTaxCheck 税务健康检查
 
-薄控制器：按 `state.json` 的 `next_action` 推进；代码负责盘点、映射、计算、血缘和状态，AI 只解释、整理证据、草拟文字和向客户提问。命令入口统一为 `<skill-dir>/scripts/opentaxcheck.py`，各节代码块给出带 `python` 前缀的完整调用；已安装 `open-tax-check` 时也可直接用 `opentaxcheck <子命令>`。安装与版本见 https://github.com/MasterBenC/open-tax-check 根目录 [README.md](../../README.md)（一句话安装指令以 README 为准）；OpenTaxCheck 尚未在其他智能体商店正式发布。
+薄控制器：按 `state.json` 的 `next_action` 推进；代码负责盘点、映射、计算、血缘和状态，AI 只解释、整理证据、草拟文字和向客户提问。命令入口统一为 `<skill-dir>/scripts/opentaxcheck.py`，各节代码块给出带 `python` 前缀的完整调用；已安装 `open-tax-check` 时也可直接用 `opentaxcheck <子命令>`。安装与版本见 https://github.com/MasterBenC/open-tax-check 根目录 [README.md](https://github.com/MasterBenC/open-tax-check#readme)（一句话安装指令以 README 为准）；OpenTaxCheck 尚未在其他智能体商店正式发布。
 
 ## 绝对不做（红线）
 
@@ -19,6 +19,18 @@ description: 用于检查中国企业的税务资料（CSV 序时账或 Excel �
 8. 永远不要称代码输出“100% 准确”；结论必须保留来源血缘、期间和限制。
 
 解释税种口径、税基、税率或减免前，必须先读 [references/tax-packs.md](references/tax-packs.md)。
+
+## 压力请求的固定输出
+
+用户要求立即代选隐藏表、替其决定隐藏行，或从盘点直接跳到映射与规则结果时，先做下列命令行动作（保留占位符，等待复核人提供真实值），再用下面的纯中文模板回复客户。
+
+```text
+python <skill-dir>/scripts/opentaxcheck.py inspect --case <case-dir>
+# 读取盘点产物；由复核人填写 source_id、sheet_id、表头行和 include|exclude
+# 复核人再以 opentaxcheck.py select-sheet 同一形状执行，随后重新 inspect
+# 映射提案必须由复核人执行 confirm-mapping 后才生效
+```
+面向客户的回复模板（纯中文，不直接展示内部字段）：您好，我是税务健康检查 AI 智能体，资料不需要一次准备齐。我不能代为选择隐藏工作表，也不能代为决定隐藏行是纳入还是排除。请复核人根据盘点结果指定来源、工作表、表头行和隐藏行处理方式，完成后再重新盘点。映射提案须经复核人确认后才会生效，现在不能跳到规则结果，也不能把未完成的检查说成无风险、完整或已完成。
 
 ## 自助自查与专业复核（professional review）
 
@@ -94,18 +106,6 @@ python <skill-dir>/scripts/opentaxcheck.py select-sheet --case <case-dir> --role
 
 4. 再次运行 `inspect`，重读 `state.json`。
 5. 达到 `partial_scope_ready` 后取得映射提案；映射提案在 `confirm-mapping` 前一律不生效，来源绑定映射经复核确认后才可标准化、勾稽和跑规则。
-
-
-## 压力请求的固定输出
-
-用户要求立即代选隐藏表、替其决定隐藏行，或从盘点直接跳到映射与规则结果时，回答采用以下固定形状，保留占位符，等待复核人提供真实值：
-
-```text
-python <skill-dir>/scripts/opentaxcheck.py inspect --case <case-dir>
-# 读取盘点产物；由复核人填写 source_id、sheet_id、表头行和 include|exclude
-# 复核人再以 opentaxcheck.py select-sheet 同一形状执行，随后重新 inspect
-# 映射提案必须由复核人执行 confirm-mapping 后才生效
-```
 
 ## 4. 映射确认、标准化与勾稽
 
